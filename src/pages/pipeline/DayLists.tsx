@@ -233,6 +233,7 @@ export function DayProjects() {
             <ColumnHeader cols={cols} labels={labels} style={grid} />
             <ul className="divide-y divide-[color:var(--glass-border)]">
               {list.map((p) => {
+                const late = Boolean(p.lateFlag);
                 const flash = Boolean(p.todayFlag);
                 const cell: Record<(typeof PROJECT_COLUMNS)[number], React.ReactNode> = {
                   project: (
@@ -253,7 +254,7 @@ export function DayProjects() {
                   next: day(p.nextMilestoneDue),
                 };
                 return (
-                  <li key={p.id} className={cn("relative", flash && "animate-attention bg-[color:var(--gold)]/10 ring-1 ring-inset ring-[color:var(--gold)]/50")} title={flash ? t("pipeline.day.projectToday") : undefined}>
+                  <li key={p.id} className={cn("relative", late ? "animate-attention-red bg-red-500/10 ring-1 ring-inset ring-red-500/60" : flash && "animate-attention bg-[color:var(--gold)]/10 ring-1 ring-inset ring-[color:var(--gold)]/50")} title={late ? t("pipeline.day.projectLate") : flash ? t("pipeline.day.projectToday") : undefined}>
                     <ProjectEdge id={p.id} following={p.following} onOpen={() => navigate(`/pipeline?section=projects&project=${p.id}`)} className="absolute left-0 top-0 z-10 h-full" />
                     <button type="button" onClick={() => navigate(`/pipeline?section=projects&project=${p.id}`)} style={grid} className="grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]">
                       {cols.order.map((c) => (

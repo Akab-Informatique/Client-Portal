@@ -119,6 +119,8 @@ export type Project = {
   todayMine?: boolean;
   /** A milestone, or a task of the person looked at, is due or at its checkpoint today */
   todayFlag?: boolean;
+  /** The project, an unfinished milestone or a task of the person looked at is past due */
+  lateFlag?: boolean;
   /** The earliest day an unfinished milestone is due */
   nextMilestoneDue?: string | null;
   mine: boolean;

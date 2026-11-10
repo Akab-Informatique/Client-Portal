@@ -7240,6 +7240,9 @@ describe("pipeline: shared to-dos and the day", () => {
     const r = await row();
     expect(r.nextMilestoneDue).toBe(qcToday());
     expect(r.todayFlag).toBe(true);
+    expect(r.lateFlag).toBe(false);
+    const old = (await tech.post("/api/projects", { name: "Jalon en retard", milestones: [{ name: "Vieux", dueDate: "2020-01-01" }] })).json;
+    expect(((await tech.get("/api/projects?view=all&status=all")).json as any[]).find((x) => x.id === old.id).lateFlag).toBe(true);
     // someone else's projects: refused without the right, allowed for an administrator
     const adminId = (await admin.get("/api/me")).json.id as string;
     expect((await tech.get(`/api/projects?status=open&member=${adminId}`)).status).toBe(403);

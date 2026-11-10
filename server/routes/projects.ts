@@ -412,8 +412,16 @@ export const projectsRoutes = new Hono<AppEnv>()
             .from(schema.projectTasks)
             .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, who), ne(schema.projectTasks.status, "done"), or(eq(schema.projectTasks.checkpointDate, today), eq(schema.projectTasks.dueDate, today))));
     const todayWho = new Set(dueWho.map((r) => r.projectId));
+    // past due: the project, an unfinished milestone, or an open task of that person
+    const lateRows = rows.length
+      ? await db()
+          .selectDistinct({ projectId: schema.projectTasks.projectId })
+          .from(schema.projectTasks)
+          .where(and(inArray(schema.projectTasks.projectId, rows.map((r) => r.id)), eq(schema.projectTasks.assigneeId, who), ne(schema.projectTasks.status, "done"), sql`${schema.projectTasks.dueDate} < ${today}`))
+      : [];
+    const lateWho = new Set(lateRows.map((r) => r.projectId));
     list = list
-      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null, todayMine: todayMine.has(x.id), todayFlag: todayWho.has(x.id) || x.milestoneToday }))
+      .map((x) => ({ ...x, nextCheckpoint: nextAt.get(x.id) ?? null, todayMine: todayMine.has(x.id), todayFlag: todayWho.has(x.id) || x.milestoneToday, lateFlag: x.attention.includes("late") || x.attention.includes("milestone_late") || lateWho.has(x.id) }))
       .sort((x, y) => (x.nextCheckpoint ?? "9999-99-99").localeCompare(y.nextCheckpoint ?? "9999-99-99") || (x.dueDate ?? "9999-99-99").localeCompare(y.dueDate ?? "9999-99-99"));
     if (q.member) {
       // another technician's projects (lead or team member): needs the right to manage projects
