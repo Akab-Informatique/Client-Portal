@@ -894,6 +894,8 @@ const fr = {
       saved: "Contact enregistré",
       none: "Aucun contact",
       deactivate: "Désactiver",
+      deactivateTitle: "Désactiver {{name}} ?",
+      deactivateText: "Le contact ne recevra plus l'infolettre et son accès au portail client sera fermé. Rien n'est supprimé : vous pourrez le réactiver.",
       reactivate: "Réactiver",
       primary: "Principal",
       primarySet: "Définir comme contact principal",

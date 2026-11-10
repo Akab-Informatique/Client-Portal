@@ -938,6 +938,7 @@ function ContactsTab({ client }: { client: CrmDetail }) {
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   const canBilling = can("crm.billing");
+  const confirmDeactivate = useConfirm();
   const toggle = useMutation({
     mutationFn: (c: CrmContact) => api.patch(`/crm/clients/${client.id}/contacts/${c.id}`, { active: !c.active }),
     onSuccess: () => {
@@ -1068,7 +1069,15 @@ function ContactsTab({ client }: { client: CrmDetail }) {
                     <button type="button" onClick={() => setEditing(c.id)} className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground" aria-label={t("crm.contacts.edit")} title={t("crm.contacts.edit")}>
                       <Pencil className="size-3.5" />
                     </button>
-                    <button type="button" onClick={() => toggle.mutate(c)} className="rounded px-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        // turning a contact off asks first (turning it back on does not)
+                        if (c.active && !(await confirmDeactivate({ title: t("crm.contacts.deactivateTitle", { name: `${c.firstName} ${c.lastName}`.trim() }), description: t("crm.contacts.deactivateText"), confirmLabel: t("crm.contacts.deactivate"), destructive: true }))) return;
+                        toggle.mutate(c);
+                      }}
+                      className="rounded px-1 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+                    >
                       {c.active ? t("crm.contacts.deactivate") : t("crm.contacts.reactivate")}
                     </button>
                   </div>

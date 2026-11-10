@@ -896,6 +896,8 @@ const en: Dict = {
       saved: "Contact saved",
       none: "No contact",
       deactivate: "Deactivate",
+      deactivateTitle: "Deactivate {{name}}?",
+      deactivateText: "The contact will no longer get the newsletter and their client portal access will be closed. Nothing is deleted: you can reactivate them.",
       reactivate: "Reactivate",
       primary: "Main",
       primarySet: "Set as main contact",
