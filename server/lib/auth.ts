@@ -6,6 +6,7 @@ import { db, schema } from "../db/index.ts";
 import { config } from "../config.ts";
 import { randomToken, sha256 } from "./crypto.ts";
 import { clientIp } from "./http.ts";
+import { authFromKey } from "./apiKeys.ts";
 import {
   effectivePermissions,
   isAdmin,
@@ -98,6 +99,11 @@ export async function markSessionMfaVerified(sessionId: string): Promise<void> {
 /** Loads the session (if any) into c.var.auth. Never throws for anonymous requests. */
 export const loadAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   c.set("auth", null);
+  const byKey = await authFromKey(c);
+  if (byKey) {
+    c.set("auth", byKey);
+    return next();
+  }
   const token = getCookie(c, SESSION_COOKIE);
   if (token) {
     const id = sha256(token);

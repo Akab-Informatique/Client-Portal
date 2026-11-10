@@ -18,6 +18,7 @@ import { workflowRoutes } from "./routes/workflows.ts";
 import { queueRoutes } from "./routes/queues.ts";
 import { contractTypeRoutes } from "./routes/contractTypes.ts";
 import { vendorRoutes } from "./routes/vendors.ts";
+import { apiKeyRoutes } from "./routes/apiKeys.ts";
 import { passboltRoutes } from "./routes/passbolt.ts";
 import { serviceRoutes } from "./routes/services.ts";
 import { itcloudRoutes } from "./routes/itcloud.ts";
@@ -117,6 +118,7 @@ export function createApp() {
   api.route("/admin/queues", queueRoutes);
   api.route("/admin/contract-types", contractTypeRoutes);
   api.route("/admin/vendors", vendorRoutes);
+  api.route("/admin/api-keys", apiKeyRoutes);
   api.route("/admin/itcloud", itcloudRoutes);
   api.route("/admin/rmm-datto", dattoAdminRoutes);
   api.route("/rmm", rmmDeviceRoutes);

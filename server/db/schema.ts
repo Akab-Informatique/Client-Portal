@@ -3383,3 +3383,30 @@ export const pipelineTaskTimers = pgTable(
   },
   (t) => [primaryKey({ columns: [t.taskId, t.userId] })],
 );
+
+/**
+ * API keys (Bearer) for outside tools such as an AI assistant. A key acts as the person who made it, but only with
+ * the rights listed on it (`permissions`, never more than that person has) and read only unless `write` is set.
+ * Only the SHA-256 of the key is kept; the key is shown once.
+ */
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    /** First characters of the key, to recognise it in the list */
+    prefix: text("prefix").notNull(),
+    keyHash: text("key_hash").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    permissions: jsonb("permissions").$type<string[]>().notNull().default([]),
+    write: boolean("write").notNull().default(false),
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    lastIp: text("last_ip"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("api_keys_hash_idx").on(t.keyHash), index("api_keys_user_idx").on(t.userId)],
+);

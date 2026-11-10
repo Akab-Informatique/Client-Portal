@@ -11581,3 +11581,40 @@ describe("a ticket turned into a project", () => {
     }
   });
 });
+
+describe("API keys for outside tools", () => {
+  it("a key reads (or writes) with only the rights ticked, never more than its maker, and can be revoked", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/admin/api-keys")).status).toBe(403);
+    // rights a key can never carry
+    expect((await admin.post("/api/admin/api-keys", { name: "x", permissions: ["admin.staff"] })).status).toBe(400);
+    expect((await admin.post("/api/admin/api-keys", { name: "x", permissions: ["hr.manage"] })).status).toBe(400);
+    const made = await admin.post("/api/admin/api-keys", { name: "Grok", permissions: ["tickets.view", "crm.view"], write: false });
+    expect(made.status).toBe(201);
+    const key: string = made.json.key;
+    expect(key.startsWith("akab_")).toBe(true);
+    // only the hash is stored
+    const [row] = await db().select().from(schema.apiKeys);
+    expect(row.keyHash).not.toBe(key);
+    expect(JSON.stringify(row)).not.toContain(key);
+    const bearer = (k: string) => ({ authorization: `Bearer ${k}` });
+    const robot = new Agent();
+    expect((await robot.req("GET", "/api/tickets", undefined, bearer(key))).status).toBe(200);
+    expect((await robot.req("GET", "/api/crm/clients", undefined, bearer(key))).status).toBe(200);
+    // a right not ticked, the admin area, the keys themselves, and any write on a read-only key
+    expect((await robot.req("GET", "/api/billables", undefined, bearer(key))).status).toBe(403);
+    expect((await robot.req("GET", "/api/admin/api-keys", undefined, bearer(key))).status).toBe(403);
+    const w = await robot.req("POST", "/api/tickets", { title: "x" }, bearer(key));
+    expect(w.status).toBe(403);
+    expect(w.json.error ?? w.json.message ?? JSON.stringify(w.json)).toContain("api_key_read_only");
+    // a wrong key is refused, not treated as anonymous
+    expect((await robot.req("GET", "/api/tickets", undefined, bearer("akab_nope"))).status).toBe(401);
+    // a key with write may change what its rights cover
+    const wk = await admin.post("/api/admin/api-keys", { name: "Grok écriture", permissions: ["tickets.view", "tickets.edit"], write: true });
+    expect((await robot.req("POST", "/api/tickets/ai/polish", { text: "a" }, bearer(wk.json.key))).status).not.toBe(401);
+    // revoked
+    expect((await admin.del(`/api/admin/api-keys/${made.json.id}`)).status).toBe(200);
+    expect((await robot.req("GET", "/api/tickets", undefined, bearer(key))).status).toBe(401);
+  });
+});

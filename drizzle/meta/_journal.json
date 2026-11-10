@@ -1177,6 +1177,13 @@
       "when": 1794317531549,
       "tag": "0167_futuristic_magneto",
       "breakpoints": true
+    },
+    {
+      "idx": 168,
+      "version": "7",
+      "when": 1794317863949,
+      "tag": "0168_faulty_bucky",
+      "breakpoints": true
     }
   ]
 }
