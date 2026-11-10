@@ -61,6 +61,7 @@ function Contacts() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["newsletter", "contacts"] }),
     onError: () => toast.error(t("common.error")),
   });
+  const links = useQuery({ queryKey: ["newsletter", "links"], queryFn: () => api.get<{ generalUnsubscribeUrl: string }>("/newsletter/links"), retry: false });
   const subscribed = data.filter((c) => c.subscribed).length;
   const rows = useMemo(() => {
     const w = q.trim().toLowerCase();
@@ -82,6 +83,15 @@ function Contacts() {
           </button>
         ))}
       </div>
+      {links.data && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card/60 px-3 py-2 text-xs">
+          <span className="text-muted-foreground">{t("newsletter.generalLink")}</span>
+          <code className="min-w-0 flex-1 truncate">{links.data.generalUnsubscribeUrl}</code>
+          <Button type="button" variant="outline" size="sm" onClick={() => copy(links.data.generalUnsubscribeUrl)}>
+            <Copy className="size-4" /> {t("newsletter.copyLink")}
+          </Button>
+        </div>
+      )}
       <div className="relative">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
         <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("newsletter.search")} className="pl-9" />

@@ -160,7 +160,7 @@ function Root() {
   if (window.location.pathname === "/paiement-recu") return <PaymentReceivedPage />;
   // the page where a client accepts a contract's automatic card payment (signed link): no sign-in
   if (window.location.pathname.startsWith("/carte/")) return <CardAutopayPage />;
-  if (window.location.pathname.startsWith("/desinscription/")) return <UnsubscribePage />;
+  if (window.location.pathname === "/desinscription" || window.location.pathname.startsWith("/desinscription/")) return <UnsubscribePage />;
   // the public privacy policy and terms of use (linked from QuickBooks and emails): no sign-in
   if (window.location.pathname === "/privacy") return <LegalPage kind="privacy" />;
   if (window.location.pathname === "/terms") return <LegalPage kind="terms" />;

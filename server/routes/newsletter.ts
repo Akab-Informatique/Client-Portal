@@ -8,7 +8,7 @@ import { audit } from "../lib/audit.ts";
 import { body } from "../lib/validate.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { config } from "../config.ts";
-import { contactsList, contactOfToken, emailOfContact, isUnsubscribed, resubscribe, subscribers, unsubscribe } from "../lib/newsletter.ts";
+import { generalUnsubscribeUrl, knownAddress, contactsList, contactOfToken, emailOfContact, isUnsubscribed, resubscribe, subscribers, unsubscribe } from "../lib/newsletter.ts";
 
 /**
  * Newsletter. Public (the signed unsubscribe link, no sign-in): see and confirm. Staff / API key: the list of
@@ -24,6 +24,19 @@ async function target(token: string) {
 }
 
 export const newsletterRoutes = new Hono<AppEnv>()
+  /**
+   * The general link: anyone types their address and, when it is one of ours, it is taken off the list. The answer is
+   * the same whether it was known or not, so nobody can use the page to find out who our contacts are.
+   */
+  .post("/public/unsubscribe", async (c) => {
+    if (!rateLimit(`nl-general:${clientIp(c)}`, 10, 10 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const p = await body(c, z.object({ email: z.string().trim().toLowerCase().email().max(200) }));
+    if (await knownAddress(p.email)) {
+      await unsubscribe(p.email, "link");
+      await audit(null, "newsletter.unsubscribed", mask(p.email), { via: "general link" });
+    }
+    return c.json({ ok: true });
+  })
   .get("/public/:token", async (c) => {
     if (!rateLimit(`nl-view:${clientIp(c)}`, 60, 10 * 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
     const email = await target(c.req.param("token"));
@@ -47,12 +60,13 @@ export const newsletterRoutes = new Hono<AppEnv>()
   .use("/subscribers", requireStaff)
   .use("/optouts", requireStaff)
   .use("/contacts", requireStaff)
+  .use("/links", requireStaff)
   .use("/issues", requireStaff)
   .use("/issues/*", requireStaff)
   .get("/subscribers", requirePermission("newsletter.view"), async (c) => {
     if (!config.publicUrl) throw new HTTPException(409, { message: "public_url_missing" });
     const { list, unsubscribed } = await subscribers();
-    return c.json({ count: list.length, unsubscribed, subscribers: list });
+    return c.json({ count: list.length, unsubscribed, generalUnsubscribeUrl: generalUnsubscribeUrl(), subscribers: list });
   })
   .post("/optouts", requirePermission("newsletter.manage"), async (c) => {
     const a = auth(c);
@@ -67,6 +81,12 @@ export const newsletterRoutes = new Hono<AppEnv>()
   .get("/contacts", requirePermission("newsletter.view"), async (c) => {
     if (!config.publicUrl) throw new HTTPException(409, { message: "public_url_missing" });
     return c.json(await contactsList());
+  })
+
+  /** The general unsubscribe link (the same for everyone), for the team and the tool that sends the newsletter */
+  .get("/links", requirePermission("newsletter.view"), (c) => {
+    if (!config.publicUrl) throw new HTTPException(409, { message: "public_url_missing" });
+    return c.json({ generalUnsubscribeUrl: generalUnsubscribeUrl() });
   })
 
   /** The newsletters sent: recorded by the sending tool (Grok...) through the API */

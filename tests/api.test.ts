@@ -11669,6 +11669,17 @@ describe("newsletter", () => {
       expect(after.subscribers.some((x: any) => x.email === "ana.un@infolettre.test")).toBe(false);
       expect(after.subscribers.some((x: any) => x.email === "bob@infolettre.test")).toBe(true);
       expect((await anon.post(`/api/newsletter/public/${token}/resubscribe`, {})).status).toBe(200);
+      // the general link: the address is typed; known ones come off, unknown ones change nothing, the answer is the same
+      const before = (await admin.get("/api/newsletter/contacts")).json.length;
+      expect((await anon.post("/api/newsletter/public/unsubscribe", { email: "inconnu@nulle-part.test" })).json).toEqual({ ok: true });
+      expect((await anon.post("/api/newsletter/public/unsubscribe", { email: " ANA.un@infolettre.test " })).json).toEqual({ ok: true });
+      expect((await anon.post("/api/newsletter/public/unsubscribe", { email: "pas-un-courriel" })).status).toBe(400);
+      const afterGeneral = (await admin.get("/api/newsletter/contacts")).json;
+      expect(afterGeneral).toHaveLength(before);
+      expect(afterGeneral.find((x: any) => x.email === "ana.un@infolettre.test").subscribed).toBe(false);
+      expect((await db().select().from(schema.newsletterOptouts).where(eq(schema.newsletterOptouts.email, "inconnu@nulle-part.test"))).length).toBe(0);
+      expect((await admin.get("/api/newsletter/links")).json.generalUnsubscribeUrl).toBe("https://portail.test/desinscription");
+      expect((await anon.post(`/api/newsletter/public/${token}/resubscribe`, {})).status).toBe(200);
       // by hand, from the tab
       expect((await tech.post("/api/newsletter/optouts", { email: "bob@infolettre.test", unsubscribed: true })).status).toBe(403);
       expect((await admin.post("/api/newsletter/optouts", { email: "bob@infolettre.test", unsubscribed: true })).status).toBe(200);

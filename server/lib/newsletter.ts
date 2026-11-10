@@ -28,6 +28,14 @@ export async function emailOfContact(contactId: string): Promise<string | null> 
   return r?.email ? norm(r.email) : null;
 }
 
+export const generalUnsubscribeUrl = () => `${config.publicUrl}/desinscription`;
+
+/** Is this address one of ours (a contact with that email, any client)? */
+export async function knownAddress(email: string): Promise<boolean> {
+  const [r] = await db().select({ id: schema.clientContacts.id }).from(schema.clientContacts).where(sql`lower(trim(${schema.clientContacts.email})) = ${norm(email)}`).limit(1);
+  return Boolean(r);
+}
+
 export async function isUnsubscribed(email: string): Promise<boolean> {
   const [r] = await db().select().from(schema.newsletterOptouts).where(eq(schema.newsletterOptouts.email, norm(email)));
   return Boolean(r);
