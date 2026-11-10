@@ -214,7 +214,7 @@ export function DayProjects() {
         </h3>
         {others && (
           <select value={who} onChange={(e) => setWho(e.target.value)} aria-label={t("pipeline.day.projectWhose")} className="ml-auto h-7 rounded-md border bg-transparent px-2 text-xs">
-            <option value={me.id}>{t("pipeline.day.mine")}</option>
+            <option value={me.id}>{t("pipeline.day.projectsMine")}</option>
             {(people.data ?? []).filter((p) => p.id !== me.id).map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
