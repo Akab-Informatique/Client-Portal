@@ -1,6 +1,6 @@
 import { ApprovePage } from "@/pages/ApprovePage";
 import { lazy, Suspense } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -77,6 +77,16 @@ function ServerDown({ onRetry, retrying }: { onRetry: () => void; retrying: bool
   );
 }
 
+/** Tickets and Projects live inside Opérations: an old address (/tickets?…, /projects?…) lands on its tab, with the same filters and links. */
+function InOperations({ section, children }: { section: "tickets" | "projects"; children: React.ReactNode }) {
+  const can = useCan();
+  const { search } = useLocation();
+  if (!can("pipeline.view")) return <>{children}</>;
+  const q = new URLSearchParams(search);
+  q.set("section", section);
+  return <Navigate to={`/pipeline?${q.toString()}`} replace />;
+}
+
 function Guard({ permission, orRight, children }: { permission: PermissionKey; orRight?: PermissionKey; children: React.ReactNode }) {
   const { t } = useTranslation();
   const can = useCan();
@@ -109,10 +119,10 @@ function StaffApp() {
           }
         />
         <Route path="messages" element={<Guard permission="messages.view"><MessagesPage /></Guard>} />
-        <Route path="tickets" element={<Guard permission="tickets.view"><TicketsPage /></Guard>} />
+        <Route path="tickets" element={<Guard permission="tickets.view"><InOperations section="tickets"><TicketsPage /></InOperations></Guard>} />
         <Route path="store" element={<Guard permission="store.view"><StorePage /></Guard>} />
         <Route path="pipeline" element={<Guard permission="pipeline.view"><PipelinePage /></Guard>} />
-        <Route path="projects" element={<Guard permission="projects.view"><ProjectsPage /></Guard>} />
+        <Route path="projects" element={<Guard permission="projects.view"><InOperations section="projects"><ProjectsPage /></InOperations></Guard>} />
         <Route path="security/passbolt" element={<Guard permission="passbolt.use"><PassboltPage /></Guard>} />
         <Route path="services" element={<Guard permission="services.view"><ServicesPage /></Guard>} />
         <Route path="sops" element={<Guard permission="sops.view"><SopsPage /></Guard>} />
