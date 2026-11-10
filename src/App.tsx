@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { LoginPage } from "@/pages/LoginPage";
 import { PaymentReceivedPage } from "@/pages/PaymentReceivedPage";
 import { CardAutopayPage } from "@/pages/CardAutopayPage";
+import { UnsubscribePage } from "@/pages/UnsubscribePage";
 import { LegalPage } from "@/pages/LegalPage";
 import { LogoMark } from "@/components/brand/Logo";
 import { SessionProvider, useAuthState, useCan, useUnauthorizedListener } from "@/lib/session";
@@ -21,6 +22,7 @@ const MessagesPage = lazy(() => pageLoaders.messages().then((m) => ({ default: m
 const TicketsPage = lazy(() => pageLoaders.tickets().then((m) => ({ default: m.TicketsPage })));
 const PipelinePage = lazy(() => pageLoaders.pipeline().then((m) => ({ default: m.PipelinePage })));
 const ProjectsPage = lazy(() => pageLoaders.projects().then((m) => ({ default: m.ProjectsPage })));
+const NewsletterPage = lazy(() => pageLoaders.newsletter().then((m) => ({ default: m.NewsletterPage })));
 const ServicesPage = lazy(() => pageLoaders.services().then((m) => ({ default: m.ServicesPage })));
 const HrPage = lazy(() => pageLoaders.hr().then((m) => ({ default: m.HrPage })));
 const SopsPage = lazy(() => pageLoaders.sops().then((m) => ({ default: m.SopsPage })));
@@ -124,6 +126,7 @@ function StaffApp() {
         <Route path="pipeline" element={<Guard permission="pipeline.view"><PipelinePage /></Guard>} />
         <Route path="projects" element={<Guard permission="projects.view"><InOperations section="projects"><ProjectsPage /></InOperations></Guard>} />
         <Route path="security/passbolt" element={<Guard permission="passbolt.use"><PassboltPage /></Guard>} />
+        <Route path="newsletter" element={<Guard permission="newsletter.view"><NewsletterPage /></Guard>} />
         <Route path="services" element={<Guard permission="services.view"><ServicesPage /></Guard>} />
         <Route path="sops" element={<Guard permission="sops.view"><SopsPage /></Guard>} />
         <Route path="documentation" element={<Guard permission="sops.view" orRight="kb.view"><DocumentationPage /></Guard>} />
@@ -157,6 +160,7 @@ function Root() {
   if (window.location.pathname === "/paiement-recu") return <PaymentReceivedPage />;
   // the page where a client accepts a contract's automatic card payment (signed link): no sign-in
   if (window.location.pathname.startsWith("/carte/")) return <CardAutopayPage />;
+  if (window.location.pathname.startsWith("/desinscription/")) return <UnsubscribePage />;
   // the public privacy policy and terms of use (linked from QuickBooks and emails): no sign-in
   if (window.location.pathname === "/privacy") return <LegalPage kind="privacy" />;
   if (window.location.pathname === "/terms") return <LegalPage kind="terms" />;

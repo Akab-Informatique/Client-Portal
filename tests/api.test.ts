@@ -11636,3 +11636,61 @@ describe("API keys for outside tools", () => {
     expect((await robot.req("GET", "/api/tickets", undefined, bearer(key))).status).toBe(401);
   });
 });
+
+describe("newsletter", () => {
+  it("lists every client contact, unsubscribes by a signed link, and keeps a history of what was sent", async () => {
+    const { config: appConfig } = await import("../server/config.ts");
+    const publicBefore = appConfig.publicUrl;
+    (appConfig as { publicUrl: string }).publicUrl = "https://portail.test";
+    try {
+      const admin = await signIn("admin@akab.local");
+      const tech = await signIn("tech@akab.local");
+      const [cl] = await db().insert(schema.clients).values({ name: "Infolettre Test inc." }).returning();
+      const [c1] = await db().insert(schema.clientContacts).values({ clientId: cl.id, firstName: "Ana", lastName: "Un", email: "Ana.Un@infolettre.test" }).returning();
+      await db().insert(schema.clientContacts).values({ clientId: cl.id, firstName: "Bob", lastName: "Deux", email: "bob@infolettre.test" });
+      await db().insert(schema.clientContacts).values({ clientId: cl.id, firstName: "Sans", lastName: "Courriel", email: "" });
+      // rights: technicians do not see the list
+      expect((await tech.get("/api/newsletter/contacts")).status).toBe(403);
+      const all = await admin.get("/api/newsletter/contacts");
+      expect(all.status).toBe(200);
+      const ana = all.json.find((x: any) => x.email === "ana.un@infolettre.test");
+      expect(ana.subscribed).toBe(true);
+      expect(all.json.some((x: any) => x.firstName === "Sans")).toBe(false);
+      expect(ana.unsubscribeUrl).toContain("https://portail.test/desinscription/");
+      // the public link: asks first, a bad signature is refused, then it unsubscribes (and can be undone)
+      const token = ana.unsubscribeUrl.split("/desinscription/")[1];
+      const anon = new Agent();
+      const seen = await anon.get(`/api/newsletter/public/${token}`);
+      expect(seen.json.unsubscribed).toBe(false);
+      expect(JSON.stringify(seen.json)).not.toContain("ana.un@infolettre.test");
+      expect((await anon.get(`/api/newsletter/public/${c1.id}.badsignature000000000000`)).status).toBe(404);
+      expect((await anon.post(`/api/newsletter/public/${token}/unsubscribe`, {})).status).toBe(200);
+      const after = (await admin.get("/api/newsletter/subscribers")).json;
+      expect(after.subscribers.some((x: any) => x.email === "ana.un@infolettre.test")).toBe(false);
+      expect(after.subscribers.some((x: any) => x.email === "bob@infolettre.test")).toBe(true);
+      expect((await anon.post(`/api/newsletter/public/${token}/resubscribe`, {})).status).toBe(200);
+      // by hand, from the tab
+      expect((await tech.post("/api/newsletter/optouts", { email: "bob@infolettre.test", unsubscribed: true })).status).toBe(403);
+      expect((await admin.post("/api/newsletter/optouts", { email: "bob@infolettre.test", unsubscribed: true })).status).toBe(200);
+      expect((await admin.get("/api/newsletter/contacts")).json.find((x: any) => x.email === "bob@infolettre.test").subscribed).toBe(false);
+      // the sending tool (an API key) records what it sent; read only keys cannot
+      const ro = await admin.post("/api/admin/api-keys", { name: "Grok lecture", permissions: ["newsletter.view", "newsletter.log"], write: false });
+      const rw = await admin.post("/api/admin/api-keys", { name: "Grok", permissions: ["newsletter.view", "newsletter.log"], write: true });
+      const bearer = (k: string) => ({ authorization: `Bearer ${k}` });
+      const robot = new Agent();
+      const issue = { subject: "Infolettre de novembre", body: "<p>Bonjour</p>", recipients: ["bob@infolettre.test", "ana.un@infolettre.test"] };
+      expect((await robot.req("POST", "/api/newsletter/issues", issue, bearer(ro.json.key))).status).toBe(403);
+      const made = await robot.req("POST", "/api/newsletter/issues", issue, bearer(rw.json.key));
+      expect(made.status).toBe(201);
+      const list = await admin.get("/api/newsletter/issues");
+      expect(list.json[0]).toMatchObject({ subject: "Infolettre de novembre", recipientCount: 2, recordedBy: "Grok" });
+      expect(list.json[0].body).toBeUndefined();
+      expect((await admin.get(`/api/newsletter/issues/${made.json.id}`)).json.body).toBe("<p>Bonjour</p>");
+      expect((await admin.get("/api/newsletter/issues?email=bob@infolettre.test")).json).toHaveLength(1);
+      expect((await admin.get("/api/newsletter/issues?email=personne@infolettre.test")).json).toHaveLength(0);
+      expect((await tech.get("/api/newsletter/issues")).status).toBe(403);
+    } finally {
+      (appConfig as { publicUrl: string }).publicUrl = publicBefore;
+    }
+  });
+});

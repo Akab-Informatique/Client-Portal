@@ -21,6 +21,7 @@ import { contractTypeRoutes } from "./routes/contractTypes.ts";
 import { vendorRoutes } from "./routes/vendors.ts";
 import { apiKeyRoutes } from "./routes/apiKeys.ts";
 import { openApiRoutes } from "./routes/openapi.ts";
+import { newsletterRoutes } from "./routes/newsletter.ts";
 import { passboltRoutes } from "./routes/passbolt.ts";
 import { serviceRoutes } from "./routes/services.ts";
 import { itcloudRoutes } from "./routes/itcloud.ts";
@@ -131,6 +132,7 @@ export function createApp() {
   api.route("/admin/vendors", vendorRoutes);
   api.route("/admin/api-keys", apiKeyRoutes);
   api.route("/openapi.json", openApiRoutes);
+  api.route("/newsletter", newsletterRoutes);
   api.route("/admin/itcloud", itcloudRoutes);
   api.route("/admin/rmm-datto", dattoAdminRoutes);
   api.route("/rmm", rmmDeviceRoutes);

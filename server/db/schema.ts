@@ -3410,3 +3410,30 @@ export const apiKeys = pgTable(
   },
   (t) => [uniqueIndex("api_keys_hash_idx").on(t.keyHash), index("api_keys_user_idx").on(t.userId)],
 );
+
+/** Newsletter: addresses that asked to stop receiving it (by its unsubscribe link, or by hand). One row per address. */
+export const newsletterOptouts = pgTable("newsletter_optouts", {
+  email: text("email").primaryKey(),
+  /** link = the person clicked the unsubscribe link, staff = someone at AKAB did it */
+  via: text("via").notNull().default("link"),
+  unsubscribedAt: timestamp("unsubscribed_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Newsletters that were sent (the tool that sends them, such as Grok, records each one through the API): what was said, when, to whom */
+export const newsletterIssues = pgTable(
+  "newsletter_issues",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    subject: text("subject").notNull(),
+    /** The content as sent (HTML or text; shown as text, never run) */
+    body: text("body").notNull().default(""),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+    recipientCount: integer("recipient_count").notNull().default(0),
+    /** The addresses it went to, when the sender gives them (to answer "did I get it?") */
+    recipients: jsonb("recipients").$type<string[]>().notNull().default([]),
+    /** Who recorded it: the API key's name, or the person */
+    recordedBy: text("recorded_by").notNull().default(""),
+    createdAt: created(),
+  },
+  (t) => [index("newsletter_issues_sent_idx").on(t.sentAt)],
+);

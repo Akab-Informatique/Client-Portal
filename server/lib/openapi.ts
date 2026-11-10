@@ -23,6 +23,10 @@ const OPS: Array<[string, "get" | "post" | "patch" | "put" | "delete", Op]> = [
   ["/api/pipeline/tasks", "post", { summary: "Create a to-do task", right: "pipeline.edit", write: true, body: { title: "string", notes: "string?", dueDate: "YYYY-MM-DD?", priority: "string?" } }],
   ["/api/quotes", "get", { summary: "List quotes", right: "quotes.view" }],
   ["/api/crm/invoices", "get", { summary: "List invoices (status, clientId, from, to, q)", right: "accounting.view", params: [["status", "query", "open | due | overdue | partial | paid | voided"], ["clientId", "query", "Client id"], ["q", "query", "Search text"]] }],
+  ["/api/newsletter/subscribers", "get", { summary: "Newsletter list: every client contact with an email who has not unsubscribed, each with an unsubscribeUrl to put at the bottom of that person's newsletter", right: "newsletter.view" }],
+  ["/api/newsletter/optouts", "post", { summary: "Unsubscribe (unsubscribed:true) or resubscribe (false) an address by hand", right: "newsletter.manage", write: true, body: { email: "string", unsubscribed: "boolean" } }],
+  ["/api/newsletter/issues", "post", { summary: "Record a newsletter that was just sent, so the team can answer clients' questions: subject, body (as sent), sentAt (ISO, optional), recipients (list of emails, optional), recipientCount (optional)", right: "newsletter.log", write: true, body: { subject: "string", body: "string (HTML or text, as sent)", sentAt: "ISO date?", recipients: "string[]?", recipientCount: "number?" } }],
+  ["/api/newsletter/issues", "get", { summary: "The newsletters already sent (optional email filter: only those sent to that address)", right: "newsletter.view", params: [["email", "query", "Only the issues sent to this address"]] }],
   ["/api/meetings/overdue", "get", { summary: "Overdue and due-this-week ticket gauges", right: "meetings.view" }],
 ];
 

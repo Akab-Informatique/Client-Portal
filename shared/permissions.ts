@@ -177,6 +177,16 @@ export const MODULES = [
     ],
   },
   {
+    key: "newsletter",
+    audience: "staff",
+    label: { fr: "Infolettre", en: "Newsletter" },
+    permissions: [
+      { key: "newsletter.view", label: { fr: "Voir la liste d'infolettre", en: "See the newsletter list" }, description: { fr: "Lire les abonnés (contacts des clients) et le lien de désinscription de chacun", en: "Read the subscribers (clients' contacts) and each one's unsubscribe link" } },
+      { key: "newsletter.log", label: { fr: "Enregistrer les infolettres envoyées", en: "Record the newsletters sent" }, description: { fr: "Ajouter à l'historique chaque infolettre envoyée (sujet, contenu, destinataires)", en: "Add each newsletter sent to the history (subject, content, recipients)" } },
+      { key: "newsletter.manage", label: { fr: "Gérer les désinscriptions", en: "Manage unsubscriptions" }, description: { fr: "Désinscrire ou réinscrire une adresse à la main", en: "Unsubscribe or resubscribe an address by hand" } },
+    ],
+  },
+  {
     key: "hr",
     audience: "staff",
     label: { fr: "Ressources humaines", en: "Human resources" },
@@ -633,7 +643,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "sms", "passbolt"] },
-  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "hr"] },
+  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "newsletter", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
