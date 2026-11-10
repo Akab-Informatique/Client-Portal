@@ -11613,6 +11613,11 @@ describe("API keys for outside tools", () => {
     // a key with write may change what its rights cover
     const wk = await admin.post("/api/admin/api-keys", { name: "Grok écriture", permissions: ["tickets.view", "tickets.edit"], write: true });
     expect((await robot.req("POST", "/api/tickets/ai/polish", { text: "a" }, bearer(wk.json.key))).status).not.toBe(401);
+    // the description for the outside tool is reachable with the key
+    const spec = await robot.req("GET", "/api/openapi.json", undefined, bearer(key));
+    expect(spec.status).toBe(200);
+    expect(spec.json.openapi).toBe("3.1.0");
+    expect(Object.keys(spec.json.paths)).toContain("/api/tickets/{id}/notes");
     // revoked
     expect((await admin.del(`/api/admin/api-keys/${made.json.id}`)).status).toBe(200);
     expect((await robot.req("GET", "/api/tickets", undefined, bearer(key))).status).toBe(401);
