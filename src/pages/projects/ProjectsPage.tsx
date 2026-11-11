@@ -23,6 +23,7 @@ import { useCrmClients } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 import { NewProjectDialog } from "./NewProjectDialog";
 import { ProjectDialog } from "./ProjectDialog";
+import { ProjectTypeSelect } from "./ProjectTypeSelect";
 import { ProjectToDayDialog } from "@/pages/pipeline/ProjectToDayDialog";
 import { dueTone, hoursText, KEY, MS_TONE, STATUS_STYLE, TONE_TEXT, today, useProjectPeople, type Project, type Summary, type Week } from "./shared";
 
@@ -122,6 +123,11 @@ export function ProjectsPage() {
   const refresh = () => void qc.invalidateQueries({ queryKey: KEY });
   const follow = useMutation({
     mutationFn: (p: Project) => api.put(`/projects/${p.id}/follow`, { follow: !p.following }),
+    onSuccess: refresh,
+    onError: () => toast.error(t("common.error")),
+  });
+  const setType = useMutation({
+    mutationFn: (v: { id: string; typeId: string | null }) => api.patch(`/projects/${v.id}`, { typeId: v.typeId }),
     onSuccess: refresh,
     onError: () => toast.error(t("common.error")),
   });
@@ -351,7 +357,7 @@ export function ProjectsPage() {
                     <span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[p.status])}>{t(`projects.status.${p.status}`)}</span>
                   </span>
                   <span className="hidden w-40 truncate text-sm text-muted-foreground lg:block">{p.client?.name ?? "—"}</span>
-                  <span className="hidden w-36 truncate text-sm text-muted-foreground xl:block" title={p.type?.name}>{p.type?.name ?? "—"}</span>
+                  <span className="hidden w-36 xl:block">{canEdit ? <ProjectTypeSelect compact value={p.type?.id ?? null} onChange={(typeId) => setType.mutate({ id: p.id, typeId })} /> : <span className="block truncate text-sm text-muted-foreground">{p.type?.name ?? "—"}</span>}</span>
                   <span className="hidden w-32 md:block">
                     <span className="flex items-center gap-2">
                       <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-foreground/10">

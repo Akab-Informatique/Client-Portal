@@ -17,7 +17,7 @@ export function useProjectTypes() {
   return useQuery({ queryKey: ["projects", "types"], queryFn: () => api.get<ProjectType[]>("/projects/types"), staleTime: 60_000 });
 }
 
-export function ProjectTypeSelect({ value, onChange, disabled, canAdd = true }: { value: string | null; onChange: (id: string | null) => void; disabled?: boolean; canAdd?: boolean }) {
+export function ProjectTypeSelect({ value, onChange, disabled, canAdd = true, compact }: { value: string | null; onChange: (id: string | null) => void; disabled?: boolean; canAdd?: boolean; compact?: boolean }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const { data: types = [] } = useProjectTypes();
@@ -48,7 +48,7 @@ export function ProjectTypeSelect({ value, onChange, disabled, canAdd = true }: 
   }
   return (
     <Select disabled={disabled} value={value ?? NONE} onValueChange={(v) => (v === NEW ? setAdding(true) : onChange(v === NONE ? null : v))}>
-      <SelectTrigger>
+      <SelectTrigger size={compact ? "sm" : "default"} className={compact ? "h-7 w-full gap-1 border-transparent bg-transparent px-1.5 text-xs shadow-none hover:border-border" : undefined}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="max-h-72">
