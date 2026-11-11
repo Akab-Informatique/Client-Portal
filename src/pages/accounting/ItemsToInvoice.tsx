@@ -200,6 +200,8 @@ type Draft = {
   gstCents: number;
   qstCents: number;
   totalCents: number;
+  credit?: { availableCents: number; appliedCents: number; apply: boolean; items: { id: string; kind: string; ref: string | null; txnDate: string; remainingCents: number }[] };
+  balanceCents?: number;
   company: { legalName: string; address: string; phone: string; email: string; website: string };
   taxes: { gstNumber: string; qstNumber: string; gstRate: number; qstRate: number };
   template: { language: "fr" | "en"; footer: string; paymentInstructions: string; showPaymentLink: boolean };
@@ -294,6 +296,8 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
   const qbItem = qb.itemId ?? qbCodes?.defaults.itemId ?? "";
   const qbTax = qb.taxCodeId ?? qbCodes?.defaults.taxCodeId ?? "";
   const itemIds = items.filter((i) => kinds.has(i.kind) && !left.has(i.id)).map((i) => i.id);
+  // the client's credit on account (QuickBooks) comes off the invoice unless it is turned off here
+  const [useCredit, setUseCredit] = useState(true);
   const draft = {
     clientId: ready.client.id,
     itemIds,
@@ -303,6 +307,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
     poNumber: f.poNumber || null,
     notes: f.notes || null,
     ...(pay !== null ? { payOnline: pay } : {}),
+    ...(useCredit ? {} : { applyCredit: false }),
     // only the work of the time frame
     from: period.from,
     to: period.to,
@@ -510,6 +515,15 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
             }}
           />
         )}
+        {pv?.credit && pv.credit.availableCents > 0 && (
+          <section className="space-y-1.5 rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" checked={useCredit} onChange={(e) => setUseCredit(e.target.checked)} />
+              {t("approvals.invoice.credit", { amount: m(pv.credit.availableCents) })}
+            </label>
+            <p className="text-[11px] text-muted-foreground">{useCredit ? t("approvals.invoice.creditOn", { amount: m(pv.credit.appliedCents), balance: m(pv.balanceCents ?? pv.totalCents) }) : t("approvals.invoice.creditOff")}</p>
+          </section>
+        )}
         {can("accounting.manage") && (
           <Button
             disabled={!itemIds.length || create.isPending || (pv?.poRequired && !f.poNumber)}
@@ -517,7 +531,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
             className="w-full bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105"
           >
             {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}{" "}
-            {t("approvals.invoice.create", { total: pv ? m(pv.totalCents) : "" })}
+            {t("approvals.invoice.create", { total: pv ? m(pv.balanceCents ?? pv.totalCents) : "" })}
           </Button>
         )}
       </div>

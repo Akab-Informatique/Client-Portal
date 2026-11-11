@@ -7914,6 +7914,51 @@ describe("QuickBooks: clients, chart of accounts and vendors kept in step both w
       forgetQuickBooksToken();
     }
   });
+
+  it("credit on a client's account in QuickBooks comes off its invoice, and is applied there too", async () => {
+    resetRateLimit("login:ip:unknown");
+    vi.stubGlobal("fetch", mock);
+    const billing = await import("../server/lib/billing.ts");
+    const { forgetQuickBooksToken } = await import("../server/lib/quickbooks.ts");
+    const credits = await import("../server/lib/qbCredits.ts");
+    await billing.saveQuickBooksSettings(null, { clientId: "x", clientSecret: "y", environment: "sandbox" });
+    await billing.saveQuickBooksSettings(null, { enabled: true, realmId: "123", refreshToken: "r" });
+    forgetQuickBooksToken();
+    try {
+      const [cl] = await db().insert(schema.clients).values({ name: "Client Credit QB", quickbooksId: "990" }).returning();
+      // an overpayment (unapplied $30 of a $50 payment) and a credit memo with $20 left; one paid up and one of another customer
+      store.Payment.set("p1", stamp({ Id: "p1", TxnDate: "2026-01-05", TotalAmt: 50, UnappliedAmt: 30, CustomerRef: { value: "990" }, Line: [{ Amount: 20, LinkedTxn: [{ TxnId: "old", TxnType: "Invoice" }] }] }));
+      store.Payment.set("p2", stamp({ Id: "p2", TxnDate: "2026-01-06", TotalAmt: 40, UnappliedAmt: 0, CustomerRef: { value: "990" }, Line: [] }));
+      store.Payment.set("p3", stamp({ Id: "p3", TxnDate: "2026-01-07", TotalAmt: 40, UnappliedAmt: 40, CustomerRef: { value: "555" }, Line: [] }));
+      store.CreditMemo.set("m1", stamp({ Id: "m1", DocNumber: "20100", TxnDate: "2026-02-01", TotalAmt: 25, Balance: 20, CustomerRef: { value: "990" } }));
+      const pulled = await credits.pullCredits();
+      expect(pulled).toMatchObject({ clients: 1, credits: 2, cents: 5000 });
+      expect((await credits.creditOf(cl.id)).cents).toBe(5000);
+      // an invoice of $45: the credit comes off it, oldest first, never more than the total
+      const [inv] = await db().insert(schema.clientInvoices).values({ clientId: cl.id, number: "C-1", issuedOn: "2026-03-01", dueOn: "2026-03-01", subtotalCents: 4500, taxCents: 0, totalCents: 4500, source: "portal", quickbooksId: "qbinv1" } as any).returning();
+      expect(await credits.applyCreditsToInvoice(inv.id, cl.id, 4500, "2026-03-01")).toBe(4500);
+      const pays = await db().select().from(schema.invoicePayments).where(eq(schema.invoicePayments.invoiceId, inv.id));
+      expect(pays.map((p) => p.amountCents).sort()).toEqual([1500, 3000]);
+      expect(pays.every((p) => p.source === "qbcredit" && p.method === "credit")).toBe(true);
+      expect((await credits.creditOf(cl.id)).cents).toBe(500);
+      // applied in QuickBooks: the payment gets a line for the invoice, the memo is applied by a payment of 0
+      expect(await credits.creditsToPush()).toContain(inv.id);
+      expect(await credits.pushInvoiceCredits(inv.id)).toBe(2);
+      expect(store.Payment.get("p1")!.Line).toEqual(expect.arrayContaining([{ Amount: 20, LinkedTxn: [{ TxnId: "old", TxnType: "Invoice" }] }, { Amount: 30, LinkedTxn: [{ TxnId: "qbinv1", TxnType: "Invoice" }] }]));
+      expect([...store.Payment.values()].some((p) => p.TotalAmt === 0 && p.Line.some((l: any) => l.LinkedTxn[0].TxnId === "m1" && l.Amount === 15))).toBe(true);
+      expect(await credits.creditsToPush()).not.toContain(inv.id);
+      // a later pull cannot hand the same credit out again (QuickBooks still shows the memo with $20 until it updates)
+      const left = (await credits.pullCredits()).cents;
+      expect(left).toBeLessThanOrEqual(5000);
+      expect((await credits.creditOf(cl.id)).cents).toBe(left);
+    } finally {
+      store.Payment.clear();
+      store.CreditMemo.clear();
+      vi.unstubAllGlobals();
+      await billing.saveQuickBooksSettings(null, { enabled: false, refreshToken: null, realmId: null, invoicesMode: "number" });
+      forgetQuickBooksToken();
+    }
+  });
 });
 
 describe("pipeline: pinned priorities in my day", () => {

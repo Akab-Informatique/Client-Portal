@@ -1,6 +1,6 @@
 import path from "node:path";
 import PDFDocument from "pdfkit";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
 import { taxesOfLines } from "../../shared/invoiceTax.ts";
@@ -24,8 +24,8 @@ const dmy = (ymd: string) => {
 type Line = { section: string | null; date: string | null; description: string; contractName: string | null; kind: string; quantity: number; unitPriceCents: number; amountCents: number };
 
 const text = {
-  fr: { date: "Date", billTo: "Facturer à", invoiceNo: "# facture", terms: "Modalités", net: (d: number) => `Net ${d} jours`, receipt: "Payable sur réception", dueOn: "Paiement dû", lineDate: "Date", description: "Description", hours: "Heures facturables", quantity: "Quantité", rate: "Taux", amount: "Montant facturable", contract: (n: string) => `contrat : ${n}`, totalHours: "Total des heures facturables", totalBilled: "Montant total à facturer", taxes: "Total Taxes", exempt: "Client exempté de taxes", grandTotal: "Grand Total", payOnline: "Payer en ligne", paid: "PAYÉE" },
-  en: { date: "Date", billTo: "Bill to", invoiceNo: "# invoice", terms: "Terms", net: (d: number) => `Net ${d} days`, receipt: "Due on receipt", dueOn: "Payment due", lineDate: "Date", description: "Description", hours: "Billable hours", quantity: "Quantity", rate: "Rate", amount: "Billable amount", contract: (n: string) => `contract: ${n}`, totalHours: "Total billable hours", totalBilled: "Total amount to bill", taxes: "Total Taxes", exempt: "Client exempt from taxes", grandTotal: "Grand Total", payOnline: "Pay online", paid: "PAID" },
+  fr: { date: "Date", billTo: "Facturer à", invoiceNo: "# facture", terms: "Modalités", net: (d: number) => `Net ${d} jours`, receipt: "Payable sur réception", dueOn: "Paiement dû", lineDate: "Date", description: "Description", hours: "Heures facturables", quantity: "Quantité", rate: "Taux", amount: "Montant facturable", contract: (n: string) => `contrat : ${n}`, totalHours: "Total des heures facturables", totalBilled: "Montant total à facturer", taxes: "Total Taxes", exempt: "Client exempté de taxes", grandTotal: "Grand Total", credit: "Crédit au compte", balance: "Solde à payer", payOnline: "Payer en ligne", paid: "PAYÉE" },
+  en: { date: "Date", billTo: "Bill to", invoiceNo: "# invoice", terms: "Terms", net: (d: number) => `Net ${d} days`, receipt: "Due on receipt", dueOn: "Payment due", lineDate: "Date", description: "Description", hours: "Billable hours", quantity: "Quantity", rate: "Rate", amount: "Billable amount", contract: (n: string) => `contract: ${n}`, totalHours: "Total billable hours", totalBilled: "Total amount to bill", taxes: "Total Taxes", exempt: "Client exempt from taxes", grandTotal: "Grand Total", credit: "Credit on account", balance: "Balance due", payOnline: "Pay online", paid: "PAID" },
 } as const;
 
 export type InvoicePdf = { filename: string; content: Buffer };
@@ -244,6 +244,15 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
   font(true, 12).text(T.grandTotal, tx, ty, { width: 140, lineBreak: false });
   font(true, 12).text(money(inv.totalCents), tx, ty, { width: tw, align: "right", lineBreak: false });
   ty += 22;
+  // what the client had on account (QuickBooks credit) taken off this invoice
+  const credited = (await d.select({ n: sql<number>`coalesce(sum(${schema.invoicePayments.amountCents}), 0)::int` }).from(schema.invoicePayments).where(and(eq(schema.invoicePayments.invoiceId, inv.id), eq(schema.invoicePayments.source, "qbcredit"))))[0]?.n ?? 0;
+  if (credited > 0) {
+    ty -= 6;
+    pair(T.credit, `- ${money(credited)}`, false, 0, 9);
+    font(true, 12).text(T.balance, tx, ty, { width: 140, lineBreak: false });
+    font(true, 12).text(money(Math.max(0, inv.totalCents - credited)), tx, ty, { width: tw, align: "right", lineBreak: false });
+    ty += 22;
+  }
 
   // ── the notes and the conditions
   y = Math.max(ly, ty) + 10;

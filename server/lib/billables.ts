@@ -1,3 +1,4 @@
+import { applyCreditsToInvoice, creditOf } from "./qbCredits.ts";
 import { and, asc, eq, gte, inArray, isNotNull, lte, or, sql } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { alignNumbering, autoTaxCodes, pushInvoice, qbItemsForBillingItems, qbNumberTaken, voidInvoiceInQb } from "./quickbooks.ts";
@@ -352,6 +353,8 @@ export type InvoiceDraft = {
   qbTaxCodeId?: string | null;
   /** "Pay online" (Stripe) in this invoice's emails; none: the client's choice, else the template's */
   payOnline?: boolean | null;
+  /** Take what the client has on account (QuickBooks credit) off this invoice: on unless false */
+  applyCredit?: boolean;
   /** Only the work of these days (an item outside makes the draft invalid) */
   from?: string | null;
   to?: string | null;
@@ -430,6 +433,11 @@ export async function draftInvoice(p: InvoiceDraft) {
   const subtotal = items.reduce((x, i) => x + i.amountCents, 0);
   const exempt = client.invoice?.taxes === false;
   const { gst, qst } = taxesOf(s, items.filter((i) => i.taxable).map((i) => i.amountCents), exempt);
+  const total = subtotal + gst + qst;
+  // what the client has on account in QuickBooks: shown, and taken off the invoice (never more than it comes to)
+  const credit = await creditOf(client.id);
+  const useCredit = p.applyCredit !== false && credit.cents > 0;
+  const creditCents = useCredit ? Math.min(credit.cents, total) : 0;
   return {
     client: { id: client.id, name: client.name, address: client.address, city: client.city, province: client.province, postalCode: client.postalCode, email: client.invoice?.billingEmail || client.email },
     number: await peekNumber(),
@@ -460,7 +468,9 @@ export async function draftInvoice(p: InvoiceDraft) {
     subtotalCents: subtotal,
     gstCents: gst,
     qstCents: qst,
-    totalCents: subtotal + gst + qst,
+    totalCents: total,
+    credit: { availableCents: credit.cents, appliedCents: creditCents, apply: p.applyCredit !== false, items: credit.credits },
+    balanceCents: total - creditCents,
     company: s.company,
     taxes: s.taxes,
     // the pay button: this invoice's choice, else the client's, else the template default (shown only when Stripe can take it)
@@ -597,7 +607,9 @@ export function createInvoice(actorId: string | null, p: InvoiceDraft) {
     });
     const digits = number.slice(s.numbering.prefix.length);
     if (/^\d+$/.test(digits)) await saveBillingSettings(actorId, { numbering: { next: Number(digits) + 1 } });
-    return { id: inv.id, number, client: draft.client.name, totalCents: draft.totalCents };
+    // the client's credit on account comes off this invoice (a payment of it, applied in QuickBooks when it is sent there)
+    if (draft.credit.appliedCents > 0) await applyCreditsToInvoice(inv.id, draft.client.id, draft.credit.appliedCents, draft.issuedOn).catch((e) => console.warn("[credit] apply:", e instanceof Error ? e.message : e));
+    return { id: inv.id, number, client: draft.client.name, totalCents: draft.totalCents, creditCents: draft.credit.appliedCents };
   });
   numbering = run.catch(() => undefined);
   return run;

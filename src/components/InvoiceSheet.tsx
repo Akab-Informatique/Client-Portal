@@ -19,6 +19,8 @@ export type SheetData = {
   gstCents: number;
   qstCents: number;
   totalCents: number;
+  /** What the client had on account (QuickBooks) and what comes off this invoice */
+  credit?: { availableCents: number; appliedCents: number };
   exempt: boolean;
   company: { legalName: string; address: string; phone: string; email: string; website: string };
   taxes: { gstNumber: string; qstNumber: string; gstRate: number; qstRate: number };
@@ -216,6 +218,18 @@ export function InvoiceSheet({ d, payToggle }: { d: SheetData; payToggle?: PayTo
             <span>{L("grandTotal")}</span>
             <span className="text-base">{mm(d.totalCents)}</span>
           </p>
+          {d.credit && d.credit.appliedCents > 0 && (
+            <>
+              <p className="flex justify-between text-emerald-700">
+                <span>{L("credit")}</span>
+                <span>- {mm(d.credit.appliedCents)}</span>
+              </p>
+              <p className="flex items-baseline justify-between pt-1 text-sm font-bold">
+                <span>{L("balance")}</span>
+                <span className="text-base">{mm(Math.max(0, d.totalCents - d.credit.appliedCents))}</span>
+              </p>
+            </>
+          )}
         </div>
       </div>
 

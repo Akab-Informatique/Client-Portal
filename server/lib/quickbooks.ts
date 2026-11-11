@@ -648,6 +648,8 @@ async function pushInvoiceNow(invoiceId: string): Promise<{ quickbooksId: string
     const taxDiff = sent?.TxnTaxDetail?.TotalTax != null ? Math.round(sent.TxnTaxDetail.TotalTax * 100) - inv.taxCents : 0;
     const mismatch = diff !== 0 || taxDiff !== 0 ? `total_mismatch: portail ${(inv.totalCents / 100).toFixed(2)} $ (taxes ${(inv.taxCents / 100).toFixed(2)} $), QuickBooks ${(sent!.TotalAmt ?? 0).toFixed(2)} $ (taxes ${(sent?.TxnTaxDetail?.TotalTax ?? 0).toFixed(2)} $) — vérifier le code de taxe` : null;
     await d.update(schema.clientInvoices).set({ quickbooksId: id, quickbooksSyncedAt: new Date(), quickbooksError: mismatch }).where(eq(schema.clientInvoices.id, inv.id));
+    // the credit on account taken off this invoice here is applied to it in QuickBooks too
+    await (await import("./qbCredits.ts")).pushInvoiceCredits(inv.id).catch((e) => console.warn("[quickbooks] credits:", errText(e)));
     return { quickbooksId: id, ...(mismatch ? { warning: mismatch } : {}) };
   } catch (e) {
     return fail(e);
@@ -1103,6 +1105,12 @@ async function tickNow() {
     const { pushCreditNote } = await import("./creditNotes.ts");
     const todo = await db().select({ id: schema.creditNotes.id }).from(schema.creditNotes).where(or(isNull(schema.creditNotes.quickbooksId), and(sql`${schema.creditNotes.appliedCents} > 0`, isNull(schema.creditNotes.quickbooksApplyId))));
     for (const r of todo) await pushCreditNote(r.id).catch(warn("credit note"));
+  }
+  // what clients have on account (before the invoices are made), and credits taken here not applied there yet
+  if (s.sync.payments) {
+    const credits = await import("./qbCredits.ts");
+    await credits.pullCredits().catch(warn("credits"));
+    for (const id of await credits.creditsToPush()) await credits.pushInvoiceCredits(id).catch(warn("credit apply"));
   }
   if (s.sync.payments) {
     // card payments not in QuickBooks yet (sent when received; retried here)

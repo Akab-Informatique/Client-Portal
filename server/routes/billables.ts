@@ -32,6 +32,7 @@ const zDraft = z.object({
   qbItemId: z.string().trim().max(40).nullable().optional(),
   qbTaxCodeId: z.string().trim().max(40).nullable().optional(),
   payOnline: z.boolean().nullable().optional(),
+  applyCredit: z.boolean().optional(),
   // the time frame: only its work goes on the invoice
   from: zDay.nullable().optional(),
   to: zDay.nullable().optional(),

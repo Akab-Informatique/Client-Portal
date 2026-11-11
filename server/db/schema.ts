@@ -3461,3 +3461,44 @@ export const pipelineEventMoves = pgTable(
   },
   (t) => [uniqueIndex("pipeline_event_moves_uniq").on(t.userId, t.date, t.eventKey)],
 );
+
+/** Credit on a customer's account in QuickBooks (an unapplied payment or a credit memo not used up), copied read only */
+export const qbCredits = pgTable(
+  "qb_credits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    /** payment | creditmemo */
+    kind: text("kind").notNull(),
+    qbId: text("qb_id").notNull(),
+    ref: text("ref"),
+    txnDate: text("txn_date").notNull(),
+    totalCents: bigint("total_cents", { mode: "number" }).notNull().default(0),
+    /** What is left to use (less what an invoice here took and QuickBooks has not applied yet) */
+    remainingCents: bigint("remaining_cents", { mode: "number" }).notNull().default(0),
+    syncedAt: timestamp("synced_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("qb_credits_unique_idx").on(t.kind, t.qbId), index("qb_credits_client_idx").on(t.clientId)],
+);
+
+/** A credit of the account taken off an invoice made here, and whether QuickBooks has it applied to that invoice too */
+export const invoiceCreditApplications = pgTable(
+  "invoice_credit_applications",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    invoiceId: uuid("invoice_id")
+      .notNull()
+      .references(() => clientInvoices.id, { onDelete: "cascade" }),
+    creditId: uuid("credit_id").references(() => qbCredits.id, { onDelete: "set null" }),
+    kind: text("kind").notNull(),
+    qbId: text("qb_id").notNull(),
+    amountCents: bigint("amount_cents", { mode: "number" }).notNull(),
+    paymentId: uuid("payment_id").references(() => invoicePayments.id, { onDelete: "set null" }),
+    quickbooksApplyId: text("quickbooks_apply_id"),
+    quickbooksError: text("quickbooks_error"),
+    createdAt: created(),
+  },
+  (t) => [index("invoice_credit_apps_invoice_idx").on(t.invoiceId)],
+);
