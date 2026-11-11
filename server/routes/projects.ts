@@ -1386,6 +1386,17 @@ export const projectsRoutes = new Hono<AppEnv>()
     if (o.billable) await syncBillablesNow();
     return c.json(await chargesOfProject(p.id), 201);
   })
+  // where the goods of a charge stand: ordered, received at the office, or none
+  .put("/:id/charges/:chargeId/supply", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const chargeId = zUuid.parse(c.req.param("chargeId"));
+    const o = await body(c, z.object({ supply: z.enum(["ordered", "received"]).nullable() }));
+    const done = await db().update(schema.ticketCharges).set({ supply: o.supply }).where(and(eq(schema.ticketCharges.id, chargeId), eq(schema.ticketCharges.projectId, p.id))).returning({ id: schema.ticketCharges.id });
+    if (!done.length) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "project.charge_supply", p.id, { chargeId, supply: o.supply });
+    return c.json(await chargesOfProject(p.id));
+  })
   .delete("/:id/charges/:chargeId", requirePermission("projects.edit"), async (c) => {
     const a = auth(c);
     const p = await loadProject(c.req.param("id"));

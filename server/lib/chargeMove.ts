@@ -86,6 +86,7 @@ export async function chargesOfProject(projectId: string) {
     billable: c.billable,
     date: c.date,
     author: c.author,
+    supply: c.supply,
     billing: c.billed ? "posted" : (status.get(c.externalId ?? `pcharge:${c.id}`) ?? null),
     /** only a charge not approved yet can be moved */
     movable: !c.billed && (status.get(c.externalId ?? `pcharge:${c.id}`) ?? "pending") === "pending",

@@ -667,6 +667,7 @@ const en: Dict = {
     deleteText: "The service is removed from the list. This is final.",
   },
 
+  supply: { label: "Goods status", none: "To order", ordered: "Ordered", received: "Received at the office" },
   chargeMove: {
     button: "Put on another ticket or project",
     title: "Move the charge",

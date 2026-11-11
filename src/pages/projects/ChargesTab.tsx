@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ArrowRightLeft, Boxes, Loader2, Plus, Search, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
+import { SupplySelect } from "@/components/SupplySelect";
 import { RebateInput, afterRebate, percentOf } from "@/components/RebateInput";
 import { AiTextarea } from "@/components/AiPolish";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,7 @@ type ProjectCharge = {
   billable: boolean;
   date: string | null;
   author: string | null;
+  supply?: string | null;
   billing: string | null;
   movable: boolean;
 };
@@ -51,6 +53,11 @@ export function ChargesTab({ p, edit }: { p: ProjectDetail; edit: boolean }) {
   const { data: charges = [], isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<ProjectCharge[]>(`/projects/${p.id}/charges`) });
   const remove = useMutation({
     mutationFn: (id: string) => api.del<ProjectCharge[]>(`/projects/${p.id}/charges/${id}`),
+    onSuccess: (next) => qc.setQueryData(key, next),
+    onError: (e) => toast.error(errorText(t, e)),
+  });
+  const setSupply = useMutation({
+    mutationFn: (v: { id: string; supply: string | null }) => api.put<ProjectCharge[]>(`/projects/${p.id}/charges/${v.id}/supply`, { supply: v.supply }),
     onSuccess: (next) => qc.setQueryData(key, next),
     onError: (e) => toast.error(errorText(t, e)),
   });
@@ -89,6 +96,7 @@ export function ChargesTab({ p, edit }: { p: ProjectDetail; edit: boolean }) {
                   {c.rebate > 0 && <span className="ml-1 text-emerald-300">−{c.rebate} %</span>}
                 </span>
                 <span className="w-24 text-right font-mono">{c.billable ? money(lineTotal(c)) : <span className="text-muted-foreground">{t("projects.charges.notBilled")}</span>}</span>
+                <SupplySelect value={c.supply} disabled={!edit || setSupply.isPending} onChange={(v) => setSupply.mutate({ id: c.id, supply: v })} />
                 {c.billable && c.billing && <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", BILLING_STYLE[c.billing] ?? "text-muted-foreground")}>{t(`projects.charges.billing.${c.billing}`)}</span>}
                 {edit && c.movable ? (
                   <span className="flex items-center gap-1">

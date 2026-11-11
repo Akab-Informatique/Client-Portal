@@ -8,7 +8,8 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { productsWithStock } from "../lib/store.ts";
-import { depositOf, lineAmount, quoteTotals, soldOfQuote } from "../../shared/quotes.ts";
+import { depositOf, isHourLine, lineAmount, quoteTotals, soldOfQuote } from "../../shared/quotes.ts";
+import { syncBillablesNow } from "../lib/billables.ts";
 import { nextProjectNumber } from "../lib/projectLinks.ts";
 import { DraftError, quickInvoice } from "../lib/billables.ts";
 import { billingSettings } from "../lib/billing.ts";
@@ -480,7 +481,11 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       .join("\n")
       .slice(0, 8000);
     const hours = p.hours === undefined ? sold.hours : p.hours;
-    const priceCents = p.price === undefined || p.price === null ? sold.priceCents : Math.round(p.price * 100);
+    // the products of the quote (inventory items, one time, not options, not hours or services) become charges of the project:
+    // they are billed as charges, so a fixed price that was the whole implementation leaves them out
+    const productLines = q.lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !l.serviceId && (l.productId || l.sku) && !isHourLine(l));
+    const productsCents = productLines.reduce((n, l) => n + lineAmount(l), 0);
+    const priceCents = p.price === undefined || p.price === null ? (sold.hours == null ? Math.max(0, sold.priceCents - productsCents) : sold.priceCents) : Math.round(p.price * 100);
     // the one who prepared the quote leads the project (when still active staff)
     const [lead] = q.preparedById ? await db().select({ id: schema.users.id }).from(schema.users).where(and(eq(schema.users.id, q.preparedById), eq(schema.users.kind, "staff"), eq(schema.users.active, true))) : [];
     const number = await nextProjectNumber();
@@ -505,6 +510,27 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       })
       .returning();
     await db().insert(schema.projectMembers).values({ projectId: project.id, userId: project.leadId! }).onConflictDoNothing();
+    if (productLines.length) {
+      await db()
+        .insert(schema.ticketCharges)
+        .values(
+          productLines.map((l) => ({
+            ticketId: null,
+            projectId: project.id,
+            name: l.description.slice(0, 100),
+            description: (l.details ?? "").slice(0, 2000),
+            quantityX100: l.quantityX100,
+            unitPriceCents: Number(l.unitPriceCents),
+            rebateBps: l.discountX100,
+            unitCostCents: Number(l.unitCostCents),
+            billable: true,
+            productId: l.productId ?? null,
+            date: todayQc(),
+            author: a.realUser.name,
+          })),
+        );
+      await syncBillablesNow();
+    }
 
     const [point] = await db()
       .insert(schema.meetingPoints)
@@ -516,8 +542,8 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       })
       .returning({ id: schema.meetingPoints.id });
     await db().update(schema.quotes).set({ projectId: project.id, meetingPointId: point.id, projectAt: new Date(), updatedAt: new Date() }).where(eq(schema.quotes.id, id));
-    await audit(a.user.id, "quote.to_project", id, { number: q.number, project: number, hours, priceCents });
-    return c.json({ projectId: project.id, projectNumber: number, meetingPointId: point.id }, 201);
+    await audit(a.user.id, "quote.to_project", id, { number: q.number, project: number, hours, priceCents, charges: productLines.length });
+    return c.json({ projectId: project.id, projectNumber: number, meetingPointId: point.id, charges: productLines.length }, 201);
   })
 
   /** A line typed on the spot becomes an inventory product (and the line is tied to it): next time it is one search away. */

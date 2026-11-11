@@ -183,6 +183,8 @@ export type Charge = {
   materialCode: string | null;
   date: string | null;
   author: string | null;
+  /** ordered | received (at the office); none = not ordered yet */
+  supply?: string | null;
 };
 export type NewCharge = {
   name: string;

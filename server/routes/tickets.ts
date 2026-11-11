@@ -1886,6 +1886,19 @@ export const ticketRoutes = new Hono<AppEnv>()
     const src = await ticketSource();
     return c.json({ moved: true, to: moved.number, kind: moved.kind, charges: await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)) });
   })
+  // where the goods of a charge stand: ordered, received at the office, or none (not ordered yet)
+  .put("/:id/charges/:chargeId/supply", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    const chargeId = c.req.param("chargeId");
+    if (!Number.isInteger(id) || !/^[0-9a-f-]{36}$/i.test(chargeId)) throw new HTTPException(400, { message: "invalid_id" });
+    const o = await body(c, z.object({ supply: z.enum(["ordered", "received"]).nullable() }));
+    const done = await db().update(schema.ticketCharges).set({ supply: o.supply }).where(and(eq(schema.ticketCharges.id, chargeId), eq(schema.ticketCharges.ticketId, id))).returning({ id: schema.ticketCharges.id });
+    if (!done.length) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "ticket.charge_supply", String(id), { chargeId, supply: o.supply });
+    const src = await ticketSource();
+    return c.json(await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)));
+  })
   .delete("/:id/charges/:chargeId", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const id = Number(c.req.param("id"));

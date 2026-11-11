@@ -1,0 +1,1 @@
+ALTER TABLE "ticket_charges" ADD COLUMN "supply" text;

@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SupplySelect } from "@/components/SupplySelect";
 import { api, ApiError } from "@/lib/api";
 import { currentLocale } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -38,6 +39,7 @@ export type Charge = {
   date: string | null;
   author: string | null;
   /** Where it stands in billing: waiting, approved, set aside, or on an invoice (a link for whoever may see invoices) */
+  supply?: string | null;
   billing?: { status: string; invoice: { id: string; number: string; visible: boolean } | null } | null;
 };
 type Choice = { value: string; label: string };
@@ -121,6 +123,11 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
     },
     onError: (e) => toast.error(e instanceof ApiError && e.code === "charge_billed" ? t("tickets.charges.errors.charge_billed") : ticketErrorText(t, e)),
   });
+  const setSupply = useMutation({
+    mutationFn: (v: { c: Charge; supply: string | null }) => api.put<Charge[]>(`/tickets/${tk.id}/charges/${v.c.id}/supply`, { supply: v.supply }),
+    onSuccess: (next) => qc.setQueryData(["tickets", "charges", tk.id], next),
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
   return (
     <div className="space-y-1.5 text-sm">
       <ul className="max-h-40 space-y-1.5 overflow-y-auto">
@@ -181,6 +188,7 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
                 </span>
               )}
               {c.author && <span>· {c.author}</span>}
+              <SupplySelect value={c.supply} disabled={!editable || setSupply.isPending} onChange={(v) => setSupply.mutate({ c, supply: v })} />
               <span className={cn("rounded-full px-1.5 py-px text-[10px] font-medium", c.billable ? "bg-emerald-500/15 text-emerald-300" : "bg-muted text-muted-foreground")}>
                 {c.billable ? t("tickets.charges.billable") : t("tickets.charges.notBillable")}
               </span>

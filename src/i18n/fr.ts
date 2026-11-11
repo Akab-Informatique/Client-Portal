@@ -665,6 +665,7 @@ const fr = {
     deleteText: "Le service est retiré de la liste. Cette action est définitive.",
   },
 
+  supply: { label: "État de la marchandise", none: "À commander", ordered: "Commandé", received: "Reçu au bureau" },
   chargeMove: {
     button: "Mettre sur un autre billet ou projet",
     title: "Déplacer le frais",

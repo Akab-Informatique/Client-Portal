@@ -872,6 +872,8 @@ export const ticketCharges = pgTable(
     date: text("date"),
     author: text("author"),
     billed: boolean("billed").notNull().default(false),
+    /** Where the goods stand: ordered | received (at the office); none = not ordered yet */
+    supply: text("supply"),
     createdAt: created(),
   },
   (t) => [index("ticket_charges_ticket_idx").on(t.ticketId), uniqueIndex("ticket_charges_external_idx").on(t.externalId)],

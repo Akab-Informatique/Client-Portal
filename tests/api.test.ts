@@ -7374,6 +7374,36 @@ describe("pipeline: shared to-dos and the day", () => {
     // time logged on a project task can be deleted like any manual entry (it used to answer not found), and the bank is given back
     expect((await admin.del(`/api/time/entries/${e.id}`)).status).toBe(200);
     expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 0, diffHours: 10 });
+
+    // the products of a quote become charges of the project (billable, at the quote's price, rebate and cost); hours and services do not
+    const [prod] = await db().insert(schema.storeProducts).values({ sku: "SRV-QP-1", name: "Serveur Dell", priceCents: 250000, costCents: 180000 }).returning();
+    const qp = (
+      await admin.post("/api/quotes", {
+        clientId: client.id,
+        title: "Avec produits",
+        saleType: "fixed",
+        lines: [
+          { description: "Serveur Dell", productId: prod.id, sku: "SRV-QP-1", quantityX100: 200, unitPriceCents: 250000, unitCostCents: 180000, discountX100: 1000 },
+          { description: "Main-d'œuvre : installation", quantityX100: 500, unitPriceCents: 10000 },
+          { description: "Option écran", sku: "ECR-1", quantityX100: 100, unitPriceCents: 30000, optional: true },
+        ],
+      })
+    ).json;
+    const mp = (await admin.post(`/api/quotes/${qp.id}/to-project`, {})).json;
+    expect(mp.charges).toBe(1);
+    const ch = (await admin.get(`/api/projects/${mp.projectId}/charges`)).json as any[];
+    expect(ch).toHaveLength(1);
+    expect(ch[0]).toMatchObject({ name: "Serveur Dell", billable: true });
+    const [row2] = await db().select().from(schema.ticketCharges).where(eq(schema.ticketCharges.projectId, mp.projectId));
+    expect(row2).toMatchObject({ quantityX100: 200, unitPriceCents: 250000, unitCostCents: 180000, rebateBps: 1000, projectId: mp.projectId });
+    // where the goods stand: ordered, received at the office, or none again
+    expect(ch[0].supply).toBeNull();
+    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: "ordered" })).json[0].supply).toBe("ordered");
+    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: "received" })).json[0].supply).toBe("received");
+    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: "lost" })).status).toBe(400);
+    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: null })).json[0].supply).toBeNull();
+    // the hours are the package: the equipment is not in the fixed price (billed as charges)
+    expect((await admin.get(`/api/projects/${mp.projectId}`)).json).toMatchObject({ billingMode: "fixed", fixedPrice: 500, budgetHours: 5 });
   });
 
   it("a phase works like a ticket: its timer, its replies and notes, and time that covers several tasks", async () => {

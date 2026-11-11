@@ -1212,6 +1212,13 @@
       "when": 1794423557583,
       "tag": "0172_steady_pepper_potts",
       "breakpoints": true
+    },
+    {
+      "idx": 173,
+      "version": "7",
+      "when": 1794430586258,
+      "tag": "0173_striped_raider",
+      "breakpoints": true
     }
   ]
 }

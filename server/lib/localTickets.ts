@@ -298,6 +298,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           materialCode: c.materialCode,
           date: c.date,
           author: c.author,
+          supply: c.supply,
         }),
       );
     },
