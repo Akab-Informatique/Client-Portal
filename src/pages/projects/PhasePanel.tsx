@@ -425,7 +425,7 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
   };
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[92dvh] overflow-y-auto overflow-x-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Clock className="size-5 text-sky-300" /> {t("projects.phase.timeTitle")}
@@ -434,8 +434,8 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
             {p.number} · {m.name}
           </DialogDescription>
         </DialogHeader>
-        <form className="space-y-4" onSubmit={submit}>
-          <div className="grid gap-3 sm:grid-cols-[8rem_9rem_minmax(0,1fr)]">
+        <form className="min-w-0 space-y-4" onSubmit={submit}>
+          <div className="grid gap-3 sm:grid-cols-[7rem_10rem_minmax(0,1fr)]">
             <div className="space-y-1.5">
               <Label className="text-xs">{t("projects.duration")}</Label>
               <Input autoFocus value={dur} onChange={(e) => (setDur(e.target.value), setErr(""))} placeholder="1:30" aria-invalid={dur !== "" && hours == null} />
@@ -444,7 +444,7 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
               <Label className="text-xs">{t("projects.date")}</Label>
               <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
-            <label className="flex items-end gap-2 pb-2 text-sm text-muted-foreground">
+            <label className="flex min-w-0 items-end gap-2 whitespace-nowrap pb-2 text-sm text-muted-foreground">
               <Switch checked={billable} onCheckedChange={setBillable} /> {billable ? t("projects.billable") : t("projects.included")}
             </label>
           </div>
@@ -453,15 +453,15 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
             <div className="space-y-1.5">
               <Label className="text-xs">{t("projects.phase.covered")}</Label>
               <p className="text-xs text-muted-foreground">{t("projects.phase.coveredHint")}</p>
-              <ul className="divide-y rounded-lg border">
+              <ul className="max-h-64 min-w-0 divide-y overflow-y-auto overflow-x-hidden rounded-lg border">
                 {tasks.map((x) => {
                   const on = sel[x.id] !== undefined;
                   return (
-                    <li key={x.id} className="flex items-center gap-3 px-3 py-1.5 text-sm">
-                      <Checkbox checked={on} onCheckedChange={(v) => (toggleTask(x.id, x.status === "todo" ? "doing" : x.status, Boolean(v)), setErr(""))} aria-label={x.title} />
-                      <span className={cn("min-w-0 flex-1 truncate", x.status === "done" && "text-muted-foreground line-through")}>{x.title}</span>
+                    <li key={x.id} className="flex min-w-0 items-center gap-3 px-3 py-2 text-sm">
+                      <Checkbox className="shrink-0" checked={on} onCheckedChange={(v) => (toggleTask(x.id, x.status === "todo" ? "doing" : x.status, Boolean(v)), setErr(""))} aria-label={x.title} />
+                      <span title={x.title} className={cn("min-w-0 flex-1 truncate", x.status === "done" && "text-muted-foreground line-through")}>{x.title}</span>
                       {on ? (
-                        <select value={sel[x.id]} onChange={(e) => setSel((s) => ({ ...s, [x.id]: e.target.value as TaskStatus }))} className={cn("h-7 rounded-md border bg-transparent px-1.5 text-xs", TASK_STYLE[sel[x.id]])} aria-label={t("projects.phase.statusAfter")}>
+                        <select value={sel[x.id]} onChange={(e) => setSel((s) => ({ ...s, [x.id]: e.target.value as TaskStatus }))} className={cn("h-7 shrink-0 rounded-md border bg-transparent px-1.5 text-xs", TASK_STYLE[sel[x.id]])} aria-label={t("projects.phase.statusAfter")}>
                           {TASK_STATUSES.map((s) => (
                             <option key={s} value={s} className="text-foreground">
                               {t(`projects.taskStatus.${s}`)}
@@ -469,13 +469,13 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
                           ))}
                         </select>
                       ) : (
-                        <span className={cn("rounded-full border px-2 py-0.5 text-[11px]", TASK_STYLE[x.status])}>{t(`projects.taskStatus.${x.status}`)}</span>
+                        <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[11px]", TASK_STYLE[x.status])}>{t(`projects.taskStatus.${x.status}`)}</span>
                       )}
                     </li>
                   );
                 })}
-                <li className="flex items-center gap-3 px-3 py-1.5 text-sm text-muted-foreground">
-                  <Checkbox checked={general} onCheckedChange={(v) => (setGeneral(Boolean(v)), setErr(""))} aria-label={t("projects.phase.general")} />
+                <li className="flex min-w-0 items-center gap-3 px-3 py-2 text-sm text-muted-foreground">
+                  <Checkbox className="shrink-0" checked={general} onCheckedChange={(v) => (setGeneral(Boolean(v)), setErr(""))} aria-label={t("projects.phase.general")} />
                   {t("projects.phase.general")}
                 </li>
               </ul>
