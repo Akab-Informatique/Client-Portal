@@ -11,6 +11,7 @@ import { splitBillable } from "../lib/hr.ts";
 import { addDays, editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
+import { bpsOfPercent } from "../../shared/rebate.ts";
 import { chargesOfProject, moveCharge } from "../lib/chargeMove.ts";
 import { banksOf, hourlyRateOf } from "../lib/contracts.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
@@ -1319,6 +1320,64 @@ export const projectsRoutes = new Hono<AppEnv>()
   // ── charges put on the project (moved from a ticket, or onto another ticket / project while not approved) ──
   .get("/:id/charges", requirePermission("projects.view"), async (c) => {
     const p = await loadProject(c.req.param("id"));
+    return c.json(await chargesOfProject(p.id));
+  })
+  // a charge made right on the project: an inventory item (no stock is taken) or a one-time charge; it is work to bill at once
+  .post("/:id/charges", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    if (p.status === "done" || p.status === "cancelled") throw new HTTPException(409, { message: "project_closed" });
+    if (!p.clientId) throw new HTTPException(409, { message: "project_needs_client" });
+    const o = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(100),
+        description: z.string().trim().max(2000).default(""),
+        quantity: z.number().positive().max(100000),
+        unitPrice: z.number().min(0).max(10000000).nullable().default(null),
+        rebate: z.number().min(0).max(100).default(0),
+        unitCost: z.number().min(0).max(10000000).nullable().default(null),
+        billable: z.boolean().default(true),
+        date: zDay.nullable().default(null),
+      }),
+    );
+    const cents = (n: number | null) => (n == null ? null : Math.round(n * 100));
+    const [row] = await db()
+      .insert(schema.ticketCharges)
+      .values({
+        ticketId: null,
+        projectId: p.id,
+        name: o.name,
+        description: o.description,
+        quantityX100: Math.round(o.quantity * 100),
+        unitPriceCents: cents(o.unitPrice),
+        rebateBps: bpsOfPercent(o.rebate),
+        unitCostCents: cents(o.unitCost),
+        billable: o.billable,
+        date: o.date ?? todayQc(),
+        author: a.realUser.name,
+      })
+      .returning({ id: schema.ticketCharges.id });
+    await db().update(schema.projects).set({ updatedAt: new Date() }).where(eq(schema.projects.id, p.id));
+    await audit(a.user.id, "project.charge_added", p.id, { chargeId: row.id, name: o.name, quantity: o.quantity, unitPrice: o.unitPrice, billable: o.billable });
+    if (o.billable) await syncBillablesNow();
+    return c.json(await chargesOfProject(p.id), 201);
+  })
+  .delete("/:id/charges/:chargeId", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const chargeId = zUuid.parse(c.req.param("chargeId"));
+    const [ch] = await db().select().from(schema.ticketCharges).where(and(eq(schema.ticketCharges.id, chargeId), eq(schema.ticketCharges.projectId, p.id)));
+    if (!ch) throw new HTTPException(404, { message: "not_found" });
+    const sourceId = ch.externalId ?? `pcharge:${ch.id}`;
+    const [line] = await db().select({ status: schema.billingItems.status }).from(schema.billingItems).where(eq(schema.billingItems.sourceId, sourceId));
+    // once approved (or on an invoice) it stays: cancel the invoice first
+    if (ch.billed || (line && line.status !== "pending" && line.status !== "excluded")) throw new HTTPException(409, { message: "charge_billed" });
+    await db().transaction(async (tx) => {
+      await tx.delete(schema.billingItems).where(and(eq(schema.billingItems.sourceId, sourceId), inArray(schema.billingItems.status, ["pending", "excluded"])));
+      await tx.delete(schema.ticketCharges).where(eq(schema.ticketCharges.id, ch.id));
+    });
+    await audit(a.user.id, "project.charge_removed", p.id, { chargeId, name: ch.name });
     return c.json(await chargesOfProject(p.id));
   })
   .post("/:id/charges/:chargeId/move", requirePermission("projects.edit"), async (c) => {

@@ -124,7 +124,7 @@ export type DayItem = {
   statusLabel?: string | null;
   companyName?: string;
 };
-type Busy = { start: number; end: number; title: string; o365?: boolean; allDay?: boolean; id?: string; local?: boolean; detail?: string | null };
+type Busy = { moved?: boolean; start: number; end: number; title: string; o365?: boolean; allDay?: boolean; id?: string; local?: boolean; detail?: string | null };
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 const ticketPriority = (kind: string): DayItem["priority"] => (kind === "critical" ? "urgent" : kind === "high" ? "high" : kind === "low" ? "low" : "normal");
 
@@ -369,7 +369,7 @@ export function byUrgency(a: DayItem, b: DayItem): number {
 }
 
 // ── the technician's Microsoft 365 calendar ──
-type CalEvent = { title: string; start: number; end: number; allDay: boolean; private: boolean; free: boolean };
+type CalEvent = { id?: string; title: string; start: number; end: number; allDay: boolean; private: boolean; free: boolean };
 const calCache = new Map<string, { at: number; value: { status: string; events: CalEvent[] } }>();
 /**
  * What is on the technician's own Outlook calendar that day (the calendars linked to them in Planning, else their own):
@@ -411,7 +411,7 @@ export async function calendarOfDay(userId: string, date: string): Promise<{ sta
             const end = minutesOnDay(new Date(e.endsAt), date);
             // an event of another day that Graph returned for the window: only this day's count
             if (end <= start && !e.allDay) continue;
-            events.push({ title: e.private ? "Occupé" : e.title, start, end, allDay: e.allDay, private: e.private, free: e.showAs === "free" });
+            events.push({ id: e.id, title: e.private ? "Occupé" : e.title, start, end, allDay: e.allDay, private: e.private, free: e.showAs === "free" });
           }
         } catch (e) {
           error ??= e instanceof Error ? e.message.slice(0, 80) : "error";
@@ -537,7 +537,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
   planned = blocks.reduce((n, k) => (k.start && !k.overflow ? n + (mins(k.end) - mins(k.start)) : n), 0);
   for (const b of busy) {
     if (b.allDay) blocks.push({ start: "", end: "", title: b.title, kind: "event", refId: null, allDay: true, o365: Boolean(b.o365) });
-    else if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: b.id ?? null, o365: Boolean(b.o365), ...(b.local ? { local: true, detail: b.detail ?? null } : {}) });
+    else if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: b.id ?? null, o365: Boolean(b.o365), ...(b.moved ? { moved: true } : {}), ...(b.local ? { local: true, detail: b.detail ?? null } : {}) });
   }
   if (mins(s.lunchEnd) > mins(s.lunchStart)) blocks.push({ start: s.lunchStart, end: s.lunchEnd, title: "", kind: "break", refId: null });
   blocks.sort((a, b) => (a.overflow ? 1 : 0) - (b.overflow ? 1 : 0) || (a.allDay ? 0 : 1) - (b.allDay ? 0 : 1) || a.start.localeCompare(b.start));
@@ -594,7 +594,15 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   // what is already on the technician's Outlook calendar takes its hours off the day
   const cal = await calendarOfDay(userId, date);
   const calEvents = cal.events.filter((e) => !e.free);
-  const busy: Busy[] = [...day.busy, ...calEvents.map((e) => ({ start: e.start, end: e.end, title: e.title, o365: true, allDay: e.allDay }))];
+  // an event moved by hand in this plan (the real Outlook event stays where it is)
+  const moves = new Map((await db().select().from(schema.pipelineEventMoves).where(and(eq(schema.pipelineEventMoves.userId, userId), eq(schema.pipelineEventMoves.date, date)))).map((m) => [m.eventKey, m]));
+  const busy: Busy[] = [
+    ...day.busy,
+    ...calEvents.map((e) => {
+      const mv = e.id && !e.allDay ? moves.get(e.id) : undefined;
+      return { start: mv ? mv.startMinute : e.start, end: mv ? mv.endMinute : e.end, title: e.title, o365: true, allDay: e.allDay, id: e.id, moved: Boolean(mv) };
+    }),
+  ];
   // a holiday or a weekend is a day off, but what is due (a checkpoint today…) is still laid out in the usual hours; only an absence plans nothing
   const holiday = day.holiday || !isWorkday(date);
   // replanning during the day: what is left is laid out from the next quarter hour (Québec time), not from the morning

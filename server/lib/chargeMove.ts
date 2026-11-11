@@ -82,6 +82,7 @@ export async function chargesOfProject(projectId: string) {
     quantity: c.quantityX100 / 100,
     unitPrice: c.unitPriceCents == null ? null : c.unitPriceCents / 100,
     rebate: c.rebateBps / 100,
+    unitCost: c.unitCostCents == null ? null : c.unitCostCents / 100,
     billable: c.billable,
     date: c.date,
     author: c.author,
