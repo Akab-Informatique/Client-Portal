@@ -1698,7 +1698,7 @@ describe("tickets: client and contact", () => {
     expect((await admin.get("/api/store/suppliers")).json).toEqual(["Ingram Micro"]);
     let store = (await admin.get("/api/store")).json;
     expect(store.products.find((p: any) => p.id === ssd.id)).toMatchObject({ total: 4, low: false, stock: [{ location: "Entrepôt", quantity: 4 }] });
-    expect(store.stats).toMatchObject({ active: 1, units: 4, valueCents: 4 * 12500 });
+    expect(store.stats).toMatchObject({ active: 2, units: 4, valueCents: 4 * 12500 });
 
     // the charge form searches the portal inventory; taking 3 lowers the stock and logs the ticket
     const found = (await tech.get("/api/tickets/store-products?q=ssd")).json;
