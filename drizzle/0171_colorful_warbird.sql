@@ -1,0 +1,2 @@
+ALTER TABLE "project_task_timers" ADD COLUMN "base_seconds" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "project_task_timers" ADD COLUMN "paused_at" timestamp with time zone;

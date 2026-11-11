@@ -68,7 +68,7 @@ export type TaskDetail = {
   notes: { id: string; text: string; kind: "internal" | "reply"; emailedTo: string[]; createdAt: string; authorId: string | null; author: string | null }[];
   time: { id: string; date: string; hours: number; billableHours: number; note: string | null; userId: string; user: string; createdAt: string }[];
   hours: number;
-  timer: { startedAt: string } | null;
+  timer: { startedAt: string; baseSeconds: number; paused: boolean; seconds: number } | null;
 };
 export type Milestone = {
   id: string;

@@ -4672,6 +4672,15 @@ describe("submitting: timesheets (when required) and expenses", () => {
     expect((await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/stop`, {})).json.error).toBe("timer_not_running");
     expect((await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/start`, {})).status).toBe(200);
     expect((await admin.get(`/api/projects/${hourly.id}/tasks/${task.id}`)).json.timer).not.toBeNull();
+    // pause and play like a ticket: paused it counts nothing, resumed it goes on
+    const paused = (await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/pause`, {})).json;
+    expect(paused).toMatchObject({ paused: true });
+    expect((await admin.get(`/api/projects/${hourly.id}/tasks/${task.id}`)).json.timer).toMatchObject({ paused: true });
+    expect((await admin.get("/api/projects/timers")).json.find((x: any) => x.taskId === task.id)).toMatchObject({ paused: true });
+    expect((await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/resume`, {})).json).toMatchObject({ paused: false });
+    expect((await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/pause`, {})).status).toBe(200);
+    expect((await tech.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/pause`, {})).json.error).toBe("timer_not_running");
+    await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/resume`, {});
     const stopped = (await admin.post(`/api/projects/${hourly.id}/tasks/${task.id}/timer/stop`, { hours: 2, date: "2026-12-08", note: "Montage" })).json;
     expect(stopped).toMatchObject({ hours: 2, billable: true });
     expect((await tech.get(`/api/projects/${hourly.id}/tasks/${task.id}`)).json).toMatchObject({ timer: null, hours: 2 });
@@ -11723,7 +11732,7 @@ describe("charges made right on a project", () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const admin = await signIn("admin@akab.local");
-    const [cl] = await db().insert(schema.clients).values({ name: "Zz Frais projet (test)", autotaskId: 9_100_051 }).returning();
+    const [cl] = await db().insert(schema.clients).values({ name: "Zz Frais projet (test)", autotaskId: 9_100_099 }).returning();
     await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
     (await import("../server/lib/localTickets.ts")).resetTicketMode();
     try {

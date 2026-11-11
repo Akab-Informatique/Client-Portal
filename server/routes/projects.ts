@@ -290,7 +290,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       .innerJoin(schema.projects, eq(schema.projects.id, schema.projectMilestones.projectId))
       .where(eq(schema.projectMilestoneTimers.userId, a.user.id));
     const rows = await db()
-      .select({ taskId: schema.projectTaskTimers.taskId, startedAt: schema.projectTaskTimers.startedAt, title: schema.projectTasks.title, projectId: schema.projects.id, number: schema.projects.number, project: schema.projects.name, milestone: schema.projectMilestones.name })
+      .select({ taskId: schema.projectTaskTimers.taskId, startedAt: schema.projectTaskTimers.startedAt, baseSeconds: schema.projectTaskTimers.baseSeconds, pausedAt: schema.projectTaskTimers.pausedAt, title: schema.projectTasks.title, projectId: schema.projects.id, number: schema.projects.number, project: schema.projects.name, milestone: schema.projectMilestones.name })
       .from(schema.projectTaskTimers)
       .innerJoin(schema.projectTasks, eq(schema.projectTasks.id, schema.projectTaskTimers.taskId))
       .innerJoin(schema.projects, eq(schema.projects.id, schema.projectTasks.projectId))
@@ -298,7 +298,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       .where(eq(schema.projectTaskTimers.userId, a.user.id))
       .orderBy(asc(schema.projectTaskTimers.startedAt));
     // a phase's timer is listed like a task's (kind "phase", its id in taskId), so the dock shows it while the phase is minimized
-    return c.json([...rows, ...phases.map((x) => ({ taskId: x.milestoneId, startedAt: x.startedAt, baseSeconds: x.baseSeconds, paused: x.pausedAt !== null, title: x.title, projectId: x.projectId, number: x.number, project: x.project, milestone: "", kind: "phase" as const, milestoneId: x.milestoneId }))]);
+    return c.json([...rows.map(({ pausedAt, ...r }) => ({ ...r, paused: pausedAt !== null })), ...phases.map((x) => ({ taskId: x.milestoneId, startedAt: x.startedAt, baseSeconds: x.baseSeconds, paused: x.pausedAt !== null, title: x.title, projectId: x.projectId, number: x.number, project: x.project, milestone: "", kind: "phase" as const, milestoneId: x.milestoneId }))]);
   })
 
   /** What a new project starts with: the usual hourly rate of Admin › Facturation (dollars) */
@@ -926,7 +926,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       notes: notes.map((n) => ({ ...n, author: n.author ?? null })),
       time: entries.map((e) => ({ id: e.id, date: e.date, hours: e.hoursX100 / 100, billableHours: (e.billableX100 ?? e.hoursX100) / 100, note: e.note, userId: e.userId, user: e.user, createdAt: e.createdAt })),
       hours: entries.reduce((n, e) => n + e.hoursX100, 0) / 100,
-      timer: timer[0] ? { startedAt: timer[0].startedAt } : null,
+      timer: timer[0] ? timerView(timer[0]) : null,
     });
   })
   .patch("/:id/tasks/:tid", requirePermission("projects.edit"), async (c) => {
@@ -1072,7 +1072,30 @@ export const projectsRoutes = new Hono<AppEnv>()
       await syncMilestone(task.milestoneId);
     }
     const [t] = await db().select().from(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
-    return c.json({ startedAt: t.startedAt });
+    return c.json(timerView(t));
+  })
+  // pause and play, like a ticket's timer (a paused timer counts nothing)
+  .post("/:id/tasks/:tid/timer/pause", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const task = await loadTask(p.id, c.req.param("tid"));
+    const mine = and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id));
+    const [timer] = await db().select().from(schema.projectTaskTimers).where(mine);
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (!timer.pausedAt) await db().update(schema.projectTaskTimers).set({ baseSeconds: timerSeconds(timer), pausedAt: new Date() }).where(mine);
+    const [t] = await db().select().from(schema.projectTaskTimers).where(mine);
+    return c.json(timerView(t));
+  })
+  .post("/:id/tasks/:tid/timer/resume", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProject(c.req.param("id"));
+    const task = await loadTask(p.id, c.req.param("tid"));
+    const mine = and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id));
+    const [timer] = await db().select().from(schema.projectTaskTimers).where(mine);
+    if (!timer) throw new HTTPException(409, { message: "timer_not_running" });
+    if (timer.pausedAt) await db().update(schema.projectTaskTimers).set({ startedAt: new Date(), pausedAt: null }).where(mine);
+    const [t] = await db().select().from(schema.projectTaskTimers).where(mine);
+    return c.json(timerView(t));
   })
   .post("/:id/tasks/:tid/timer/stop", requirePermission("projects.edit"), async (c) => {
     const a = auth(c);
@@ -1086,7 +1109,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       await db().delete(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
       return c.json({ discarded: true });
     }
-    const elapsed = Math.max(0.05, Math.round(((Date.now() - timer.startedAt.getTime()) / 3_600_000) * 100) / 100);
+    const elapsed = Math.max(0.05, Math.round((timerSeconds(timer) / 3600) * 100) / 100);
     const entry = await logTime(a.user.id, p, task, { date: o.date ?? todayQc(), hours: o.hours ?? Math.min(24, elapsed), note: o.note, billable: o.billable });
     await db().delete(schema.projectTaskTimers).where(and(eq(schema.projectTaskTimers.taskId, task.id), eq(schema.projectTaskTimers.userId, a.user.id)));
     return c.json(entry);

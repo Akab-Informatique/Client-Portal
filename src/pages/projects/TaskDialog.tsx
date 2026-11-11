@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } 
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarPlus, Clock, Flag, ListTodo, Loader2, Lock, Mail, Minus, Play, Plus, Send, Square, StickyNote, Trash2, X } from "lucide-react";
+import { CalendarPlus, Clock, Flag, ListTodo, Loader2, Lock, Mail, Minus, Pause, Play, Plus, Send, Square, StickyNote, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -86,16 +86,17 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
   const closed = tk ? tk.project.status === "done" || tk.project.status === "cancelled" : false;
   // like a ticket: opening the task starts its timer (once), closing it with the timer going asks for the time
   // time is entered on the PHASE now: opening a task starts no timer and has no time entry (only a timer still running from before can be stopped)
-  const canTime = false;
+  const canTime = edit && can("timesheets.use") && !closed;
+  const autoStart = false; // opening a task does not start the timer by itself; pause and play are in the Time panel
   const [askStop, setAskStop] = useState(0);
   const [addingDay, setAddingDay] = useState(false);
   const autoStarted = useRef(false);
   useEffect(() => {
-    if (!tk || autoStarted.current || !canTime || tk.timer || tk.status === "done" || tk.dependsOn?.done === false) return;
+    if (!tk || autoStarted.current || !autoStart || tk.timer || tk.status === "done" || tk.dependsOn?.done === false) return;
     autoStarted.current = true;
     api.post(`${base}/timer/start`).then(refresh, () => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tk?.id, canTime]);
+  }, [tk?.id, autoStart]);
   const requestClose = () => {
     if (tk?.timer && canTime) setAskStop((n) => n + 1);
     else onClose();
@@ -304,7 +305,7 @@ export function TaskDialog({ projectId, taskId, onClose, onMinimize }: { project
                   </div>
                 </Panel>
 
-                {tk.timer && <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} askStop={askStop} onStopped={askStop > 0 ? onClose : undefined} />}
+                {(tk.timer || canTime) && <TimerPanel tk={tk} projectId={projectId} canLog={edit && can("timesheets.use") && !closed} hourly={Boolean(hourly)} onChanged={refresh} fail={fail} askStop={askStop} onStopped={askStop > 0 ? onClose : undefined} />}
 
                 {edit && (
                   <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={() => void confirm({ title: t("projects.removeTaskTitle", { name: tk.title }), description: t("projects.removeTaskText") }).then((ok) => ok && remove.mutate())}>
@@ -565,14 +566,18 @@ function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail, askStop, o
   const qc = useQueryClient();
   const base = `/projects/${projectId}`;
   const started = tk.timer ? new Date(tk.timer.startedAt).getTime() : null;
+  const paused = Boolean(tk.timer?.paused);
+  const base0 = tk.timer?.baseSeconds ?? 0;
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (started == null) return;
+    if (started == null || paused) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [started]);
-  const elapsed = started == null ? 0 : (now - started) / 1000;
+  }, [started, paused]);
+  const elapsed = started == null ? 0 : base0 + (paused ? 0 : Math.max(0, (now - started) / 1000));
   const start = useMutation({ mutationFn: () => api.post(`${base}/tasks/${tk.id}/timer/start`), onSuccess: onChanged, onError: fail });
+  const pauseTimer = useMutation({ mutationFn: () => api.post(`${base}/tasks/${tk.id}/timer/pause`), onSuccess: onChanged, onError: fail });
+  const resumeTimer = useMutation({ mutationFn: () => api.post(`${base}/tasks/${tk.id}/timer/resume`), onSuccess: onChanged, onError: fail });
   const [stopping, setStopping] = useState<{ duration: string; note: string; billable: boolean } | null>(null);
   const stop = useMutation({
     mutationFn: (v: { discard?: boolean; hours?: number; note?: string; billable?: boolean }) => api.post(`${base}/tasks/${tk.id}/timer/stop`, { ...v, date: today() }),
@@ -587,7 +592,7 @@ function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail, askStop, o
   });
   // the window was closed with the timer going: ask for the time now (like a ticket)
   useEffect(() => {
-    if (askStop > 0 && started != null) setStopping({ duration: hm(Math.max(0.05, Math.round(((Date.now() - started) / 3600000) * 100) / 100)), note: "", billable: hourly });
+    if (askStop > 0 && started != null) setStopping({ duration: hm(Math.max(0.05, Math.round(((base0 + (paused ? 0 : (Date.now() - started) / 1000)) / 3600) * 100) / 100)), note: "", billable: hourly });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [askStop]);
   const rate = tk.project.hourlyRate;
@@ -642,7 +647,10 @@ function TimerPanel({ tk, projectId, canLog, hourly, onChanged, fail, askStop, o
                   <span className="relative inline-flex size-2.5 rounded-full bg-[color:var(--gold)]" />
                 </span>
                 <span className="font-mono text-xl font-semibold tabular-nums">{clock(elapsed)}</span>
-                <Button size="sm" className="ml-auto" onClick={() => setStopping({ duration: hm(Math.max(0.05, Math.round((elapsed / 3600) * 100) / 100)), note: "", billable: hourly })}>
+                <Button size="sm" variant="outline" className="ml-auto" disabled={pauseTimer.isPending || resumeTimer.isPending} aria-label={paused ? t("projects.phase.resume") : t("projects.phase.pause")} title={paused ? t("projects.phase.resume") : t("projects.phase.pause")} onClick={() => (paused ? resumeTimer.mutate() : pauseTimer.mutate())}>
+                  {paused ? <Play className="size-3.5 fill-current" /> : <Pause className="size-3.5 fill-current" />}
+                </Button>
+                <Button size="sm" onClick={() => setStopping({ duration: hm(Math.max(0.05, Math.round((elapsed / 3600) * 100) / 100)), note: "", billable: hourly })}>
                   <Square className="size-3.5 fill-current" /> {t("projects.stopTimer")}
                 </Button>
               </div>
