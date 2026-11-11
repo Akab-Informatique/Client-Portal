@@ -11705,3 +11705,45 @@ describe("newsletter", () => {
     }
   });
 });
+
+describe("charges made right on a project", () => {
+  it("adds a charge (work to bill at once), lists it, deletes it while pending, refuses once approved", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [cl] = await db().insert(schema.clients).values({ name: "Zz Frais projet (test)", autotaskId: 9_100_051 }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    try {
+      const project = (await tech.post("/api/projects", { name: "Projet avec frais", clientId: cl.id, billingMode: "hourly" })).json;
+      const noClient = (await tech.post("/api/projects", { name: "Projet sans client", billingMode: "hourly" })).json;
+      expect((await tech.post(`/api/projects/${noClient.id}/charges`, { name: "Câble", quantity: 1, unitPrice: 5 })).json.error).toBe("project_needs_client");
+      // validation
+      expect((await tech.post(`/api/projects/${project.id}/charges`, { name: "", quantity: 1 })).status).toBe(400);
+      expect((await tech.post(`/api/projects/${project.id}/charges`, { name: "Câble", quantity: 0 })).status).toBe(400);
+      const made = await tech.post(`/api/projects/${project.id}/charges`, { name: "Câble réseau", quantity: 3, unitPrice: 12.5, unitCost: 4, rebate: 10, billable: true });
+      expect(made.status).toBe(201);
+      expect(made.json).toHaveLength(1);
+      expect(made.json[0]).toMatchObject({ name: "Câble réseau", quantity: 3, unitPrice: 12.5, unitCost: 4, rebate: 10, billable: true, movable: true });
+      const cid = made.json[0].id as string;
+      // it is work to bill at once, under the project's number and client
+      const line = async () => (await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${cid}`);
+      expect(await line()).toMatchObject({ status: "pending", clientId: cl.id, ticketNumber: project.number });
+      // listed with the project
+      expect(((await tech.get(`/api/projects/${project.id}/charges`)).json as any[]).map((x) => x.id)).toEqual([cid]);
+      // approved: it stays
+      const item = await line();
+      expect((await admin.post("/api/billables/status", { ids: [item.id], status: "approved" })).json.changed).toBe(1);
+      expect((await tech.del(`/api/projects/${project.id}/charges/${cid}`)).json.error).toBe("charge_billed");
+      expect(((await tech.get(`/api/projects/${project.id}/charges`)).json as any[])[0].movable).toBe(false);
+      // a second one, deleted while pending
+      const second = (await tech.post(`/api/projects/${project.id}/charges`, { name: "À retirer", quantity: 1, unitPrice: 1 })).json.find((x: any) => x.name === "À retirer");
+      expect((await tech.del(`/api/projects/${project.id}/charges/${second.id}`)).status).toBe(200);
+      expect((await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${second.id}`)).toBeUndefined();
+      expect((await tech.del(`/api/projects/${project.id}/charges/${second.id}`)).status).toBe(404);
+    } finally {
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    }
+  });
+});

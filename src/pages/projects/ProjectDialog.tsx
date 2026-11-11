@@ -5,9 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { AiTextarea } from "@/components/AiPolish";
 import { PhasePanel } from "./PhasePanel";
-import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ArrowRightLeft, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Minus, Pencil, Plus, Star, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical, BellRing, Check, Globe, Lock, ChevronDown, Clock, FileText, Flag, FolderOpen, Info, ListChecks, Loader2, Mail, MessageSquare, MessagesSquare, Minus, Pencil, Plus, Receipt, Star, Trash2, X } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -26,6 +25,7 @@ import { Overview } from "./Overview";
 import { FilesBox } from "@/pages/pipeline/TaskParts";
 import { fileToBase64 } from "@/pages/pipeline/shared";
 import { PhaseDialog } from "./PhaseDialog";
+import { ChargesTab } from "./ChargesTab";
 import { MilestoneTasks } from "./MilestoneTasks";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, pointerWithin, useSensor, useSensors, type CollisionDetection, type DragEndEvent } from "@dnd-kit/core";
 import { TaskDndCtx } from "./taskDnd";
@@ -38,6 +38,7 @@ const TABS = [
   { key: "overview", icon: Info },
   { key: "milestones", icon: ListChecks },
   { key: "time", icon: Clock },
+  { key: "charges", icon: Receipt },
   { key: "notes", icon: MessageSquare },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
@@ -93,7 +94,7 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
     },
     onError: fail,
   });
-  const counts: Record<TabKey, number | null> = { overview: null, milestones: p?.milestones.length ?? null, time: p?.time.entries.length ?? null, notes: p?.notes.length ?? null };
+  const counts: Record<TabKey, number | null> = { overview: null, milestones: p?.milestones.length ?? null, time: p?.time.entries.length ?? null, charges: null, notes: p?.notes.length ?? null };
 
   return (
     <Dialog open onOpenChange={(o) => !o && requestClose()}>
@@ -208,6 +209,7 @@ export function ProjectDialog({ id, onClose, tab, milestone, onTab }: { id: stri
             />
           )}
           {p && current === "milestones" && <Milestones p={p} edit={edit} focus={milestone} onChanged={refresh} fail={fail} onTask={onTask} />}
+          {p && current === "charges" && <ChargesTab p={p} edit={edit} />}
           {p && current === "time" && <TimeTab p={p} edit={edit} onChanged={refresh} fail={fail} />}
           {p && current === "notes" && <Notes p={p} edit={edit} onChanged={refresh} fail={fail} />}
         </div>
@@ -541,9 +543,7 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
   // a manager gives the time to anyone, and changes whose an entry is
   const manager = can("projects.manage");
   const { data: people = [] } = useProjectPeople();
-  const [moving, setMoving] = useState<{ id: string; name: string } | null>(null);
   const [editing, setEditing] = useState<ProjectDetail["time"]["entries"][number] | null>(null);
-  const { data: charges = [], refetch: refetchCharges } = useQuery({ queryKey: [...KEY, "charges", p.id], queryFn: () => api.get<{ id: string; name: string; quantity: number; unitPrice: number | null; rebate: number; billable: boolean; date: string | null; billing: string | null; movable: boolean }[]>(`/projects/${p.id}/charges`) });
   const reassign = useMutation({
     mutationFn: (v: { id: string; userId: string }) => api.patch(`/projects/${p.id}/time/${v.id}`, { userId: v.userId }),
     onSuccess: (_r, v) => {
@@ -758,26 +758,6 @@ function TimeTab({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean
 
       {editing && <EditTimeDialog p={p} entry={editing} tasks={tasks} onClose={() => setEditing(null)} onChanged={() => { onChanged(); void qc.invalidateQueries({ queryKey: ["time"] }); }} fail={fail} />}
 
-      {charges.length > 0 && (
-        <Card title={t("chargeMove.projectCharges")}>
-          <ul className="divide-y divide-border/60">
-            {charges.map((c) => (
-              <li key={c.id} className="flex items-center gap-3 py-2 text-sm">
-                <span className="min-w-0 flex-1 truncate">{c.name}</span>
-                <span className="font-mono text-xs text-muted-foreground">{c.quantity.toLocaleString()} × {c.unitPrice != null ? c.unitPrice.toFixed(2) : "—"}</span>
-                {edit && c.movable ? (
-                  <button type="button" onClick={() => setMoving({ id: c.id, name: c.name })} title={t("chargeMove.button")} aria-label={t("chargeMove.button")} className="rounded p-1 text-muted-foreground hover:text-primary">
-                    <ArrowRightLeft className="size-3.5" />
-                  </button>
-                ) : (
-                  <span className="text-[10px] text-muted-foreground">{t("chargeMove.locked")}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-      {moving && <MoveChargeDialog name={moving.name} path={`/projects/${p.id}/charges/${moving.id}/move`} exclude={{ projectId: p.id }} onClose={() => setMoving(null)} onMoved={() => void refetchCharges()} />}
     </div>
   );
 }

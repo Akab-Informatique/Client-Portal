@@ -2702,7 +2702,26 @@ const fr = {
       "overview": "Aperçu",
       "milestones": "Jalons",
       "time": "Temps",
+      "charges": "Frais",
       "notes": "Notes"
+    },
+    "charges": {
+      "title": "Frais du projet",
+      "hint": "Ce qui a été mis sur ce projet (à la main, ou déplacé d'un billet). Un frais facturable est du travail à facturer tout de suite, à approuver dans Comptabilité.",
+      "total": "Total facturable",
+      "add": "Ajouter un frais",
+      "none": "Aucun frais sur ce projet pour l'instant.",
+      "notBilled": "Non facturable",
+      "added": "Frais ajouté au projet.",
+      "removeTitle": "Supprimer ce frais ?",
+      "removeText": "Le frais et son travail à facturer (non approuvé) sont supprimés. Le stock n'est pas remis.",
+      "noStock": "Aucun stock n'est pris : ajustez l'inventaire séparément si besoin.",
+      "billing": { "pending": "À approuver", "approved": "Approuvé", "excluded": "Mis de côté", "posted": "Facturé" },
+      "errors": {
+        "project_closed": "Ce projet est terminé : on ne peut plus y mettre de frais.",
+        "project_needs_client": "Ce projet n'a pas de client : choisissez-en un dans l'aperçu avant d'ajouter un frais.",
+        "charge_billed": "Ce frais est déjà approuvé (ou facturé) : annulez la facture d'abord."
+      }
     },
     "deleteTitle": "Supprimer le projet {{number}} ?",
     "deleteText": "Ses jalons, ses tâches et ses notes sont supprimés. Les heures déjà inscrites restent sur les feuilles de temps.",

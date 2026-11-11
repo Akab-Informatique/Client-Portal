@@ -2704,7 +2704,26 @@ const en: Dict = {
       "overview": "Overview",
       "milestones": "Milestones",
       "time": "Time",
+      "charges": "Charges",
       "notes": "Notes"
+    },
+    "charges": {
+      "title": "Project charges",
+      "hint": "What was put on this project (by hand, or moved from a ticket). A billable charge is work to bill at once, to approve in Accounting.",
+      "total": "Billable total",
+      "add": "Add a charge",
+      "none": "No charge on this project yet.",
+      "notBilled": "Not billable",
+      "added": "Charge added to the project.",
+      "removeTitle": "Delete this charge?",
+      "removeText": "The charge and its work to bill (not approved) are deleted. Stock is not put back.",
+      "noStock": "No stock is taken: adjust the inventory separately if needed.",
+      "billing": { "pending": "To approve", "approved": "Approved", "excluded": "Set aside", "posted": "Invoiced" },
+      "errors": {
+        "project_closed": "This project is finished: no more charges can be added.",
+        "project_needs_client": "This project has no client: pick one in the overview before adding a charge.",
+        "charge_billed": "This charge is already approved (or invoiced): cancel the invoice first."
+      }
     },
     "deleteTitle": "Delete project {{number}}?",
     "deleteText": "Its milestones, tasks and notes are deleted. Hours already logged stay on the timesheets.",
