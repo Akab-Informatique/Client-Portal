@@ -11,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { money } from "@/pages/crm/shared";
-import { soldOfQuote } from "@shared/quotes";
+import { lineAmount, projectSaleOf, TECH_TIME_SKU } from "@shared/quotes";
 import type { Quote, QuoteListItem } from "./shared";
 
 /**
@@ -35,7 +35,7 @@ function ToProjectDialog({ quote, onClose }: { quote: Pick<QuoteListItem, "id" |
   const qc = useQueryClient();
   const nav = useNavigate();
   const full = useQuery({ queryKey: ["quotes", "one", quote.id], queryFn: () => api.get<Quote>(`/quotes/${quote.id}`) });
-  const sold = full.data ? soldOfQuote(full.data.lines) : null;
+  const sold = full.data ? projectSaleOf(full.data.lines) : null;
   const [hours, setHours] = useState<string | null>(null);
   const [price, setPrice] = useState<string | null>(null);
   const [due, setDue] = useState("");
@@ -81,9 +81,31 @@ function ToProjectDialog({ quote, onClose }: { quote: Pick<QuoteListItem, "id" |
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              {sold?.hours != null ? t("quotes.project.fromLines") : t("quotes.project.noHourLines")}
+              {sold?.hours != null ? (full.data?.lines.some((l) => (l.sku ?? "").toUpperCase() === TECH_TIME_SKU) ? t("quotes.project.fromSku", { sku: TECH_TIME_SKU }) : t("quotes.project.fromLines")) : t("quotes.project.noHourLines", { sku: TECH_TIME_SKU })}
               {rate != null && ` ${t("quotes.project.rate", { rate: money(Math.round(rate), i18n.language) })}`}
             </p>
+            <div className="space-y-1.5">
+              <Label>{t("quotes.project.charges", { count: sold?.charges.length ?? 0 })}</Label>
+              {sold?.charges.length ? (
+                <ul className="max-h-36 divide-y divide-border/60 overflow-y-auto rounded-xl border bg-background/30 text-xs">
+                  {sold.charges.map((l) => (
+                    <li key={l.id} className="flex items-baseline gap-2 px-3 py-1.5">
+                      <span className="min-w-0 flex-1 truncate" title={l.description}>
+                        {l.quantityX100 / 100} × {l.description}
+                      </span>
+                      <span className="shrink-0 font-mono">{money(lineAmount(l), i18n.language)}</span>
+                    </li>
+                  ))}
+                  <li className="flex justify-between px-3 py-1.5 font-medium">
+                    <span>{t("quotes.project.chargesTotal")}</span>
+                    <span className="font-mono">{money(sold.chargesCents, i18n.language)}</span>
+                  </li>
+                </ul>
+              ) : (
+                <p className="rounded-xl border border-dashed px-3 py-2 text-xs text-muted-foreground">{t("quotes.project.noCharges")}</p>
+              )}
+              <p className="text-[11px] text-muted-foreground">{t("quotes.project.chargesHelp")}</p>
+            </div>
             <div className="space-y-1.5">
               <Label htmlFor="tp-d">{t("quotes.project.due")}</Label>
               <Input id="tp-d" type="date" value={due} onChange={(e) => setDue(e.target.value)} className="w-44" />

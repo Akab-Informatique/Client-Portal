@@ -8,7 +8,7 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { productsWithStock } from "../lib/store.ts";
-import { depositOf, isHourLine, lineAmount, quoteTotals, soldOfQuote } from "../../shared/quotes.ts";
+import { depositOf, lineAmount, projectSaleOf, quoteTotals } from "../../shared/quotes.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
 import { nextProjectNumber } from "../lib/projectLinks.ts";
 import { DraftError, quickInvoice } from "../lib/billables.ts";
@@ -448,7 +448,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     if (q.projectTicketId || q.projectId) throw new HTTPException(409, { message: "already_project" });
     if (!q.clientId) throw new HTTPException(409, { message: "project_needs_client" });
     if (!q.lines?.length) throw new HTTPException(409, { message: "quote_empty" });
-    const sold = soldOfQuote(q.lines);
+    const sold = projectSaleOf(q.lines);
     const p = await body(
       c,
       z.object({
@@ -483,9 +483,8 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     const hours = p.hours === undefined ? sold.hours : p.hours;
     // the products of the quote (inventory items, one time, not options, not hours or services) become charges of the project:
     // they are billed as charges, so a fixed price that was the whole implementation leaves them out
-    const productLines = q.lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !l.serviceId && (l.productId || l.sku) && !isHourLine(l));
-    const productsCents = productLines.reduce((n, l) => n + lineAmount(l), 0);
-    const priceCents = p.price === undefined || p.price === null ? (sold.hours == null ? Math.max(0, sold.priceCents - productsCents) : sold.priceCents) : Math.round(p.price * 100);
+    const productLines = sold.charges;
+    const priceCents = p.price === undefined || p.price === null ? sold.priceCents : Math.round(p.price * 100);
     // the one who prepared the quote leads the project (when still active staff)
     const [lead] = q.preparedById ? await db().select({ id: schema.users.id }).from(schema.users).where(and(eq(schema.users.id, q.preparedById), eq(schema.users.kind, "staff"), eq(schema.users.active, true))) : [];
     const number = await nextProjectNumber();

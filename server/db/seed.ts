@@ -3,6 +3,7 @@ import { clientRoleId, ensureAllClientRoles } from "../lib/clientRoles.ts";
 import { db, schema } from "./index.ts";
 import { config } from "../config.ts";
 import { hashPassword, temporaryPassword, passwordProblem } from "../lib/crypto.ts";
+import { TECH_TIME_SKU } from "../../shared/quotes.ts";
 import { MASTER_ROLE, SYSTEM_ROLES, permissionsFor } from "../../shared/permissions.ts";
 
 /**
@@ -24,6 +25,11 @@ export const BUILTIN_DASHBOARDS = [
 
 export async function seed(): Promise<void> {
   const d = db();
+  // the product that marks technician hours on a quote (its SKU is what "hours sold" is read from when a quote becomes a project)
+  await d
+    .insert(schema.storeProducts)
+    .values({ sku: TECH_TIME_SKU, name: "Temps de technicien", description: "Heures de travail des techniciens (heures vendues au projet)", category: "Services", priceCents: 10000 })
+    .onConflictDoNothing();
   for (const r of SYSTEM_ROLES) {
     // client roles are per client (made by ensureAllClientRoles below): these are only their starting point
     if (r.audience === "client") continue;

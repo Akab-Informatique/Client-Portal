@@ -61,15 +61,31 @@ export function depositOf(lines: (QuoteLineMoney & { id?: string })[], percentX1
 }
 
 /** A line that sells hours of work (by its words: heures, h, main-d'œuvre, labour, hours) */
-export const isHourLine = (l: { description: string; details?: string | null }) => /\b(heures?|hrs?|h|main[- ]d['’]?\s*(oe|œ)uvre|labou?r|hours?)\b/i.test(`${l.description} ${l.details ?? ""}`);
+/** The inventory product that says "these are technician hours": a quote line with this SKU is hours sold, whatever its words */
+export const TECH_TIME_SKU = "TEMPS-TECH";
+export const isTechTimeSku = (sku: string | null | undefined) => (sku ?? "").trim().toUpperCase() === TECH_TIME_SKU;
+export const isHourLine = (l: { description: string; details?: string | null; sku?: string | null }) => isTechTimeSku(l.sku) || /\b(heures?|hrs?|h|main[- ]d['’]?\s*(oe|œ)uvre|labou?r|hours?)\b/i.test(`${l.description} ${l.details ?? ""}`);
 
 /**
  * What a quote sells as a project: the hours of its one-time hour lines and their price (after discounts);
  * no hour line: no hours, and the price of the whole implementation.
  */
-export function soldOfQuote(lines: (QuoteLineMoney & { description: string; details?: string | null })[]) {
+export function soldOfQuote(lines: (QuoteLineMoney & { description: string; details?: string | null; sku?: string | null })[]) {
   const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once");
-  const hourLines = once.filter(isHourLine);
+  // lines with the technician-time SKU are the hours sold; without any, the lines that talk about hours
+  const tech = once.filter((l) => isTechTimeSku(l.sku));
+  const hourLines = tech.length ? tech : once.filter(isHourLine);
   if (!hourLines.length) return { hours: null as number | null, priceCents: once.reduce((n, l) => n + lineAmount(l), 0) };
   return { hours: hourLines.reduce((n, l) => n + l.quantityX100, 0) / 100, priceCents: hourLines.reduce((n, l) => n + lineAmount(l), 0) };
+}
+
+type SaleLine = QuoteLineMoney & { description: string; details?: string | null; sku?: string | null; productId?: string | null; serviceId?: string | null };
+/** The products of a quote that become charges of the project: one time, not options, from the inventory or with a SKU, not services and not hours */
+export const chargeLinesOfQuote = <T extends SaleLine>(lines: T[]): T[] => lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !l.serviceId && (l.productId || l.sku) && !isHourLine(l));
+/** What a quote sells as a project: hours and price of the hour lines, and the charges (products) billed apart — a price that was the whole implementation leaves them out. */
+export function projectSaleOf<T extends SaleLine>(lines: T[]) {
+  const sold = soldOfQuote(lines);
+  const charges = chargeLinesOfQuote(lines);
+  const chargesCents = charges.reduce((n, l) => n + lineAmount(l), 0);
+  return { hours: sold.hours, priceCents: sold.hours == null ? Math.max(0, sold.priceCents - chargesCents) : sold.priceCents, charges, chargesCents };
 }

@@ -7404,6 +7404,22 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: null })).json[0].supply).toBeNull();
     // the hours are the package: the equipment is not in the fixed price (billed as charges)
     expect((await admin.get(`/api/projects/${mp.projectId}`)).json).toMatchObject({ billingMode: "fixed", fixedPrice: 500, budgetHours: 5 });
+    // the "Temps de technicien" SKU is what hours sold are read from, whatever the words of the line
+    const qt = (
+      await admin.post("/api/quotes", {
+        clientId: client.id,
+        title: "Avec temps de technicien",
+        saleType: "fixed",
+        lines: [
+          { description: "Poste de travail", sku: "PC-QT-1", quantityX100: 100, unitPriceCents: 150000 },
+          { description: "Installation et configuration", sku: "TEMPS-TECH", quantityX100: 600, unitPriceCents: 11000 },
+          { description: "Main-d'œuvre : formation", quantityX100: 200, unitPriceCents: 9000 },
+        ],
+      })
+    ).json;
+    const mt = (await admin.post(`/api/quotes/${qt.id}/to-project`, {})).json;
+    expect(mt.charges).toBe(1);
+    expect((await admin.get(`/api/projects/${mt.projectId}`)).json).toMatchObject({ budgetHours: 6, fixedPrice: 660 });
   });
 
   it("project types: a list the team keeps, a type on each project and a filter", async () => {
