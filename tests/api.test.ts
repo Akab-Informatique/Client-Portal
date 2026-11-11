@@ -7000,6 +7000,11 @@ describe("pipeline: shared to-dos and the day", () => {
     expect(withBlock.capacityMinutes).toBe(capBefore - 90);
     expect((await tech.post("/api/pipeline/day/blocks", { date: day, start: "11:00", end: "10:00", title: "x" })).status).toBe(400);
     expect((await tech.post("/api/pipeline/day/blocks", { date: day, start: "09:00", end: "10:00", title: "x", userId: "00000000-0000-4000-8000-000000000001" })).status).toBe(403);
+    // an Outlook event can be moved in the plan only; one that is not on the calendar is refused
+    expect((await tech.put("/api/pipeline/day/event-move", { date: day, key: "no-such-event", start: 600, end: 660 })).status).toBe(404);
+    // a block of one's own moves with the same route as its edit
+    expect((await tech.patch(`/api/pipeline/day/blocks/${blk.json.id}`, { start: "13:00", end: "14:30" })).status).toBe(200);
+    expect((await tech.patch(`/api/pipeline/day/blocks/${blk.json.id}`, { start: "09:00", end: "10:30" })).status).toBe(200);
     expect((await tech.patch(`/api/pipeline/day/blocks/${blk.json.id}`, { end: "09:30" })).status).toBe(200);
     expect((await blocksOf()).plan.capacityMinutes).toBe(capBefore - 30);
     expect((await tech.del(`/api/pipeline/day/blocks/${blk.json.id}`)).status).toBe(200);

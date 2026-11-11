@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Plus, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Plus, Undo2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { byCustom, useCustomOrder, useSortDefault } from "@/lib/sortPrefs";
 import { useProjectWorkspace } from "@/pages/projects/ProjectWorkspace";
 
+const hhmm = (m: number) => `${String(Math.floor(Math.min(m, 1439) / 60)).padStart(2, "0")}:${String(Math.min(m, 1439) % 60).padStart(2, "0")}`;
 const addMin = (hhmm: string, plus: number) => {
   const m = Math.min(23 * 60 + 45, Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)) + plus);
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
@@ -493,6 +494,17 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
     onSuccess: onSaved,
     onError: () => toast.error(t("common.error")),
   });
+  // an event is moved by hand: a block of one's own is saved as it is, an Outlook one only in this plan (the real event is not touched)
+  const saveEvent = useMutation({
+    mutationFn: (v: { b: Block; startMin: number; reset?: boolean }) => {
+      const len = toMinutes(v.b.end) - toMinutes(v.b.start);
+      return v.b.local
+        ? api.patch(`/pipeline/day/blocks/${v.b.refId}`, { start: hhmm(v.startMin), end: hhmm(v.startMin + len) })
+        : api.put("/pipeline/day/event-move", { date: data.date, key: v.b.refId, ...(v.reset ? { reset: true } : { start: v.startMin, end: v.startMin + len }), ...(forUser ? { userId: forUser } : {}) });
+    },
+    onSuccess: onSaved,
+    onError: () => toast.error(t("common.error")),
+  });
   const totals = new Map<string, number>();
   for (const b of data.plan.blocks) {
     if (!b.overflow && b.start && b.end && b.refId && isWork(b.kind)) {
@@ -521,6 +533,32 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
       if (delta === 0) return;
       const first = Math.min(...placed.filter((x) => `${x.kind}:${x.refId}` === key).map((x) => toMinutes(x.start)));
       saveStart.mutate({ key, minute: Math.max(0, Math.min(1425, first + delta)) });
+    };
+    window.addEventListener("pointermove", mv);
+    window.addEventListener("pointerup", up);
+  };
+  const startEventMove = (e: React.PointerEvent, i: number, b: Block) => {
+    if (e.button !== 0) return;
+    const y0 = e.clientY;
+    let moved = false;
+    const mv = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientY - y0) < 6) return;
+      moved = true;
+      setMove({ i, dy: ev.clientY - y0 });
+    };
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", mv);
+      window.removeEventListener("pointerup", up);
+      setMove(null);
+      if (!moved) return;
+      // the click that follows a drag must open nothing (no new block, no edit window)
+      justMoved.current = true;
+      setTimeout(() => (justMoved.current = false), 250);
+      const delta = Math.round((ev.clientY - y0) / (hourPx / 60) / 15) * 15;
+      if (delta === 0) return;
+      const len = toMinutes(b.end) - toMinutes(b.start);
+      const next = Math.max(0, Math.min(1440 - len, toMinutes(b.start) + delta));
+      saveEvent.mutate({ b, startMin: next });
     };
     window.addEventListener("pointermove", mv);
     window.addEventListener("pointerup", up);
@@ -595,6 +633,8 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
             const h = Math.max(((own + (live?.delta ?? 0)) / 60) * hourPx - 3, 18);
             const shift = live?.edge === "top" ? -(live.delta / 60) * hourPx : 0;
             const stretch = canEdit && !b.done && !b.masked && isWork(b.kind);
+            // an event of one's own or an Outlook one (not private-masked, not all day) can be moved too
+            const movable = canEdit && b.kind === "event" && !b.masked && !b.allDay && Boolean(b.refId) && (Boolean(b.local) || Boolean(b.o365));
             if (b.kind === "break")
               return (
                 <div key={`br${i}`} className="absolute inset-x-0 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-muted-foreground/30 bg-[repeating-linear-gradient(135deg,transparent,transparent_6px,rgba(255,255,255,0.03)_6px,rgba(255,255,255,0.03)_12px)] text-[11px] text-muted-foreground" style={{ top: top(s) + 1, height: h }}>
@@ -608,13 +648,13 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
               <div key={`${b.refId}${i}`} className={cn("group/blk absolute inset-x-0", (live || move?.i === i) && "z-20")} style={{ top: top(s) + 1 + shift, height: h, ...(move?.i === i ? { transform: `translateY(${move.dy}px)`, opacity: 0.85, pointerEvents: "none" as const } : {}) }}>
               <button
                 type="button"
-                disabled={event && !b.local}
-                onClick={() => (justMoved.current ? (justMoved.current = false) : b.local ? (canEdit ? onBlock(b) : undefined) : onOpen(b))}
-                onPointerDown={stretch ? (ev) => startMove(ev, i, key) : undefined}
+                disabled={event && !b.local && !movable}
+                onClick={() => (justMoved.current ? (justMoved.current = false) : b.local ? (canEdit ? onBlock(b) : undefined) : event ? undefined : onOpen(b))}
+                onPointerDown={stretch ? (ev) => startMove(ev, i, key) : movable ? (ev) => startEventMove(ev, i, b) : undefined}
                 className={cn(
                   "h-full w-full overflow-hidden rounded-lg border py-1 pr-2.5 text-left transition-all enabled:hover:brightness-110",
                   event ? "pl-2.5" : "pl-4",
-                  stretch && "cursor-grab touch-none active:cursor-grabbing",
+                  (stretch || movable) && "cursor-grab touch-none active:cursor-grabbing",
                   b.done && "opacity-40 saturate-50",
                   event
                     ? b.local
@@ -642,6 +682,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
                   )}
                   {b.ticketNumber && <span className={cn("font-mono text-[10px]", ptask ? "text-teal-300" : "text-primary")}>{b.ticketNumber}</span>}
                   {b.o365 && <span className="flex items-center gap-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300"><CalendarDays className="size-2.5" /> Outlook</span>}
+                  {b.moved && <span className="rounded-full bg-sky-400/15 px-1.5 text-[9px] font-semibold uppercase tracking-wide text-sky-200">{t("pipeline.day.moved")}</span>}
                   {b.masked && <EyeOff className="size-3 text-muted-foreground" />}
                 </span>
                 <span className={cn("block truncate text-[13px] font-medium leading-tight", b.done && "line-through")}>{b.title || t("pipeline.private")}</span>
@@ -649,6 +690,11 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
               </button>
               {!event && !b.masked && !b.done && b.refId && isWork(b.kind) && (
                 <DayEdge kind={b.kind} id={b.refId} number={b.ticketNumber} title={b.title} urgent={b.priority === "urgent"} onOpen={() => onOpen(b)} onDay={{ forUser }} className="absolute left-0 top-0 z-10 h-full" />
+              )}
+              {movable && b.moved && b.o365 && (
+                <button type="button" title={t("pipeline.day.moveReset")} aria-label={t("pipeline.day.moveReset")} onClick={() => saveEvent.mutate({ b, startMin: toMinutes(b.start), reset: true })} className="absolute right-1.5 top-1.5 z-20 rounded-md bg-background/70 p-0.5 text-sky-200 opacity-0 transition-opacity hover:text-foreground group-hover/blk:opacity-100">
+                  <Undo2 className="size-3" />
+                </button>
               )}
               {canEdit && !event && !b.masked && b.refId && isWork(b.kind) && <RemoveFromDay kind={b.kind} id={b.refId} forUser={forUser} className="absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover/blk:opacity-100" />}
               {stretch &&

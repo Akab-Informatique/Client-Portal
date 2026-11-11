@@ -2595,6 +2595,7 @@ export type PipelineBlock = {
   pinned?: "day" | "week";
   /** An event of the technician's Microsoft 365 calendar (not one the portal reserved) */
   o365?: boolean;
+  moved?: boolean;
   /** A slot the person blocked by hand (refId is its id): own color, editable */
   local?: boolean;
   /** The note of a slot blocked by hand */
@@ -3436,4 +3437,24 @@ export const newsletterIssues = pgTable(
     createdAt: created(),
   },
   (t) => [index("newsletter_issues_sent_idx").on(t.sentAt)],
+);
+
+/**
+ * An Outlook event moved by hand in a person's day plan (only in the portal: the real event is never touched).
+ * `event_key` = the Graph id of the event; the times are minutes of the day.
+ */
+export const pipelineEventMoves = pgTable(
+  "pipeline_event_moves",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    eventKey: text("event_key").notNull(),
+    startMinute: integer("start_minute").notNull(),
+    endMinute: integer("end_minute").notNull(),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("pipeline_event_moves_uniq").on(t.userId, t.date, t.eventKey)],
 );

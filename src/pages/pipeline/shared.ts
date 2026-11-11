@@ -82,6 +82,8 @@ export type Block = {
   pinned?: "day" | "week";
   /** An event of the technician's Microsoft 365 calendar */
   o365?: boolean;
+  /** An Outlook event moved by hand in this plan (the real one is untouched) */
+  moved?: boolean;
   allDay?: boolean;
   masked?: boolean;
   /** A slot blocked by hand (refId is its id) and its note */

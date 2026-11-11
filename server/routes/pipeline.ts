@@ -533,6 +533,25 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json({ ok: true, plan: out.plan });
   })
 
+  // an Outlook event moved in this day plan only (the real event is never changed); reset puts it back
+  .put("/day/event-move", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().min(1).max(400), start: z.number().int().min(0).max(1425).optional(), end: z.number().int().min(15).max(1440).optional(), reset: z.boolean().optional() }));
+    const who = await dayTarget(a, p.userId);
+    const date = p.date ?? todayQc();
+    const cal = await calendarOfDay(who, date);
+    const ev = cal.events.find((e) => e.id === p.key && !e.allDay);
+    if (!ev) throw new HTTPException(404, { message: "not_found" });
+    const d = db();
+    await d.delete(schema.pipelineEventMoves).where(and(eq(schema.pipelineEventMoves.userId, who), eq(schema.pipelineEventMoves.date, date), eq(schema.pipelineEventMoves.eventKey, p.key)));
+    if (!p.reset) {
+      if (p.start === undefined || p.end === undefined || p.end <= p.start) throw new HTTPException(400, { message: "block_times" });
+      await d.insert(schema.pipelineEventMoves).values({ userId: who, date, eventKey: p.key, startMinute: Math.round(p.start / 15) * 15, endMinute: Math.round(p.end / 15) * 15 });
+    }
+    const out = await buildPlan(who, date, { ai: false, reuse: true });
+    return c.json({ ok: true, plan: out.plan });
+  })
+
   // the order of the day, given by dragging the blocks: the keys, first to last (kept for that day)
   .put("/day/order", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
