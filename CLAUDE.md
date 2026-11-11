@@ -684,3 +684,4 @@ Each sidebar entry shows a star on hover (`NavItem` `fav` in `src/layouts/StaffL
 - Tests: two tests used the same ticket-side client id (`9_100_051`): the second now has its own.
 - Known, not fixed: `/pipeline?…&task=<id>` is read by the to-do task window, so a **project** task id in that address opens a blank to-do window (project tasks are opened from the folder).
 
+- **Pause and play on the minimized project card** (`TaskDock` in `ProjectWorkspace.tsx`): a card with a running or paused timer (a phase, a task, or a minimized folder showing its earliest phase timer) has a ⏸ / ▶ button before the expand button; it calls the phase or task `timer/pause` / `resume` route and the clock stands still (amber) while paused. The card is a little wider (`w-80`).

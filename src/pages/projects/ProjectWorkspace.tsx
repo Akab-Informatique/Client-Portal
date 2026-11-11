@@ -2,9 +2,9 @@ import { createPortal } from "react-dom";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Flag, FolderKanban, ListTodo, Maximize2, X } from "lucide-react";
+import { Flag, FolderKanban, ListTodo, Maximize2, Pause, Play, X } from "lucide-react";
 import { dockBus, useDockBus } from "@/lib/dockBus";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -114,7 +114,16 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
   // a minimized phase (its timer runs) reopens the project folder on that phase
   const restoreItem = (d: { projectId: string; taskId: string; phase: boolean; folder?: boolean }) =>
     d.folder ? (onRestoreFolder(d.projectId), navigate(`/pipeline?section=projects&project=${d.projectId}&tab=milestones`)) : d.phase ? navigate(`/pipeline?section=projects&project=${d.projectId}&tab=milestones&milestone=${d.taskId}`) : onRestore(d.projectId, d.taskId);
+  const qc = useQueryClient();
   const { data: timers = [] } = useQuery({ queryKey: [...KEY, "timers"], queryFn: () => api.get<RunningTimer[]>("/projects/timers"), refetchInterval: 30_000 });
+  // pause / play from the card: a phase's timer (its id is the milestone's) or a task's
+  const toggleTimer = useMutation({
+    mutationFn: (v: { projectId: string; timer: RunningTimer }) => api.post(`/projects/${v.projectId}/${v.timer.kind === "phase" ? "milestones" : "tasks"}/${v.timer.taskId}/timer/${v.timer.paused ? "resume" : "pause"}`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: [...KEY, "timers"] });
+      void qc.invalidateQueries({ queryKey: KEY });
+    },
+  });
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!timers.length) return;
@@ -140,7 +149,7 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
         const running = Boolean(d.timer) && !d.timer?.paused;
         return (
           <motion.div key={d.taskId} layout initial={{ opacity: 0, y: 16, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 16, scale: 0.95 }} className="pointer-events-auto">
-            <div className={cn("group relative flex w-72 items-center gap-2 overflow-hidden rounded-xl border border-violet-400/40 bg-popover/95 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-10px_rgba(167,139,250,0.45)]", running && "project-live border-violet-300/80")}>
+            <div className={cn("group relative flex w-80 items-center gap-2 overflow-hidden rounded-xl border border-violet-400/40 bg-popover/95 py-1.5 pl-1.5 pr-1 shadow-[0_12px_40px_-12px_rgba(0,0,0,0.6),0_0_24px_-10px_rgba(167,139,250,0.45)]", running && "project-live border-violet-300/80")}>
               <span aria-hidden className="absolute inset-y-0 left-0 w-1 bg-violet-400" />
               <button type="button" onClick={() => restoreItem(d)} title={`${d.number} ${d.project ?? ""} — ${d.title}`} className="flex min-w-0 flex-1 items-center gap-2 pl-1.5 text-left">
                 <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-violet-500/15 text-violet-300">
@@ -162,6 +171,18 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
                 <span className={cn("shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[11px] font-semibold tabular-nums", d.timer.paused ? "bg-amber-500/15 text-amber-300" : "bg-[color:var(--gold)]/15 text-primary")}>{clock((d.timer.baseSeconds ?? 0) + (d.timer.paused ? 0 : (now - new Date(d.timer.startedAt).getTime()) / 1000))}</span>
               ) : (
                 !d.folder && <span className={cn("hidden shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium sm:block", TASK_STYLE[d.status])}>{t(`projects.taskStatus.${d.status}`)}</span>
+              )}
+              {d.timer && (
+                <button
+                  type="button"
+                  disabled={toggleTimer.isPending}
+                  onClick={() => toggleTimer.mutate({ projectId: d.projectId, timer: d.timer! })}
+                  aria-label={d.timer.paused ? t("projects.phase.resume") : t("projects.phase.pause")}
+                  title={d.timer.paused ? t("projects.phase.resume") : t("projects.phase.pause")}
+                  className={cn("rounded-md p-1.5 transition-colors hover:bg-accent", d.timer.paused ? "text-amber-300" : "text-primary")}
+                >
+                  {d.timer.paused ? <Play className="size-3.5 fill-current" /> : <Pause className="size-3.5 fill-current" />}
+                </button>
               )}
               <button type="button" onClick={() => restoreItem(d)} aria-label={t("projects.restore")} title={t("projects.restore")} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
                 <Maximize2 className="size-3.5" />
