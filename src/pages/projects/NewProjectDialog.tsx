@@ -13,6 +13,7 @@ import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useMe } from "@/lib/session";
 import { useCrmClients } from "@/pages/crm/shared";
+import { ProjectTypeSelect } from "./ProjectTypeSelect";
 import { apiMessage, useProjectPeople, type BillingMode, type Project } from "./shared";
 
 const MODES: BillingMode[] = ["fixed", "bank", "hourly", "contract", "special"];
@@ -28,7 +29,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
   const { data: people = [] } = useProjectPeople();
   const { data: clients = [] } = useCrmClients();
   const { data: defaults } = useQuery({ queryKey: ["projects", "defaults"], queryFn: () => api.get<{ hourlyRate: number }>("/projects/defaults"), staleTime: 60_000 });
-  const [f, setF] = useState({ name: "", clientId: "", leadId: me.id, startDate: "", dueDate: "", budget: "", every: "", checkpointDate: "", description: "", mode: "hourly" as BillingMode, contractId: "", rate: "", special: "", price: "" });
+  const [f, setF] = useState({ name: "", typeId: "", clientId: "", leadId: me.id, startDate: "", dueDate: "", budget: "", every: "", checkpointDate: "", description: "", mode: "hourly" as BillingMode, contractId: "", rate: "", special: "", price: "" });
   const [team, setTeam] = useState<string[]>([]);
   const { data: contracts = [] } = useQuery({ queryKey: ["projects", "client-contracts", f.clientId], queryFn: () => api.get<{ id: string; name: string; hourlyRate: number | null }[]>(`/projects/client-contracts/${f.clientId}`), enabled: Boolean(f.clientId), staleTime: 30_000 });
   const num = (v: string) => (v.trim() ? Number(v.replace(",", ".")) : null);
@@ -39,6 +40,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
     mutationFn: () =>
       api.post<Project>("/projects", {
         name: f.name.trim(),
+        typeId: f.typeId || null,
         clientId: f.clientId || null,
         leadId: f.leadId || null,
         memberIds: team,
@@ -82,6 +84,11 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
           <div className="space-y-1.5">
             <Label htmlFor="pj-name">{t("projects.f.name")}</Label>
             <Input id="pj-name" autoFocus required maxLength={200} value={f.name} onChange={(e) => set("name")(e.target.value)} placeholder={t("projects.f.namePlaceholder")} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>{t("projectType.label")}</Label>
+            <ProjectTypeSelect value={f.typeId || null} onChange={(id) => set("typeId")(id ?? "")} />
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">

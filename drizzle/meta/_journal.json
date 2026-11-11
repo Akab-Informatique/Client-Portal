@@ -1219,6 +1219,13 @@
       "when": 1794430586258,
       "tag": "0173_striped_raider",
       "breakpoints": true
+    },
+    {
+      "idx": 174,
+      "version": "7",
+      "when": 1794431095959,
+      "tag": "0174_ancient_wallflower",
+      "breakpoints": true
     }
   ]
 }

@@ -2827,6 +2827,19 @@ export const invoiceReminders = pgTable(
 
 // ── Projects (Centre de commande › Projets) ──
 /** A project: a folder of milestones, tasks, time and notes, for a client or for ourselves. */
+/** The kinds of project (computer order, installation, new client onboarding…): a list the team keeps */
+export const projectTypes = pgTable(
+  "project_types",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    position: integer("position").notNull().default(0),
+    active: boolean("active").notNull().default(true),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("project_types_name_idx").on(sql`lower(${t.name})`)],
+);
+
 export const projects = pgTable(
   "projects",
   {
@@ -2857,6 +2870,8 @@ export const projects = pgTable(
     hourlyRateCents: integer("hourly_rate_cents"),
     /** The agreed price of a fixed-price project */
     fixedPriceCents: integer("fixed_price_cents"),
+    /** The kind of project (Admin-free list: `project_types`) */
+    typeId: uuid("type_id").references((): AnyPgColumn => projectTypes.id, { onDelete: "set null" }),
     /** The quote it was made from (Vente › Soumissions) */
     quoteId: uuid("quote_id"),
     /** When the sold price went to Approbation (once; "Facturer le projet") */

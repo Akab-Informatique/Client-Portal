@@ -67,6 +67,20 @@ async function activeStaff(ids: string[]): Promise<void> {
   if (rows.length !== want.length) throw new HTTPException(400, { message: "person_invalid" });
 }
 
+const STARTER_TYPES = ["Commande d'ordinateur", "Installation", "Onboarding nouveau client"];
+/** The list of project types; the first time it is empty it starts with the usual ones */
+async function projectTypes(all = false) {
+  const d = db();
+  const [any] = await d.select({ id: schema.projectTypes.id }).from(schema.projectTypes).limit(1);
+  if (!any) await d.insert(schema.projectTypes).values(STARTER_TYPES.map((name, position) => ({ name, position }))).onConflictDoNothing();
+  return d.select().from(schema.projectTypes).where(all ? undefined : eq(schema.projectTypes.active, true)).orderBy(asc(schema.projectTypes.position), asc(schema.projectTypes.name));
+}
+async function typeExists(id: string | null | undefined): Promise<void> {
+  if (!id) return;
+  const [t] = await db().select({ id: schema.projectTypes.id }).from(schema.projectTypes).where(and(eq(schema.projectTypes.id, id), eq(schema.projectTypes.active, true)));
+  if (!t) throw new HTTPException(400, { message: "type_invalid" });
+}
+
 async function clientExists(id: string): Promise<void> {
   const [c] = await db().select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.id, id));
   if (!c) throw new HTTPException(400, { message: "client_unknown" });
@@ -90,6 +104,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
   const d = db();
   const ids = rows.map((r) => r.id);
   const today = todayQc();
+  const typeName = new Map((await d.select({ id: schema.projectTypes.id, name: schema.projectTypes.name }).from(schema.projectTypes)).map((t) => [t.id, t.name]));
   const [milestones, tasks, members, followers, hours, clients, users, contracts, groups] = await Promise.all([
     // (the contracts of the projects billed under one are read last)
     d.select().from(schema.projectMilestones).where(inArray(schema.projectMilestones.projectId, ids)).orderBy(asc(schema.projectMilestones.position), asc(schema.projectMilestones.createdAt)),
@@ -177,6 +192,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       dueDate: p.dueDate,
       budgetHours: p.budgetHoursX100 == null ? null : p.budgetHoursX100 / 100,
       billingMode: p.billingMode,
+      type: p.typeId && typeName.has(p.typeId) ? { id: p.typeId, name: typeName.get(p.typeId)! } : null,
       hourlyRate: p.hourlyRateCents == null ? null : p.hourlyRateCents / 100,
       contract: (() => {
         const k = contracts.find((x) => x.id === p.contractId);
@@ -250,6 +266,8 @@ const zProject = z.object({
   dueDate: zDay.nullable().optional(),
   budgetHours: zHours.nullable().optional(),
   billingMode: z.enum(["hourly", "fixed", "bank", "contract", "special"]).optional(),
+  /** The kind of project (computer order, installation, onboarding…) */
+  typeId: zUuid.nullable().optional(),
   /** The client contract the time is billed under (billingMode contract) */
   contractId: zUuid.nullable().optional(),
   /** Follow up every N days, from this day (none: N days from now) */
@@ -269,6 +287,39 @@ function checkDays(start: string | null | undefined, due: string | null | undefi
 
 export const projectsRoutes = new Hono<AppEnv>()
   .use(requireStaff)
+
+  /** The kinds of project (the pickers and the column) */
+  .get("/types", requirePermission("projects.view"), async (c) => c.json((await projectTypes()).map((t) => ({ id: t.id, name: t.name }))))
+  .post("/types", requirePermission("projects.edit"), async (c) => {
+    const a = auth(c);
+    const o = await body(c, z.object({ name: z.string().trim().min(1).max(80) }));
+    const list = await projectTypes(true);
+    const same = list.find((t) => t.name.toLowerCase() === o.name.toLowerCase());
+    if (same) {
+      // a type turned off comes back; one that exists is simply the one asked for
+      if (!same.active) await db().update(schema.projectTypes).set({ active: true }).where(eq(schema.projectTypes.id, same.id));
+      return c.json({ id: same.id, name: same.name });
+    }
+    const [row] = await db().insert(schema.projectTypes).values({ name: o.name, position: list.length }).returning();
+    await audit(a.user.id, "project.type_created", row.id, { name: o.name });
+    return c.json({ id: row.id, name: row.name }, 201);
+  })
+  .patch("/types/:id", requirePermission("projects.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const o = await body(c, z.object({ name: z.string().trim().min(1).max(80).optional(), active: z.boolean().optional() }));
+    const [row] = await db().update(schema.projectTypes).set({ ...(o.name !== undefined ? { name: o.name } : {}), ...(o.active !== undefined ? { active: o.active } : {}) }).where(eq(schema.projectTypes.id, id)).returning();
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "project.type_changed", id, o);
+    return c.json({ id: row.id, name: row.name, active: row.active });
+  })
+  .delete("/types/:id", requirePermission("projects.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    await db().delete(schema.projectTypes).where(eq(schema.projectTypes.id, id));
+    await audit(a.user.id, "project.type_deleted", id, {});
+    return c.json({ ok: true });
+  })
 
   /** Active staff, for the pickers (lead, team, assignee) */
   .get("/people", requirePermission("projects.view"), async (c) => {
@@ -367,8 +418,9 @@ export const projectsRoutes = new Hono<AppEnv>()
         client: zUuid.optional().catch(undefined),
         state: zStatus.optional().catch(undefined),
         member: zUuid.optional().catch(undefined),
+        type: zUuid.optional().catch(undefined),
       })
-      .parse({ member: c.req.query("member") || undefined, view: c.req.query("view"), status: c.req.query("status"), q: c.req.query("q") || undefined, lead: c.req.query("lead") || undefined, client: c.req.query("client") || undefined, state: c.req.query("state") || undefined });
+      .parse({ member: c.req.query("member") || undefined, view: c.req.query("view"), status: c.req.query("status"), q: c.req.query("q") || undefined, lead: c.req.query("lead") || undefined, client: c.req.query("client") || undefined, state: c.req.query("state") || undefined, type: c.req.query("type") || undefined });
     const p = schema.projects;
     const rows = await db()
       .select()
@@ -378,6 +430,7 @@ export const projectsRoutes = new Hono<AppEnv>()
           q.status === "open" ? sql`${p.status} not in ('done','cancelled')` : q.status === "done" ? sql`${p.status} in ('done','cancelled')` : undefined,
           q.state ? eq(p.status, q.state) : undefined,
           q.lead ? eq(p.leadId, q.lead) : undefined,
+          q.type ? eq(p.typeId, q.type) : undefined,
           q.client ? eq(p.clientId, q.client) : undefined,
           q.q ? or(ilike(p.name, `%${q.q}%`), ilike(p.number, `%${q.q}%`)) : undefined,
         ),
@@ -441,6 +494,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const leadId = p.leadId === undefined ? a.user.id : p.leadId;
     await activeStaff([...(leadId ? [leadId] : []), ...(p.memberIds ?? [])]);
     if (p.clientId) await clientExists(p.clientId);
+    await typeExists(p.typeId);
     const mode = p.billingMode ?? "hourly";
     if (mode === "contract") {
       if (!p.contractId) throw new HTTPException(400, { message: "contract_required" });
@@ -466,6 +520,7 @@ export const projectsRoutes = new Hono<AppEnv>()
           dueDate: p.dueDate ?? null,
           budgetHoursX100: x100(p.budgetHours),
           billingMode: mode,
+          typeId: p.typeId ?? null,
           contractId: mode === "contract" ? p.contractId! : null,
           checkpointEveryDays: p.checkpointEveryDays ?? null,
           checkpointDate: p.checkpointEveryDays ? (p.checkpointDate ?? nextCheckpoint(p.checkpointEveryDays, p.startDate ?? null)) : (p.checkpointDate ?? null),
@@ -627,6 +682,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     if (p.leadId) await activeStaff([p.leadId]);
     if (p.memberIds) await activeStaff(p.memberIds);
     if (p.clientId) await clientExists(p.clientId);
+    if (p.typeId !== undefined) await typeExists(p.typeId);
     const modeNow = p.billingMode ?? cur.billingMode;
     const clientNow = p.clientId !== undefined ? p.clientId : cur.clientId;
     const contractNow = p.contractId !== undefined ? p.contractId : cur.contractId;
@@ -652,6 +708,7 @@ export const projectsRoutes = new Hono<AppEnv>()
         ...(p.dueDate !== undefined ? { dueDate: p.dueDate } : {}),
         ...(p.budgetHours !== undefined ? { budgetHoursX100: x100(p.budgetHours) } : {}),
         ...(p.billingMode !== undefined ? { billingMode: p.billingMode } : {}),
+        ...(p.typeId !== undefined ? { typeId: p.typeId } : {}),
         ...(p.contractId !== undefined || p.billingMode !== undefined ? { contractId: modeNow === "contract" ? contractNow : null } : {}),
         ...(p.checkpointEveryDays !== undefined ? { checkpointEveryDays: p.checkpointEveryDays, ...(p.checkpointEveryDays === null ? { checkpointDate: null } : p.checkpointDate === undefined && !cur.checkpointDate ? { checkpointDate: nextCheckpoint(p.checkpointEveryDays, cur.startDate) } : {}) } : {}),
         ...(p.checkpointDate !== undefined ? { checkpointDate: p.checkpointDate } : {}),

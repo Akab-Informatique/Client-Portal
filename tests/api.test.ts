@@ -7406,6 +7406,34 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await admin.get(`/api/projects/${mp.projectId}`)).json).toMatchObject({ billingMode: "fixed", fixedPrice: 500, budgetHours: 5 });
   });
 
+  it("project types: a list the team keeps, a type on each project and a filter", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    // the usual ones are there from the start
+    const types = (await tech.get("/api/projects/types")).json as { id: string; name: string }[];
+    expect(types.map((t) => t.name)).toEqual(expect.arrayContaining(["Installation", "Onboarding nouveau client"]));
+    // a technician adds one on the spot (the same name again is the same type), only a manager renames or removes
+    const made = (await tech.post("/api/projects/types", { name: "Migration Microsoft 365" })).json;
+    expect((await tech.post("/api/projects/types", { name: "migration microsoft 365" })).json.id).toBe(made.id);
+    expect((await tech.patch(`/api/projects/types/${made.id}`, { name: "x" })).status).toBe(403);
+    expect((await admin.patch(`/api/projects/types/${made.id}`, { name: "Migration M365" })).json.name).toBe("Migration M365");
+    // a project carries its type; an unknown one is refused
+    const install = types.find((t) => t.name === "Installation")!;
+    const proj = (await tech.post("/api/projects", { name: "Installer le bureau", typeId: install.id })).json;
+    expect(proj.type).toMatchObject({ id: install.id, name: "Installation" });
+    expect((await tech.post("/api/projects", { name: "Mauvais type", typeId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("type_invalid");
+    expect((await tech.patch(`/api/projects/${proj.id}`, { typeId: made.id })).json.type.id).toBe(made.id);
+    expect((await tech.patch(`/api/projects/${proj.id}`, { typeId: null })).json.type).toBeNull();
+    await tech.patch(`/api/projects/${proj.id}`, { typeId: install.id });
+    const listed = (await tech.get(`/api/projects?view=all&type=${install.id}`)).json as any[];
+    expect(listed.some((x) => x.id === proj.id)).toBe(true);
+    expect(listed.every((x) => x.type?.id === install.id)).toBe(true);
+    // a type that is deleted leaves the projects without one
+    expect((await admin.del(`/api/projects/types/${install.id}`)).status).toBe(200);
+    expect((await tech.get(`/api/projects/${proj.id}`)).json.type).toBeNull();
+  });
+
   it("a phase works like a ticket: its timer, its replies and notes, and time that covers several tasks", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

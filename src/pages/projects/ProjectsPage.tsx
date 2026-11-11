@@ -280,6 +280,7 @@ export function ProjectsPage() {
           </span>
           <span className="hidden w-28 md:block">{t("projects.col.status")}</span>
           <span className="hidden w-40 lg:block">{t("projects.col.client")}</span>
+          <span className="hidden w-36 xl:block">{t("projectType.col")}</span>
           <span className="hidden w-32 md:block">{t("projects.col.progress")}</span>
           <span className="hidden w-24 text-right lg:block">{t("projects.col.hours")}</span>
           <span className="hidden w-20 text-right md:block">{t("projects.col.due")}</span>
@@ -350,6 +351,7 @@ export function ProjectsPage() {
                     <span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[p.status])}>{t(`projects.status.${p.status}`)}</span>
                   </span>
                   <span className="hidden w-40 truncate text-sm text-muted-foreground lg:block">{p.client?.name ?? "—"}</span>
+                  <span className="hidden w-36 truncate text-sm text-muted-foreground xl:block" title={p.type?.name}>{p.type?.name ?? "—"}</span>
                   <span className="hidden w-32 md:block">
                     <span className="flex items-center gap-2">
                       <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-foreground/10">

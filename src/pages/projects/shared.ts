@@ -95,6 +95,8 @@ export type Project = {
   name: string;
   description: string;
   status: Status;
+  /** The kind of project (computer order, installation…) */
+  type?: { id: string; name: string } | null;
   client: { id: string; name: string } | null;
   lead: Person | null;
   members: Person[];

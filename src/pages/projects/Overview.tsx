@@ -17,6 +17,7 @@ import { shortDate, shortDateTime } from "@/pages/tickets/shared";
 import { dueTone, hoursText, MS_TONE, PRIORITY_DOT, STATUSES, TASK_STATUSES, TASK_STYLE, TONE_TEXT, today, useProjectPeople, type BillingMode, type ProjectDetail, type Status } from "./shared";
 import { Bar, Card, Gauge, Text, type GaugeTone } from "./ui";
 import { LinkedTickets, SoldPanel } from "./SoldPanel";
+import { ProjectTypeSelect } from "./ProjectTypeSelect";
 
 const dayNumber = (ymd: string) => Math.round(Date.parse(`${ymd}T12:00:00Z`) / 86_400_000);
 
@@ -332,6 +333,10 @@ function Settings({ p, edit, save, onDelete }: { p: ProjectDetail; edit: boolean
           <div className="space-y-1.5">
             <Label>{t("projects.f.name")}</Label>
             <Text value={p.name} onSave={(v) => v && save({ name: v })} maxLength={200} aria-label={t("projects.f.name")} className={cn(!edit && "pointer-events-none")} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>{t("projectType.label")}</Label>
+            <ProjectTypeSelect disabled={!edit} value={p.type?.id ?? null} onChange={(id) => save({ typeId: id })} />
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">

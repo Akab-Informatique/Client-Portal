@@ -665,6 +665,7 @@ const fr = {
     deleteText: "Le service est retiré de la liste. Cette action est définitive.",
   },
 
+  projectType: { label: "Type de projet", col: "Type", none: "Aucun type", new: "+ Nouveau type…", newPlaceholder: "Ex. : Commande d'ordinateur", add: "Ajouter le type" },
   supply: { label: "État de la marchandise", none: "À commander", ordered: "Commandé", received: "Reçu au bureau" },
   chargeMove: {
     button: "Mettre sur un autre billet ou projet",
