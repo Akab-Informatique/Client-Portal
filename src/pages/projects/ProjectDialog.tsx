@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -786,7 +787,7 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
   const { t } = useTranslation();
   const me = useMe();
   const can = useCan();
-  const [text, setText] = useState("");
+  const [text, setText, clearText] = useDraft(`project:${p.id}:note`);
   // colleagues told about the note: the bell, an email with the note, a Teams chat message
   const { data: people = [] } = useProjectPeople();
   const colleagues = people.filter((x) => x.id !== me.id);
@@ -798,7 +799,7 @@ function Notes({ p, edit, onChanged, fail }: { p: ProjectDetail; edit: boolean; 
   const add = useMutation({
     mutationFn: () => api.post<{ notified?: number; chatNotReady?: boolean; notifyFailed?: number }>(`/projects/${p.id}/notes`, { text: text.trim(), internal: !isPublic, ...(tell.length ? { notifyUserIds: tell, notifyChannels: how } : {}) }),
     onSuccess: (r) => {
-      setText("");
+      clearText();
       setTell([]);
       if (r.notified) toast.success(t("projects.noteTell.done", { count: r.notified }));
       if (r.chatNotReady) toast.warning(t("tickets.noteTell.chatNotReady"));

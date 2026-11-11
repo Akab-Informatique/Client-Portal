@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
@@ -271,7 +272,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
   const ws = useTicketWorkspace();
   const { data, isLoading } = useQuery({ queryKey: ["sms", "thread", id], queryFn: () => api.get<Thread>(`/sms/conversations/${id}`), refetchInterval: 10_000 });
   const { data: summary } = useSmsSummary();
-  const [text, setText] = useState("");
+  const [text, setText, clearText] = useDraft(`sms:${id}`);
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
     end.current?.scrollIntoView({ block: "end" });
@@ -282,7 +283,7 @@ function ThreadView({ id, onBack, onTicket }: { id: string; onBack: () => void; 
   const send = useMutation({
     mutationFn: () => api.post(`/sms/conversations/${id}/messages`, { body: text.trim() }),
     onSuccess: () => {
-      setText("");
+      clearText();
       refresh();
     },
     onError: (e) => toast.error(smsErrorText(t, e)),

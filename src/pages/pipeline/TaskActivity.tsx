@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -31,7 +32,7 @@ export function TaskActivity({ task, editable, onChanged, startOnTime = false }:
   const confirm = useConfirm();
   const [mode, setMode] = useState<"note" | "time">(startOnTime ? "time" : "note");
   const [filter, setFilter] = useState<Filter>("all");
-  const [text, setText] = useState("");
+  const [text, setText, clearText] = useDraft(`todo:${task.id}:note`);
   const [date, setDate] = useState(todayYmd());
   const [duration, setDuration] = useState("");
   const [worked, setWorked] = useState<string[]>([]);
@@ -90,7 +91,7 @@ export function TaskActivity({ task, editable, onChanged, startOnTime = false }:
       setBusy(false);
     }
   };
-  const addNote = () => run(() => api.post(`/pipeline/tasks/${task.id}/notes`, { text: text.trim() }), () => setText(""));
+  const addNote = () => run(() => api.post(`/pipeline/tasks/${task.id}/notes`, { text: text.trim() }), () => clearText());
   const addTime = () => {
     if (hours === null || hours < 0.05) return toast.error(t("pipeline.activity.durationFormat"));
     void run(
@@ -98,7 +99,7 @@ export function TaskActivity({ task, editable, onChanged, startOnTime = false }:
       () => {
         void qc.invalidateQueries({ queryKey: timerKey });
         void qc.invalidateQueries({ queryKey: ["pipeline", "timers"] });
-        setText("");
+        clearText();
         setDuration("");
         setWorked([]);
         setFinished([]);

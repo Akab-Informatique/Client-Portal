@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from "react";
+import { useDraft } from "@/lib/useDraft";
+import { type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -90,11 +91,11 @@ function ProjectWindow({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
   const key = ["client-projects", id];
   const { data, isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<Detail>(`/portal/projects/${id}`) });
-  const [text, setText] = useState("");
+  const [text, setText, clearText] = useDraft(`portal-project:${id}:note`);
   const add = useMutation({
     mutationFn: () => api.post(`/portal/projects/${id}/notes`, { text: text.trim() }),
     onSuccess: () => {
-      setText("");
+      clearText();
       toast.success(t("clientProjects.noteSent"));
       void qc.invalidateQueries({ queryKey: key });
     },

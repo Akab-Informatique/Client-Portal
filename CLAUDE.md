@@ -685,3 +685,8 @@ Each sidebar entry shows a star on hover (`NavItem` `fav` in `src/layouts/StaffL
 - Known, not fixed: `/pipeline?…&task=<id>` is read by the to-do task window, so a **project** task id in that address opens a blank to-do window (project tasks are opened from the folder).
 
 - **Pause and play on the minimized project card** (`TaskDock` in `ProjectWorkspace.tsx`): a card with a running or paused timer (a phase, a task, or a minimized folder showing its earliest phase timer) has a ⏸ / ▶ button before the expand button; it calls the phase or task `timer/pause` / `resume` route and the clock stands still (amber) while paused. The card is a little wider (`w-80`).
+
+
+## Notes are saved as you type (latest)
+
+`useDraft(key)` (`src/lib/useDraft.ts`) keeps what is typed in a note box in `localStorage` (`akab.draft.<key>`, saved 0.4 s after the last keystroke and when the box goes away) so a note survives a closed, minimized or reloaded window; `clear()` is called once it is really sent (or the time is discarded). Wired on: the ticket reply / internal note and the ticket time entry's two descriptions (`timers.tsx`), a project's notes, a phase's note box and its time note, a project task's box, a to-do task's note / time box, the Texts conversations (`sms:<id>`), and the client portal's ticket reply and project note. One draft per box (reply and internal note of a ticket share one). Per computer, not per account.

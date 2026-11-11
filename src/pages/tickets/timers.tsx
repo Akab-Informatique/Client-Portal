@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TicketDetail } from "./shared";
@@ -362,8 +363,9 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const minutes = Math.max(1, Math.round(timer.elapsedMs / 60_000));
   // typed as h:mm (the measured time, at least a minute); sent as decimal hours
   const [hours, setHours] = useState(() => hm(Math.max(1, Math.round(timer.elapsedMs / 60_000)) / 60));
-  const [summary, setSummary] = useState("");
-  const [internal, setInternal] = useState("");
+  // soft save: the time's descriptions stay if the window is closed before it is saved
+  const [summary, setSummary, clearSummary] = useDraft(`ticket:${timer.ticketId}:timeSummary`);
+  const [internal, setInternal, clearInternal] = useDraft(`ticket:${timer.ticketId}:timeInternal`);
   // the description by email: to the ticket contact, and to other addresses (the "Envoi" part)
   const [notifyContact, setNotifyContact] = useState(false);
   const [others, setOthers] = useState<string[]>([]);
@@ -435,6 +437,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
       return r;
     },
     onSuccess: (r: { notified?: number; notifyFailed?: number; noContactEmail?: boolean }) => {
+      clearSummary();
+      clearInternal();
       toast.success(t("tickets.timer.saved"));
       if (r?.notified) toast.success(t("tickets.timer.notified", { count: r.notified }));
       if (r?.notifyFailed) toast.error(t("tickets.timer.notifyFailed", { count: r.notifyFailed }));
@@ -446,6 +450,8 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
   const discard = useMutation({
     mutationFn: () => api.del(`/tickets/timers/${timer.id}`),
     onSuccess: () => {
+      clearSummary();
+      clearInternal();
       done();
       // "close with no time": the ticket closes too when it is still open (no new timer starts)
       window.dispatchEvent(new CustomEvent(CLOSE_TICKET_EVENT, { detail: timer.ticketId }));

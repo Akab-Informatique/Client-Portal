@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -1939,7 +1940,8 @@ function NoteComposer({
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [internal, setInternal] = useState(false);
-  const [text, setText] = useState("");
+  // soft save: what is typed stays on this computer if the window is closed or minimized
+  const [text, setText, clearText] = useDraft(`ticket:${tk.id}:note`);
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (!draft) return;
@@ -1988,7 +1990,7 @@ function NoteComposer({
       return api.post<{ emailed?: boolean; to?: string | null; noContactEmail?: boolean }>(`/tickets/${tk.id}/notes`, { text, internal, ...(internal ? { notifyUserIds: tell, notifyChannels: tellHow } : { email: emailIt, others: mailOthers, attachmentIds: ids }) });
     },
     onSuccess: (r) => {
-      setText("");
+      clearText();
       setFiles([]);
       setEmailIt(false);
       setTell([]);

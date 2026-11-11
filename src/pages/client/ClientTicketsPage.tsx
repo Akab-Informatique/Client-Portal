@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -523,14 +524,13 @@ function TicketOverlay({ id, onClose, contact }: { id: number | null; onClose: (
   };
 
   const [tab, setTab] = useState<"conversation" | "documents">("conversation");
-  const [text, setText] = useState("");
+  const [text, setText, clearText] = useDraft(id != null ? `portal-ticket:${id}:reply` : null);
   const [escalating, setEscalating] = useState(false);
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setTab("conversation");
-    setText("");
     setEscalating(false);
   }, [id]);
   useEffect(() => {
@@ -540,7 +540,7 @@ function TicketOverlay({ id, onClose, contact }: { id: number | null; onClose: (
   const comment = useMutation({
     mutationFn: () => api.post(`/portal/tickets/${id}/comments`, { text }),
     onSuccess: () => {
-      setText("");
+      clearText();
       toast.success(t("client.tickets.sent"));
       refresh();
     },
@@ -549,7 +549,7 @@ function TicketOverlay({ id, onClose, contact }: { id: number | null; onClose: (
   const escalate = useMutation({
     mutationFn: () => api.post(`/portal/tickets/${id}/escalate`, { reason: text }),
     onSuccess: () => {
-      setText("");
+      clearText();
       setEscalating(false);
       toast.success(t("client.tickets.escalated"));
       refresh();

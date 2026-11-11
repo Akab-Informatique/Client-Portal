@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -327,7 +328,7 @@ function Composer({ tk, projectId, edit, canTime, hourly, onChanged, fail }: { t
   const qc = useQueryClient();
   const hasClient = Boolean(tk.project.clientId);
   const [mode, setMode] = useState<Mode>(hasClient ? "reply" : "internal");
-  const [text, setText] = useState("");
+  const [text, setText, clearText] = useDraft(`ptask:${tk.id}:note`);
   const [picked, setPicked] = useState<string[] | null>(null);
   const [others, setOthers] = useState<string[]>([]);
   const { data: contacts = [] } = useQuery({ queryKey: [...KEY, "contacts", projectId], queryFn: () => api.get<{ id: string; name: string; email: string }[]>(`/projects/${projectId}/contacts`), enabled: hasClient });
@@ -339,7 +340,7 @@ function Composer({ tk, projectId, edit, canTime, hourly, onChanged, fail }: { t
   const send = useMutation({
     mutationFn: () => api.post<{ emailed: boolean | null; failed: string[] }>(`/projects/${projectId}/tasks/${tk.id}/notes`, { text: text.trim(), kind: mode === "reply" ? "reply" : "internal", ...(mode === "reply" ? { to: recipients } : {}) }),
     onSuccess: (r) => {
-      setText("");
+      clearText();
       onChanged();
       if (mode === "reply") (r.emailed ? toast.success : toast.warning)(r.emailed ? t("projects.replySent") : t("projects.replyNotSent", { to: r.failed.join(", ") }));
     },

@@ -1,3 +1,4 @@
+import { useDraft } from "@/lib/useDraft";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
@@ -237,7 +238,7 @@ function Composer({ p, base, canTime, running, onSaved, fail, onTime }: { p: Pro
   const { t } = useTranslation();
   const me = useMe();
   const [mode, setMode] = useState<"reply" | "internal">("reply");
-  const [text, setText] = useState("");
+  const [text, setText, clearText] = useDraft(`phase:${base}:note`);
   // reply: the client's contacts ticked, other addresses, and whether it goes by email at all
   const [picked, setPicked] = useState<string[] | null>(null);
   const [others, setOthers] = useState<string[]>([]);
@@ -260,7 +261,7 @@ function Composer({ p, base, canTime, running, onSaved, fail, onTime }: { p: Pro
         mode === "reply" ? { text: text.trim(), kind: "reply", email: emailOn, ...(emailOn ? { to: recipients } : {}) } : { text: text.trim(), kind: "internal", ...(tell.length ? { notifyUserIds: tell, notifyChannels: how } : {}) },
       ),
     onSuccess: (r) => {
-      setText("");
+      clearText();
       setOthers([]);
       setTell([]);
       onSaved();
@@ -389,7 +390,7 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
   const [dur, setDur] = useState(() => (fromTimer ? hm(Math.max(0.05, Math.round((elapsed / 3600) * 100) / 100)) : ""));
   const [date, setDate] = useState(today());
   const [billable, setBillable] = useState(hourly);
-  const [note, setNote] = useState("");
+  const [note, setNote, clearNote] = useDraft(`phase:${base}:time`);
   const [sel, setSel] = useState<Record<string, TaskStatus>>({});
   const [general, setGeneral] = useState(false);
   const [err, setErr] = useState("");
@@ -407,6 +408,7 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
       return fromTimer ? api.post(`${base}/timer/stop`, payload) : api.post(`${base}/time`, payload);
     },
     onSuccess: () => {
+      clearNote();
       toast.success(t("projects.phase.saved"));
       onSaved();
     },
@@ -415,7 +417,7 @@ function TimeDialog({ p, m, base, fromTimer, elapsed, onClose, onSaved, fail }: 
       else fail(e);
     },
   });
-  const discard = useMutation({ mutationFn: () => api.post(`${base}/timer/stop`, { discard: true }), onSuccess: onSaved, onError: fail });
+  const discard = useMutation({ mutationFn: () => api.post(`${base}/timer/stop`, { discard: true }), onSuccess: () => (clearNote(), onSaved()), onError: fail });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!hours || hours <= 0) return setErr(t("projects.phase.durationFormat"));
