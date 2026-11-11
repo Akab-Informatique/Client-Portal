@@ -146,7 +146,7 @@ export function ProjectsPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
         <div className="space-y-3">
           {/* the tiles */}
-          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin">
+          <div className="flex flex-wrap items-center gap-1.5">
             {TILES.map((tile, i) => {
               const active = view === tile.key;
               const value = summary?.[tile.key];
@@ -205,7 +205,7 @@ export function ProjectsPage() {
             </div>
             <div className="grid gap-2 sm:grid-cols-3">
               <Select value={lead || "any"} onValueChange={(v) => set({ lead: v === "any" ? null : v })}>
-                <SelectTrigger aria-label={t("projects.filters.lead")}>
+                <SelectTrigger className="w-full" aria-label={t("projects.filters.lead")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -218,7 +218,7 @@ export function ProjectsPage() {
                 </SelectContent>
               </Select>
               <Select value={status} onValueChange={(v) => set({ status: v === "open" ? null : v })}>
-                <SelectTrigger aria-label={t("projects.filters.status")}>
+                <SelectTrigger className="w-full" aria-label={t("projects.filters.status")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -230,7 +230,7 @@ export function ProjectsPage() {
                 </SelectContent>
               </Select>
               <Select value={client || "any"} onValueChange={(v) => set({ client: v === "any" ? null : v })}>
-                <SelectTrigger aria-label={t("projects.filters.client")}>
+                <SelectTrigger className="w-full" aria-label={t("projects.filters.client")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="max-h-72">
@@ -313,7 +313,7 @@ export function ProjectsPage() {
                     <span className="min-w-0">
                       <span className="flex items-center gap-2">
                         <span className="font-mono text-[11px] text-muted-foreground">{p.number}</span>
-                        <span className="truncate font-semibold">{p.name}</span>
+                        <span className="min-w-0 truncate font-semibold">{p.name}</span>
                         {p.attention.length > 0 && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -323,7 +323,27 @@ export function ProjectsPage() {
                           </Tooltip>
                         )}
                       </span>
-                      <span className="block truncate text-xs text-muted-foreground md:hidden">{[p.client?.name, t(`projects.status.${p.status}`)].filter(Boolean).join(" · ")}</span>
+                      {/* what the columns on the right show when the screen is too narrow for them: each piece disappears where its own column appears */}
+                      <span className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground xl:hidden">
+                        {p.client?.name && <span className="max-w-[16rem] truncate lg:hidden">{p.client.name}</span>}
+                        <span className={cn("inline-flex rounded-full border px-1.5 py-px text-[10px] font-medium md:hidden", STATUS_STYLE[p.status])}>{t(`projects.status.${p.status}`)}</span>
+                        <span className="md:hidden" title={t("projects.col.progress")}>
+                          {t("projects.col.progress")} {p.progress.done}/{p.progress.total}
+                        </span>
+                        <span className={cn("font-mono tabular-nums lg:hidden", p.attention.includes("over_budget") && "text-red-400")} title={t("projects.col.hours")}>
+                          {hoursText(p.hours)}
+                          {p.budgetHours != null && ` / ${hoursText(p.budgetHours)}`}
+                        </span>
+                        {p.nextCheckpoint && (
+                          <span className="lg:hidden" title={t("projects.nextCheckpoint")}>
+                            {shortDate(p.nextCheckpoint.slice(0, 10))} {p.nextCheckpoint.slice(11)}
+                          </span>
+                        )}
+                        <span className={cn("md:hidden", TONE_TEXT[tone])} title={t("projects.col.due")}>
+                          {t("projects.col.due")} {p.dueDate ? shortDate(p.dueDate) : "—"}
+                        </span>
+                        {p.lead?.name && <span className="max-w-[12rem] truncate">{p.lead.name}</span>}
+                      </span>
                     </span>
                   </button>
                   <span className="hidden w-28 md:block">

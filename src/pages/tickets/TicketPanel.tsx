@@ -143,7 +143,7 @@ export function TicketOverlay({ id, onClose, onMinimize }: { id: number | null; 
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.985, y: 24 }}
                 transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                className="fixed inset-0 z-50 isolate flex flex-col overflow-hidden bg-background/75 backdrop-blur-2xl"
+                className="fixed inset-0 z-50 isolate flex flex-col overflow-y-auto overflow-x-hidden bg-background/75 backdrop-blur-2xl"
               >
                 <GlassBackdrop />
                 <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72 bg-grid opacity-40 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
@@ -764,7 +764,7 @@ function TicketBody({
         </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-y-auto px-4 pt-4 lg:flex lg:gap-5 lg:overflow-hidden lg:px-6">
+      <div className="relative min-h-[min(60vh,30rem)] flex-1 overflow-y-auto px-4 pt-4 lg:flex lg:gap-5 lg:overflow-hidden lg:px-6">
         {/* The work: what is asked, what was done, the next note (always at the bottom) */}
         <div className="flex min-w-0 flex-col lg:min-h-0 lg:flex-1">
           <div className="flex flex-col gap-4 pb-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-2">
