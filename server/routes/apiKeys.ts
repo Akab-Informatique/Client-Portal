@@ -3,7 +3,7 @@ import { HTTPException } from "hono/http-exception";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
-import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
+import { auth, permissionsOf, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { keyAllowed, newKey } from "../lib/apiKeys.ts";
@@ -49,6 +49,29 @@ export const apiKeyRoutes = new Hono<AppEnv>()
       .returning();
     await audit(a.user.id, "api_key.created", row.id, { name: p.name, write: p.write, rights: row.permissions.length });
     return c.json({ id: row.id, name: row.name, prefix, key }, 201);
+  })
+
+  /** Change a key that already exists (its rights, write switch, name) without making a new one: the key itself stays the same */
+  .patch("/:id", async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const p = await body(c, zCreate.partial().omit({ expiresInDays: true }));
+    const [key] = await db().select().from(schema.apiKeys).where(eq(schema.apiKeys.id, id));
+    if (!key || key.revokedAt) throw new HTTPException(404, { message: "not_found" });
+    const patch: Partial<typeof schema.apiKeys.$inferInsert> = {};
+    if (p.name !== undefined) patch.name = p.name;
+    if (p.write !== undefined) patch.write = p.write;
+    if (p.permissions !== undefined) {
+      // never more than the person the key acts as holds today, and never what a key can not carry
+      const [owner] = await db().select().from(schema.users).where(eq(schema.users.id, key.userId));
+      const held = new Set<string>(owner ? await permissionsOf(owner) : []);
+      if (p.permissions.some((x) => !keyAllowed(x) || !held.has(x))) throw new HTTPException(400, { message: "right_not_allowed" });
+      patch.permissions = [...new Set(p.permissions)];
+    }
+    if (!Object.keys(patch).length) return c.json({ ok: true });
+    await db().update(schema.apiKeys).set(patch).where(eq(schema.apiKeys.id, id));
+    await audit(a.user.id, "api_key.updated", id, { name: patch.name ?? key.name, write: patch.write ?? key.write, rights: (patch.permissions ?? key.permissions).length });
+    return c.json({ ok: true });
   })
 
   .delete("/:id", async (c) => {

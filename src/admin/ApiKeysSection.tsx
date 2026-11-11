@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Copy, KeyRound, Loader2, Plus, Trash2 } from "lucide-react";
+import { Copy, KeyRound, Loader2, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -30,6 +30,8 @@ export function ApiKeysSection() {
   const [days, setDays] = useState("90");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [fresh, setFresh] = useState<{ name: string; key: string } | null>(null);
+  /** The key being changed (its rights, write switch, name); null = a new key */
+  const [editing, setEditing] = useState<Key | null>(null);
   const refresh = () => void qc.invalidateQueries({ queryKey: KEY, exact: true });
   const create = useMutation({
     mutationFn: () => api.post<{ key: string; name: string }>("/admin/api-keys", { name: name.trim(), permissions: [...picked], write, expiresInDays: days ? Number(days) : null }),
@@ -42,6 +44,29 @@ export function ApiKeysSection() {
     },
     onError: () => toast.error(t("common.error")),
   });
+  const update = useMutation({
+    mutationFn: () => api.patch(`/admin/api-keys/${editing!.id}`, { name: name.trim(), permissions: [...picked], write }),
+    onSuccess: () => {
+      toast.success(t("apiKeys.updated"));
+      stopEditing();
+      refresh();
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  const stopEditing = () => {
+    setEditing(null);
+    setName("");
+    setPicked(new Set());
+    setWrite(false);
+  };
+  const startEditing = (k: Key) => {
+    setEditing(k);
+    setName(k.name);
+    setPicked(new Set(k.permissions));
+    setWrite(k.write);
+    setFresh(null);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const revoke = useMutation({ mutationFn: (id: string) => api.del(`/admin/api-keys/${id}`), onSuccess: refresh, onError: () => toast.error(t("common.error")) });
   const toggle = (k: string) =>
     setPicked((s) => {
@@ -73,11 +98,12 @@ export function ApiKeysSection() {
       )}
       <section className="mb-8 space-y-4 rounded-2xl border bg-card/60 p-4">
         <h3 className="flex items-center gap-2 font-semibold">
-          <KeyRound className="size-4" /> {t("apiKeys.new")}
+          <KeyRound className="size-4" /> {editing ? t("apiKeys.editing", { name: editing.name }) : t("apiKeys.new")}
         </h3>
         <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem]">
           <Input value={name} maxLength={80} placeholder={t("apiKeys.namePh")} onChange={(e) => setName(e.target.value)} aria-label={t("apiKeys.name")} />
-          <Input value={days} inputMode="numeric" placeholder={t("apiKeys.days")} onChange={(e) => setDays(e.target.value.replace(/\D/g, "").slice(0, 3))} aria-label={t("apiKeys.days")} />
+          {editing ? <p className="self-center text-xs text-muted-foreground">{t("apiKeys.sameKey")}</p> : null}
+          <Input value={days} inputMode="numeric" className={editing ? "hidden" : undefined} placeholder={t("apiKeys.days")} onChange={(e) => setDays(e.target.value.replace(/\D/g, "").slice(0, 3))} aria-label={t("apiKeys.days")} />
         </div>
         <label className="flex items-center gap-3 text-sm">
           <Switch checked={write} onCheckedChange={setWrite} />
@@ -106,9 +132,20 @@ export function ApiKeysSection() {
             </fieldset>
           ))}
         </div>
-        <Button type="button" disabled={!name.trim() || picked.size === 0 || create.isPending} onClick={() => create.mutate()}>
-          {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} {t("apiKeys.create")}
-        </Button>
+        {editing ? (
+          <div className="flex gap-2">
+            <Button type="button" disabled={!name.trim() || picked.size === 0 || update.isPending} onClick={() => update.mutate()}>
+              {update.isPending ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} {t("apiKeys.save")}
+            </Button>
+            <Button type="button" variant="ghost" onClick={stopEditing}>
+              <X className="size-4" /> {t("apiKeys.cancel")}
+            </Button>
+          </div>
+        ) : (
+          <Button type="button" disabled={!name.trim() || picked.size === 0 || create.isPending} onClick={() => create.mutate()}>
+            {create.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />} {t("apiKeys.create")}
+          </Button>
+        )}
       </section>
       <ul className="divide-y divide-border/60 overflow-hidden rounded-xl border">
         {keys.isLoading && (
@@ -132,6 +169,11 @@ export function ApiKeysSection() {
                   {k.revokedAt ? ` · ${t("apiKeys.revoked")}` : ""}
                 </p>
               </div>
+              {!k.revokedAt && (
+                <Button type="button" variant="ghost" size="icon" aria-label={t("apiKeys.edit")} title={t("apiKeys.edit")} onClick={() => startEditing(k)}>
+                  <Pencil className="size-4" />
+                </Button>
+              )}
               {!k.revokedAt && (
                 <Button
                   type="button"

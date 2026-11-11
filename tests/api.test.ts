@@ -11636,6 +11636,13 @@ describe("API keys for outside tools", () => {
     const logs = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "api_key.write"));
     expect(logs.length).toBeGreaterThan(0);
     expect(JSON.stringify(logs[0].details)).toContain("Grok écriture");
+    // a key made before a new section existed gets its rights changed, and stays the same key
+    expect((await robot.req("GET", "/api/newsletter/issues", undefined, bearer(key))).status).toBe(403);
+    expect((await tech.patch(`/api/admin/api-keys/${made.json.id}`, { permissions: ["newsletter.view"] })).status).toBe(403);
+    expect((await admin.patch(`/api/admin/api-keys/${made.json.id}`, { permissions: ["admin.staff"] })).status).toBe(400);
+    expect((await admin.patch(`/api/admin/api-keys/${made.json.id}`, { permissions: ["tickets.view", "crm.view", "newsletter.view"] })).status).toBe(200);
+    expect((await robot.req("GET", "/api/newsletter/issues", undefined, bearer(key))).status).toBe(200);
+    expect((await admin.get("/api/admin/api-keys")).json.find((x: any) => x.id === made.json.id).permissions).toContain("newsletter.view");
     // revoked
     expect((await admin.del(`/api/admin/api-keys/${made.json.id}`)).status).toBe(200);
     expect((await robot.req("GET", "/api/tickets", undefined, bearer(key))).status).toBe(401);
