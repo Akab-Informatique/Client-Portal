@@ -39,7 +39,7 @@ import {
 
   X,
   type LucideIcon, CalendarPlus, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle, Hand } from "lucide-react";
-import { ManagedBadge, useManagedCompanies, useTakeOver, type ManagedCompany } from "./managed";
+import { HiddenBadge, ManagedBadge, useManagedCompanies, useTakeOver, type ManagedCompany } from "./managed";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -1040,6 +1040,7 @@ function TicketRow({
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
             <span className="min-w-0 break-words font-medium">{tk.title}</span>
             <ManagedBadge managed={tk.managed} />
+            <HiddenBadge hidden={tk.hiddenFromDelegates} />
             {tk.checklist && tk.checklist.total > 0 && (
               <span
                 className={cn("flex shrink-0 items-center gap-0.5 rounded-full border px-1.5 text-[10px] font-semibold", tk.checklist.done === tk.checklist.total ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-border text-muted-foreground")}

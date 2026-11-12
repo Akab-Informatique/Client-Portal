@@ -2,10 +2,11 @@ import { useTranslation } from "react-i18next";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-/** What the server gives the delegate (see server/routes/delegate.ts) */
+/** What the server gives the delegate (see server/routes/delegate.ts). Nothing of AKAB's staff, billing or hours is in these types. */
 export type DelegateStatus = { key: string; label: string; kind: string };
 export type DelegatePriority = { key: string; label: string; kind: string };
 export type DelegateContact = { id: string; name: string; email: string | null };
+export type DelegateRef = { id: string; name: string };
 
 export type DelegateOptions = {
   statuses: DelegateStatus[];
@@ -23,7 +24,9 @@ export type DelegateListItem = {
   dueAt: string | null;
   createdAt: string;
   updatedAt: string;
-  withClient: boolean;
+  akabWorking: boolean;
+  withClient?: boolean;
+  delegate: DelegateRef | null;
 };
 
 export type DelegateList = {
@@ -34,14 +37,24 @@ export type DelegateList = {
   size: number;
 };
 
+/** One line of the conversation: a note the client's people or AKAB wrote, with the time noted on it when there is some */
 export type DelegateActivity = {
   id: string;
   at: string;
   text: string;
-  internal: boolean;
   byDelegate: boolean;
   author: string;
+  workedMinutes: number | null;
 };
+
+export type DelegateChecklistItem = {
+  id: string;
+  text: string;
+  done: boolean;
+  dependsOnId: string | null;
+};
+
+export type DelegateFile = { id: string; name: string; size: number; at: string };
 
 export type DelegateTicket = {
   id: number;
@@ -50,14 +63,18 @@ export type DelegateTicket = {
   description: string;
   status: DelegateStatus;
   priority: DelegatePriority;
+  /** The client's company name, when the server gives it */
+  client?: string | null;
   contact: string | null;
   contactId: string | null;
   dueAt: string | null;
   createdAt: string;
   updatedAt: string;
-  withClient: boolean;
-  withAkab: boolean;
-  attachments: { id: string; name: string; size: number; at: string }[];
+  akabWorking: boolean;
+  team: { delegate: DelegateRef | null; delegates: DelegateRef[] };
+  tags: string[];
+  checklist: DelegateChecklistItem[];
+  attachments: DelegateFile[];
   activity: DelegateActivity[];
 };
 
@@ -108,6 +125,14 @@ export function PriorityBadge({ priority }: { priority: DelegatePriority }) {
   return <span className={cn("inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-xs font-medium", PRIORITY_TONE[priority.kind] ?? PRIORITY_TONE.medium)}>{priority.label}</span>;
 }
 
+/** The tone of a status or priority, for a chip that is also a select */
+export function statusTone(kind: string): string {
+  return STATUS_TONE[kind] ?? STATUS_TONE.inProgress;
+}
+export function priorityTone(kind: string): string {
+  return PRIORITY_TONE[kind] ?? PRIORITY_TONE.medium;
+}
+
 /** A readable size, as the client portal writes it */
 export function sizeOf(bytes: number): string {
   if (bytes < 1024) return `${bytes} o`;
@@ -128,23 +153,35 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
+/** The codes the delegate screens know a text for; any other merge_* code reads as a failed merge */
+const KNOWN_CODES = new Set([
+  "with_akab",
+  "checklist_open",
+  "item_blocked",
+  "item_not_started",
+  "invalid_value",
+  "invalid_contact",
+  "invalid_delegate",
+  "rate_limited",
+  "not_self_managed",
+  "not_found",
+  "not_linked",
+  "forbidden",
+  "file_too_big",
+  "merge_same",
+  "merge_already",
+  "merge_target_merged",
+  "merge_other_client",
+]);
+
 /** Turns a delegate API error into a text the person understands (the codes the server answers) */
 export function useDelegateError() {
   const { t } = useTranslation();
   return (e: unknown): string => {
     const code = e instanceof ApiError ? e.code : "";
-    const known = [
-      "with_akab",
-      "checklist_open",
-      "invalid_value",
-      "invalid_contact",
-      "rate_limited",
-      "not_self_managed",
-      "not_found",
-      "not_linked",
-      "forbidden",
-    ];
-    return known.includes(code) ? t(`selfManaged.delegate.errors.${code}`) : t("selfManaged.delegate.errors.generic");
+    if (KNOWN_CODES.has(code)) return t(`selfManaged.delegate.errors.${code}`);
+    if (code.startsWith("merge_")) return t("selfManaged.delegate.errors.merge_failed");
+    return t("selfManaged.delegate.errors.generic");
   };
 }
 

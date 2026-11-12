@@ -6,8 +6,8 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, FolderKanban, FolderInput, Hand, Undo2 } from "lucide-react";
-import { ManagedBadge, useTakeOver } from "./managed";
+import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, FolderKanban, FolderInput, Hand, Undo2, EyeOff } from "lucide-react";
+import { HiddenBadge, ManagedBadge, useDelegateVisibility, useTakeOver } from "./managed";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -305,6 +305,7 @@ function TicketBody({
     void confirm({ title: t("tickets.delete.title", { number: tk.number }), description: t("tickets.delete.text"), confirmLabel: t("tickets.delete.confirm"), destructive: true }).then((ok) => ok && remove.mutate());
   // self-managed clients: take the ticket over for AKAB, or send it back to the client
   const takeOver = useTakeOver();
+  const delegateVisibility = useDelegateVisibility();
   const statusOpt = tk.options.statuses.find((s) => s.value === view.status);
   // where the ticket came from, in the portal's own words (Admin › Billets)
   const sourceName = (tk.options.sources ?? []).find((x) => x.value === tk.source)?.label ?? (tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "");
@@ -427,6 +428,7 @@ function TicketBody({
               {tk.contact && <span className="truncate">· {tk.contact}</span>}
             </span>
             <ManagedBadge managed={tk.managed} />
+            <HiddenBadge hidden={tk.hiddenFromDelegates} />
 
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
@@ -448,6 +450,18 @@ function TicketBody({
             {can("tickets.edit") && can("tickets.selfManaged") && !partial && tk.managed === "akab" && (
               <Button variant="outline" size="sm" className="h-9 gap-1.5" disabled={takeOver.pending} onClick={() => takeOver.sendBack(tk.id)}>
                 <Undo2 className="size-4" /> {t("selfManaged.staff.sendBack")}
+              </Button>
+            )}
+            {can("tickets.edit") && !partial && tk.managed && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5"
+                disabled={delegateVisibility.pending}
+                onClick={() => delegateVisibility.toggle(tk.id, !tk.hiddenFromDelegates)}
+              >
+                {tk.hiddenFromDelegates ? <Eye className="size-4 text-primary" /> : <EyeOff className="size-4 text-primary" />}
+                {t(tk.hiddenFromDelegates ? "selfManaged.staff.show.button" : "selfManaged.staff.hide.button")}
               </Button>
             )}
             {can("tickets.edit") && !partial && <NotifyTech tk={tk} />}
@@ -599,8 +613,11 @@ function TicketBody({
                 key: "team",
                 icon: Users,
                 label: t("tickets.sections.team"),
-                value: assigneeName ?? t("tickets.unassigned"),
-                more: [tk.secondary.length ? `${t("tickets.fields.secondary")} : ${tk.secondary.map((x) => x.name).join(", ")}` : `${t("tickets.fields.secondary")} : —`],
+                // self-managed: the client's delegate is the main technician; our own people are secondary
+                value: tk.delegate ? tk.delegate.name : (assigneeName ?? t("tickets.unassigned")),
+                more: tk.delegate
+                  ? [`${t("selfManaged.staff.akabSecondary")} : ${[assigneeName, ...tk.secondary.map((x) => x.name)].filter(Boolean).join(", ") || "—"}`]
+                  : [tk.secondary.length ? `${t("tickets.fields.secondary")} : ${tk.secondary.map((x) => x.name).join(", ")}` : `${t("tickets.fields.secondary")} : —`],
               },
               {
                 key: "planning",
@@ -664,7 +681,15 @@ function TicketBody({
               <PopoverContent align="start" className={cn("p-3 text-sm", key === "device" ? "w-[26rem]" : "w-80")}>
                 {key === "team" && (
                   <dl className="space-y-3">
-                      <Detail icon={UserRound} label={t("tickets.fields.assignee")}>
+                      {tk.delegate && (
+                        <Detail icon={UserRound} label={t("selfManaged.staff.clientTech")}>
+                          <span className="flex flex-wrap items-center gap-2 px-1">
+                            <span className="font-medium">{tk.delegate.name}</span>
+                            <span className="rounded-full border border-[color:var(--gold)]/30 px-1.5 text-[10px] font-medium text-primary">{t("selfManaged.staff.clientTech")}</span>
+                          </span>
+                        </Detail>
+                      )}
+                      <Detail icon={UserRound} label={tk.delegate ? t("selfManaged.staff.akabSecondary") : t("tickets.fields.assignee")}>
                         <InlinePick
                           disabled={!editable}
                           label={t("tickets.fields.assignee")}
@@ -676,7 +701,7 @@ function TicketBody({
                           }
                         />
                       </Detail>
-                      <Detail icon={Users} label={t("tickets.fields.secondary")}>
+                      <Detail icon={Users} label={tk.delegate ? t("selfManaged.staff.akabSecondary") : t("tickets.fields.secondary")}>
                         <SecondaryPick
                           disabled={!editable}
                           value={tk.secondary.map((p) => p.id)}
@@ -1331,6 +1356,11 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
               <p className="flex flex-wrap items-baseline gap-x-2 text-xs">
                 <span className="font-semibold">{n.author}</span>
                 {n.byDelegate && <span className="rounded-full border border-[color:var(--gold)]/30 px-1.5 text-[10px] font-medium text-primary">{t("selfManaged.staff.delegate")}</span>}
+                {n.byDelegate && (n.workedMinutes ?? 0) > 0 && (
+                  <span className="rounded-full border border-border px-1.5 text-[10px] font-medium text-muted-foreground" title={t("selfManaged.staff.notedHint")}>
+                    {t("selfManaged.staff.notedTime", { time: hm((n.workedMinutes ?? 0) / 60) })}
+                  </span>
+                )}
                 <span className="text-muted-foreground">{longDateTime(n.at)}</span>
               </p>
             );

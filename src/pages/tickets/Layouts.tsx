@@ -15,7 +15,7 @@ import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
 import { useCan, useMe } from "@/lib/session";
 import { cpState, CP_TONE, CONFLICT_CLASS, dateConflict, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
-import { ManagedBadge } from "./managed";
+import { HiddenBadge, ManagedBadge } from "./managed";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
 /** standard: the table as it always was · kanban: boards the team sorts tickets on · compact: one short line per ticket */
@@ -80,7 +80,7 @@ export function LayoutSwitch({ value, onChange }: { value: Layout; onChange: (l:
 }
 
 // ── Compact: one short line per ticket ───────────────────────────────────────────
-export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "managed" | "company" | "priorityKind" | "priorityLabel" | "milestoneDate" | "milestoneTime" | "dueAt" | "statusKind" | "statusLabel">;
+export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "managed" | "hiddenFromDelegates" | "company" | "priorityKind" | "priorityLabel" | "milestoneDate" | "milestoneTime" | "dueAt" | "statusKind" | "statusLabel">;
 
 // Its columns, like the standard view's: moved and resized from the titles, kept on this computer
 const COMPACT_COLUMNS = ["ticket", "company", "priority", "milestone", "due", "status"] as const;
@@ -268,6 +268,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                   {tk.title}
                 </span>
                 <ManagedBadge managed={tk.managed} />
+                <HiddenBadge hidden={tk.hiddenFromDelegates} />
               </span>
             );
             const client = (
@@ -773,6 +774,7 @@ function KanbanCard({ tk, canEdit, onOpen }: { tk: TicketSummary; canEdit: boole
         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{tk.number}</span>
         <span className="line-clamp-2 font-medium">{tk.title}</span>
         <ManagedBadge managed={tk.managed} />
+        <HiddenBadge hidden={tk.hiddenFromDelegates} />
       </p>
       <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{tk.company.name}</p>
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">

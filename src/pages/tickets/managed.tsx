@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Building2 } from "lucide-react";
+import { Building2, EyeOff } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -42,6 +42,47 @@ export function useManagedMutations() {
     onError: (e) => toast.error(ticketErrorText(t, e)),
   });
   return { take, sendBack };
+}
+
+/** Hide a ticket of a self-managed client from its delegates, or show it to them again (tickets.edit) */
+export function useDelegateVisibility() {
+  const { t } = useTranslation();
+  const confirm = useConfirm();
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: ({ id, hidden }: { id: number; hidden: boolean }) => api.post(`/tickets/${id}/delegate-visibility`, { hidden }),
+    onSuccess: (_r, v) => {
+      void qc.invalidateQueries({ queryKey: ["tickets"] });
+      toast.success(t(v.hidden ? "selfManaged.staff.hide.done" : "selfManaged.staff.show.done"));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  return {
+    toggle: (id: number, hidden: boolean) =>
+      void confirm({
+        title: t(hidden ? "selfManaged.staff.hide.title" : "selfManaged.staff.show.title"),
+        description: t(hidden ? "selfManaged.staff.hide.text" : "selfManaged.staff.show.text"),
+        confirmLabel: t(hidden ? "selfManaged.staff.hide.cta" : "selfManaged.staff.show.cta"),
+      }).then((ok) => {
+        if (ok) m.mutate({ id, hidden });
+      }),
+    pending: m.isPending,
+  };
+}
+
+/** Small tag on a ticket hidden from the client's delegates. Nothing for other tickets. */
+export function HiddenBadge({ hidden, className }: { hidden?: boolean | null; className?: string }) {
+  const { t } = useTranslation();
+  if (!hidden) return null;
+  return (
+    <span
+      title={t("selfManaged.staff.hiddenHint")}
+      className={cn("inline-flex shrink-0 items-center gap-1 rounded-full border border-amber-400/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-300", className)}
+    >
+      <EyeOff className="size-3" />
+      {t("selfManaged.staff.hidden")}
+    </span>
+  );
 }
 
 /** Same actions behind a confirmation: what the buttons, the row menu and the window use */

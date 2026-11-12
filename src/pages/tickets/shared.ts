@@ -35,6 +35,10 @@ export type TicketSummary = {
   secondary: { id: string; name: string }[];
   /** Self-managed companies only: "client" = their delegates have it, "akab" = AKAB took it */
   managed?: "client" | "akab";
+  /** Self-managed companies only: the client's delegated technician who handles it */
+  delegate?: { id: string; name: string } | null;
+  /** Self-managed companies only: hidden from the client's delegates (they do not see it nor its notes) */
+  hiddenFromDelegates?: boolean;
   excerpt: string;
   createdAt: string;
   dueAt: string;
@@ -75,7 +79,7 @@ export type TicketDetail = Omit<TicketSummary, "checklist"> & {
   /** Notes and time entries (work done), oldest first */
   /** Every file of the ticket (no content): came with an email, went with our reply, added by a technician or by the client */
   attachments?: TicketFile[];
-  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; billedHours?: number; userId?: string | null; system?: boolean; by?: "client" | "tech"; mergedFrom?: string; /** written by a client's delegated technician (self-managed companies) */ byDelegate?: boolean }[];
+  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; billedHours?: number; userId?: string | null; system?: boolean; by?: "client" | "tech"; mergedFrom?: string; /** written by a client's delegated technician (self-managed companies) */ byDelegate?: boolean; /** a delegate's noted time, in minutes: informational, not billable, not a time entry */ workedMinutes?: number | null }[];
   /** AI assistant available to me */
   ai: boolean;
   /** The ticket device (absent while the full ticket loads) */

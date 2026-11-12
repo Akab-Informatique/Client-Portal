@@ -35,7 +35,7 @@ import { refreshAccrual, splitBillable } from "../lib/hr.ts";
 import { cleanDirection, directionPrompt } from "../lib/aiDirection.ts";
 import { quebecStamp, scheduleTickets, type SchedIn } from "../lib/ticketSchedule.ts";
 import { billingSettings } from "../lib/billing.ts";
-import { notifyDelegates } from "../lib/delegates.ts";
+import { delegateInfoOf, hiddenFromDelegatesOf, notifyDelegates } from "../lib/delegates.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: the portal's database,
@@ -619,7 +619,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     const checks = await checklistCounts(selected.map((t) => t.id));
     // "managed" only on the tickets of self-managed companies (client's delegates, or AKAB took it)
     const managed = await managedOf(selected.map((t) => t.id));
-    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null, managed: managed.get(t.id) }));
+    // the delegate and "hidden from delegates" of the same tickets (one query)
+    const delegates = await delegateInfoOf(selected.map((t) => t.id));
+    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null, managed: managed.get(t.id), ...(delegates.has(t.id) ? { delegate: delegates.get(t.id)!.delegate, hiddenFromDelegates: delegates.get(t.id)!.hiddenFromDelegates } : {}) }));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -1667,7 +1669,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const id = Number(c.req.param("id"));
     const detail = await run(() => detailOf(src, id, a));
     const managed = (await managedOf([id])).get(id);
-    return c.json(managed ? { ...detail, managed } : detail);
+    const delegate = (await delegateInfoOf([id])).get(id);
+    return c.json({ ...detail, ...(managed ? { managed } : {}), ...(delegate ? { delegate: delegate.delegate, hiddenFromDelegates: delegate.hiddenFromDelegates } : {}) });
   })
 
   // ── AI on one ticket ──
@@ -2056,7 +2059,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     await run(() => src.addNote(id, { text: `Pris en charge par AKAB — ${a.realUser.name}`, internal: true }, a));
     await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, id));
     await audit(a.user.id, "ticket.taken", String(id));
-    await notifyDelegates(row.companyId, { type: "ticket.taken", data: { number: row.number, title: row.title }, link: `/manage?ticket=${id}` });
+    // a ticket hidden from the delegates is not told to them
+    if (!(await hiddenFromDelegatesOf(id))) await notifyDelegates(row.companyId, { type: "ticket.taken", data: { number: row.number, title: row.title }, link: `/manage?ticket=${id}` });
     return c.json({ ok: true });
   })
 
@@ -2074,8 +2078,27 @@ export const ticketRoutes = new Hono<AppEnv>()
     await run(() => src.addNote(id, { text: `Renvoyé au client — ${a.realUser.name}`, internal: true }, a));
     await db().update(schema.tickets).set({ akabTakenAt: null, assigneeId: null, assigneeName: null, secondary: [] }).where(eq(schema.tickets.id, id));
     await audit(a.user.id, "ticket.sent_back", String(id));
-    await notifyDelegates(row.companyId, { type: "ticket.sent_back", data: { number: row.number, title: row.title }, link: `/manage?ticket=${id}` });
+    if (!(await hiddenFromDelegatesOf(id))) await notifyDelegates(row.companyId, { type: "ticket.sent_back", data: { number: row.number, title: row.title }, link: `/manage?ticket=${id}` });
     return c.json({ ok: true });
+  })
+
+  /**
+   * Hide a ticket of a self-managed client from its delegates (tickets.edit), or show it again: they do not see it,
+   * its notes or its lists, and are not told about it. Our staff keep it. Only for a self-managed company's ticket.
+   */
+  .post("/:id/delegate-visibility", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ hidden: z.boolean() }).strict());
+    const [row] = await db().select({ id: schema.tickets.id, companyId: schema.tickets.companyId }).from(schema.tickets).where(eq(schema.tickets.id, id));
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    if (!(await selfManagedCompanyIds()).has(row.companyId)) throw new HTTPException(409, { message: "not_self_managed" });
+    const src = await ticketSource(ticketScopeOf(c));
+    await run(() => src.addNote(id, { text: p.hidden ? "Masqué aux techniciens délégués" : "Visible aux techniciens délégués", internal: true }, a));
+    await db().update(schema.tickets).set({ hiddenFromDelegates: p.hidden }).where(eq(schema.tickets.id, id));
+    await audit(a.user.id, "ticket.delegate_visibility", String(id), { hidden: p.hidden });
+    return c.json({ ok: true, hiddenFromDelegates: p.hidden });
   })
 
   /**

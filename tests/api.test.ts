@@ -12361,15 +12361,15 @@ describe("delegated technician", () => {
     expect((await delegate.get("/api/portal/delegate/tickets/abc")).status).toBe(404);
 
     // (4) replies and notes: written by the delegate, flagged, never emailed; staff see the delegate's notes
-    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "Merci, nous redémarrons le poste.", kind: "reply" })).status).toBe(201);
-    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "Note de l'équipe du client", kind: "note" })).status).toBe(201);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "Merci, nous redémarrons le poste." })).status).toBe(201);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "Note publique du client" })).status).toBe(201);
     expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "x", kind: "time" })).status).toBe(400);
-    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "x", kind: "reply", internal: true })).status).toBe(400);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "x", internal: true })).status).toBe(400);
     const saved = await db().select().from(schema.ticketNotes).where(and(eq(schema.ticketNotes.ticketId, own.id), eq(schema.ticketNotes.byDelegate, true)));
     expect(saved.find((n) => n.text.startsWith("Merci"))).toMatchObject({ internal: false, byDelegate: true });
-    expect(saved.find((n) => n.text.startsWith("Note de l'équipe"))).toMatchObject({ internal: true, byDelegate: true });
+    expect(saved.find((n) => n.text.startsWith("Note publique du client"))).toMatchObject({ internal: false, byDelegate: true });
     const det2 = (await delegate.get(`/api/portal/delegate/tickets/${own.id}`)).json;
-    expect(det2.activity.map((n: { text: string }) => n.text)).toEqual(expect.arrayContaining(["Merci, nous redémarrons le poste.", "Note de l'équipe du client"]));
+    expect(det2.activity.map((n: { text: string }) => n.text)).toEqual(expect.arrayContaining(["Merci, nous redémarrons le poste.", "Note publique du client"]));
     const staffView = (await admin.get(`/api/tickets/${own.id}`)).json;
     expect(staffView.notes.find((n: { text: string }) => n.text.startsWith("Merci"))).toMatchObject({ byDelegate: true });
 
@@ -12398,7 +12398,7 @@ describe("delegated technician", () => {
     expect((await delegate.post("/api/portal/delegate/tickets", { title: "x", assigneeId: delegateUser.id })).status).toBe(400);
     expect((await delegate.post("/api/portal/delegate/tickets", { title: "x", contactId: "personne" })).json.error).toBe("invalid_contact");
     const [row] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, newId));
-    expect(row).toMatchObject({ akabTakenAt: null, assigneeId: null, companyId: co.autotaskId });
+    expect(row).toMatchObject({ akabTakenAt: null, assigneeId: null, companyId: co.autotaskId, delegateUserId: delegateUser.id });
     const [meta] = await db().select().from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, newId));
     expect(meta?.queue).toBe(await (await import("../server/lib/queues.ts")).defaultQueueKey());
     const authorNote = await db().select().from(schema.ticketNotes).where(and(eq(schema.ticketNotes.ticketId, newId), eq(schema.ticketNotes.byDelegate, true)));
@@ -12443,11 +12443,12 @@ describe("delegated technician", () => {
     expect(helpTold.some((n) => (n.data as { number?: string }).number === helpT.number)).toBe(true);
     const read = await delegate.get(`/api/portal/delegate/tickets/${helpT.id}`);
     expect(read.status).toBe(200);
-    expect(read.json).toMatchObject({ withAkab: true, withClient: false });
-    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/notes`, { text: "x", kind: "note" })).json.error).toBe("with_akab");
-    expect((await delegate.patch(`/api/portal/delegate/tickets/${helpT.id}`, { priority: "low" })).json.error).toBe("with_akab");
-    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/attachments`, { name: "a.txt", contentType: "text/plain", data: "YQ==" })).json.error).toBe("with_akab");
-    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/help`, {})).json.error).toBe("with_akab");
+    expect(read.json).toMatchObject({ withAkab: true, akabWorking: true, withClient: false });
+    // AKAB has it, the delegate keeps working it (only help is over)
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/notes`, { text: "Suivi après l'aide" })).status).toBe(201);
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${helpT.id}`, { priority: "low" })).status).toBe(200);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/attachments`, { name: "a.txt", contentType: "text/plain", data: "YQ==" })).status).toBe(201);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/help`, {})).json.error).toBe("already_with_akab");
     expect(JSON.stringify((await delegate.get("/api/portal/delegate/tickets?withAkab=1")).json)).toContain(helpT.number);
 
     // (10) send back: hidden again for our staff without the right; the delegate writes again
@@ -12455,7 +12456,7 @@ describe("delegated technician", () => {
     await denyTech();
     expect((await tech.get(`/api/tickets/${helpT.id}`)).status).toBe(404);
     await allowTech();
-    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/notes`, { text: "Reprise par le client", kind: "reply" })).status).toBe(201);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/notes`, { text: "Reprise par le client" })).status).toBe(201);
     expect((await delegate.get(`/api/portal/delegate/tickets/${helpT.id}`)).json).toMatchObject({ withClient: true });
     const backTold = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, delegateUser.id), eq(schema.notifications.type, "ticket.sent_back")));
     expect(backTold.some((n) => (n.data as { number?: string }).number === helpT.number)).toBe(true);
@@ -12464,11 +12465,229 @@ describe("delegated technician", () => {
     expect((await admin.post(`/api/tickets/${takeT.id}/take`, {})).status).toBe(200);
     const takenTold = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, delegateUser.id), eq(schema.notifications.type, "ticket.taken")));
     expect(takenTold.some((n) => (n.data as { number?: string }).number === takeT.number)).toBe(true);
-    expect((await delegate.post(`/api/portal/delegate/tickets/${takeT.id}/notes`, { text: "x", kind: "reply" })).json.error).toBe("with_akab");
+    expect((await delegate.post(`/api/portal/delegate/tickets/${takeT.id}/notes`, { text: "Écrit pendant la prise" })).status).toBe(201);
+    expect((await delegate.get(`/api/portal/delegate/tickets/${takeT.id}`)).json).toMatchObject({ akabWorking: true, withClient: false });
 
     // (12) rate limits: notes 60 an hour
     let refused = 0;
-    for (let i = 0; i < 70 && !refused; i++) if ((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: `Suivi ${i}`, kind: "note" })).status === 429) refused = i;
+    for (let i = 0; i < 70 && !refused; i++) if ((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: `Suivi ${i}` })).status === 429) refused = i;
     expect(refused).toBeGreaterThan(50);
+  });
+});
+
+describe("delegated technician: team, noted time, checklist, merge", () => {
+  it("AKAB's take does not stop the delegate; a noted time is only a note; the team, checklist, tags, merge and hidden tickets follow the delegate rules", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [adminUser] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const { clearSelfManagedCache } = await import("../server/lib/selfManaged.ts");
+    const { clientRoleId } = await import("../server/lib/clientRoles.ts");
+    const { hashPassword } = await import("../server/lib/crypto.ts");
+    const [co] = await db().insert(schema.clients).values({ name: "Zz Équipe Co (test)", autotaskId: 9_700_001, portalEnabled: true, selfManaged: "on" }).returning();
+    const [other] = await db().insert(schema.clients).values({ name: "Zz Équipe Autre (test)", autotaskId: 9_700_002, portalEnabled: true, selfManaged: "on" }).returning();
+    const [plain] = await db().insert(schema.clients).values({ name: "Zz Équipe Simple (test)", autotaskId: 9_700_003, portalEnabled: true }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    clearSelfManagedCache();
+    const passwordHash = await hashPassword(PASSWORD);
+    const mkUser = async (email: string, name: string, clientId: string, slug: string) => {
+      const roleId = await clientRoleId(clientId, slug);
+      await db().insert(schema.users).values({ email, name, kind: "client", clientId, roleId, active: true, passwordHash, mustChangePassword: false });
+    };
+    await mkUser("dora-deleg2@zz-deleg2.example", "Dora Déléguée", co.id, "client-delegate");
+    await mkUser("leo-deleg2@zz-deleg2.example", "Léo Délégué", co.id, "client-delegate");
+    await mkUser("ari-deleg2@zz-deleg2.example", "Ari Autre", other.id, "client-delegate");
+    const dora = await signIn("dora-deleg2@zz-deleg2.example");
+    const [doraUser] = await db().select().from(schema.users).where(eq(schema.users.email, "dora-deleg2@zz-deleg2.example"));
+    const [leoUser] = await db().select().from(schema.users).where(eq(schema.users.email, "leo-deleg2@zz-deleg2.example"));
+    const [ariUser] = await db().select().from(schema.users).where(eq(schema.users.email, "ari-deleg2@zz-deleg2.example"));
+
+    const mk = async (title: string, companyId: number, queue = "support") =>
+      (await admin.post("/api/tickets", { title, description: "x", companyId, priority: "medium", queue, assigneeId: null, dueDate: "2026-12-05" })).json;
+    // made by the delegates' side: AKAB has not taken them
+    const outside = async (t: { id: number }) => {
+      await db().update(schema.tickets).set({ akabTakenAt: null }).where(eq(schema.tickets.id, t.id));
+      return t;
+    };
+    const taken = await outside(await mk("Billet pris par AKAB", co.autotaskId!));
+    const helped = await outside(await mk("Billet à aider", co.autotaskId!));
+    const noted = await outside(await mk("Billet avec temps noté", co.autotaskId!));
+    const listed = await outside(await mk("Billet du contact", co.autotaskId!));
+    const teamT = await outside(await mk("Billet d'équipe", co.autotaskId!));
+    const steps = await outside(await mk("Billet des étapes", co.autotaskId!));
+    const tagged = await outside(await mk("Billet étiquettes", co.autotaskId!));
+    const mA = await outside(await mk("Doublon Alpha", co.autotaskId!));
+    const mB = await outside(await mk("Doublon Bêta", co.autotaskId!));
+    const alertT = await outside(await mk("Alerte de l'équipe", co.autotaskId!, "alerts"));
+    const otherT = await outside(await mk("Billet autre entreprise", other.autotaskId!));
+    const hiddenT = await outside(await mk("Billet caché aux délégués", co.autotaskId!));
+    const plainT = await mk("Billet entreprise simple", plain.autotaskId!);
+
+    const contactA = (await admin.post(`/api/tickets/companies/${co.autotaskId}/contacts`, { firstName: "Cora", lastName: "Contact", email: "cora-deleg2@zz-deleg2.example" })).json;
+    const contactB = (await admin.post(`/api/tickets/companies/${co.autotaskId}/contacts`, { firstName: "Ben", lastName: "Contact", email: "ben-deleg2@zz-deleg2.example" })).json;
+    await db().update(schema.tickets).set({ contactId: contactA.id, contactName: "Cora Contact" }).where(eq(schema.tickets.id, listed.id));
+    await db().update(schema.tickets).set({ contactId: contactA.id, contactName: "Cora Contact" }).where(eq(schema.tickets.id, teamT.id));
+    await db().update(schema.tickets).set({ contactId: contactB.id, contactName: "Ben Contact" }).where(eq(schema.tickets.id, steps.id));
+    // our side: an internal note (never shown), a public reply, a note the delegate may not see
+    await admin.post(`/api/tickets/${noted.id}/notes`, { text: "SECRET interne équipe", internal: true });
+    await admin.post(`/api/tickets/${noted.id}/notes`, { text: "Réponse publique équipe", internal: false, email: false });
+
+    // (1) AKAB takes a ticket: the delegate keeps writing, and only learns that AKAB works with him
+    expect((await admin.post(`/api/tickets/${taken.id}/take`, {})).status).toBe(200);
+    const detT = (await dora.get(`/api/portal/delegate/tickets/${taken.id}`)).json;
+    expect(detT).toMatchObject({ akabWorking: true, withAkab: true, withClient: false });
+    expect(JSON.stringify(detT)).not.toContain("Pris en charge par AKAB");
+    expect((await dora.post(`/api/portal/delegate/tickets/${taken.id}/notes`, { text: "Suivi après la prise" })).status).toBe(201);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${taken.id}`, { priority: "high" })).status).toBe(200);
+    expect((await dora.post(`/api/portal/delegate/tickets/${taken.id}/checklist`, { text: "Vérifier le lien" })).status).toBe(201);
+    expect((await dora.put(`/api/portal/delegate/tickets/${taken.id}/tags`, { tags: ["Suivi"] })).status).toBe(200);
+    const listAll = (await dora.get("/api/portal/delegate/tickets")).json;
+    expect(listAll.items.find((x: { number: string }) => x.number === taken.number)).toMatchObject({ akabWorking: true, withClient: false });
+
+    // the help request hands the ticket to AKAB once; a second one is refused; the delegate keeps writing
+    expect((await dora.post(`/api/portal/delegate/tickets/${helped.id}/help`, { message: "Panne du serveur" })).status).toBe(201);
+    expect((await dora.get(`/api/portal/delegate/tickets/${helped.id}`)).json).toMatchObject({ akabWorking: true, withClient: false });
+    expect((await dora.post(`/api/portal/delegate/tickets/${helped.id}/help`, {})).json.error).toBe("already_with_akab");
+    expect((await dora.post(`/api/portal/delegate/tickets/${helped.id}/notes`, { text: "Après l'aide" })).status).toBe(201);
+    const detH = (await dora.get(`/api/portal/delegate/tickets/${helped.id}`)).json;
+    expect(JSON.stringify(detH)).not.toContain("Aide demandée");
+    expect(JSON.stringify(detH)).not.toContain("Panne du serveur");
+    expect(detH.activity.map((n: { text: string }) => n.text)).toContain("Après l'aide");
+
+    // (2) the noted time is a note only: never a time entry, never billed; internal notes never come back
+    const timeBefore = (await db().select().from(schema.timesheetEntries)).length;
+    const ticketTimeBefore = (await db().select().from(schema.ticketTimeEntries)).length;
+    expect((await dora.post(`/api/portal/delegate/tickets/${noted.id}/notes`, { text: "Vérifié le réseau", workedMinutes: 45 })).status).toBe(201);
+    expect((await dora.post(`/api/portal/delegate/tickets/${noted.id}/notes`, { text: "Sans temps" })).status).toBe(201);
+    for (const bad of [{ text: "x", workedMinutes: 2000 }, { text: "x", workedMinutes: -1 }, { text: "x", workedMinutes: 1.5 }, { text: "x", kind: "note" }, { text: "x", internal: true }]) {
+      expect((await dora.post(`/api/portal/delegate/tickets/${noted.id}/notes`, bad)).status).toBe(400);
+    }
+    expect((await db().select().from(schema.timesheetEntries)).length).toBe(timeBefore);
+    expect((await db().select().from(schema.ticketTimeEntries)).length).toBe(ticketTimeBefore);
+    const [timed] = await db().select().from(schema.ticketNotes).where(and(eq(schema.ticketNotes.ticketId, noted.id), eq(schema.ticketNotes.text, "Vérifié le réseau")));
+    expect(timed).toMatchObject({ internal: false, byDelegate: true, workedMinutes: 45 });
+    const detN = (await dora.get(`/api/portal/delegate/tickets/${noted.id}`)).json;
+    expect(detN.activity.find((n: { text: string }) => n.text === "Vérifié le réseau")).toMatchObject({ workedMinutes: 45, byDelegate: true });
+    expect(detN.activity.find((n: { text: string }) => n.text === "Sans temps")).toMatchObject({ workedMinutes: null });
+    expect(detN.activity.map((n: { text: string }) => n.text)).toContain("Réponse publique équipe");
+    expect(JSON.stringify(detN)).not.toContain("SECRET");
+
+    // (3) the team: delegates of the company only; the delegate is one of them; no staff name anywhere
+    const team0 = (await dora.get(`/api/portal/delegate/tickets/${teamT.id}`)).json;
+    expect(team0.team.delegate).toBeNull();
+    expect(team0.team.delegates.map((d: { name: string }) => d.name)).toEqual(expect.arrayContaining(["Dora Déléguée", "Léo Délégué"]));
+    expect(JSON.stringify(team0)).not.toContain("Ari Autre");
+    expect((await dora.patch(`/api/portal/delegate/tickets/${teamT.id}`, { delegateId: leoUser.id })).status).toBe(200);
+    expect((await dora.get(`/api/portal/delegate/tickets/${teamT.id}`)).json.team.delegate).toMatchObject({ id: leoUser.id, name: "Léo Délégué" });
+    expect((await dora.patch(`/api/portal/delegate/tickets/${teamT.id}`, { delegateId: ariUser.id })).json.error).toBe("invalid_delegate");
+    expect((await dora.patch(`/api/portal/delegate/tickets/${teamT.id}`, { delegateId: adminUser.id })).json.error).toBe("invalid_delegate");
+    expect((await dora.patch(`/api/portal/delegate/tickets/${teamT.id}`, { delegateId: "pas-un-id" })).status).toBe(400);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${teamT.id}`, { delegateId: null })).status).toBe(200);
+    expect((await dora.get(`/api/portal/delegate/tickets/${teamT.id}`)).json.team.delegate).toBeNull();
+    const made = await dora.post("/api/portal/delegate/tickets", { title: "Billet créé par Dora" });
+    expect(made.status).toBe(201);
+    expect((await dora.get(`/api/portal/delegate/tickets/${made.json.id}`)).json.team.delegate).toMatchObject({ id: doraUser.id, name: "Dora Déléguée" });
+    const everything = JSON.stringify([detT, detN, detH, team0, (await dora.get("/api/portal/delegate/tickets")).json, (await dora.get("/api/portal/delegate/options")).json]);
+    expect(everything).not.toContain(adminUser.name);
+    expect(everything).not.toContain("Alex Tremblay");
+
+    // (4) the checklist: add, tick, the waiting rule, rename, delete; the errors as the staff routes answer
+    const add = (text: string) => dora.post(`/api/portal/delegate/tickets/${steps.id}/checklist`, { text });
+    const a1 = await add("Étape A");
+    expect(a1.status).toBe(201);
+    expect(a1.json).toHaveLength(1);
+    await add("Étape B");
+    const c3 = await add("Étape C");
+    const items = c3.json as { id: string; text: string; done: boolean; dependsOnId: string | null }[];
+    expect(items.map((x) => x.text)).toEqual(["Étape A", "Étape B", "Étape C"]);
+    expect(Object.keys(items[0]).sort()).toEqual(["dependsOnId", "done", "id", "text"]);
+    expect((await add("")).status).toBe(400);
+    expect((await add("x".repeat(301))).status).toBe(400);
+    expect((await dora.post(`/api/portal/delegate/tickets/${steps.id}/checklist`, { text: "x", dependsOnId: items[0].id })).status).toBe(400);
+    const [A, B, C] = items;
+    // staff makes B wait for C: B cannot be ticked before C
+    expect((await admin.patch(`/api/tickets/${steps.id}/checklist/${B.id}`, { dependsOnId: C.id })).status).toBe(200);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/${B.id}`, { done: true })).status).toBe(409);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/${C.id}`, { done: true })).status).toBe(200);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/${B.id}`, { done: true })).status).toBe(200);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/${C.id}`, { done: false })).status).toBe(409);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/${A.id}`, { text: "Étape A renommée" })).status).toBe(200);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/${A.id}`, { dependsOnId: C.id })).status).toBe(400);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/${A.id}`, { done: "oui" })).status).toBe(400);
+    expect((await dora.patch(`/api/portal/delegate/tickets/${steps.id}/checklist/pas-un-id`, { done: true })).status).toBe(404);
+    expect((await dora.del(`/api/portal/delegate/tickets/${steps.id}/checklist/${A.id}`)).status).toBe(200);
+    expect((await dora.del(`/api/portal/delegate/tickets/${steps.id}/checklist/00000000-0000-4000-8000-000000000000`)).status).toBe(404);
+    const after = (await dora.get(`/api/portal/delegate/tickets/${steps.id}`)).json.checklist;
+    expect(after.map((x: { text: string }) => x.text)).toEqual(["Étape B", "Étape C"]);
+    expect(after.find((x: { id: string }) => x.id === B.id)).toMatchObject({ done: true, dependsOnId: C.id });
+
+    // (5) tags: at most 12, each 1..30 characters, no doubles, nothing else in the body
+    const tagsUrl = `/api/portal/delegate/tickets/${tagged.id}/tags`;
+    expect((await dora.put(tagsUrl, { tags: Array.from({ length: 13 }, (_, i) => `t${i}`) })).status).toBe(400);
+    expect((await dora.put(tagsUrl, { tags: ["x".repeat(31)] })).status).toBe(400);
+    expect((await dora.put(tagsUrl, { tags: [" "] })).status).toBe(400);
+    expect((await dora.put(tagsUrl, { tags: ["a"], color: "red" })).status).toBe(400);
+    const tagged1 = await dora.put(tagsUrl, { tags: ["Urgent", " urgent ", "Réseau"] });
+    expect(tagged1.status).toBe(200);
+    expect(tagged1.json).toEqual({ tags: ["Urgent", "Réseau"] });
+    expect((await dora.get(`/api/portal/delegate/tickets/${tagged.id}`)).json.tags).toEqual(["Urgent", "Réseau"]);
+    expect((await admin.get(`/api/tickets/${tagged.id}`)).json.tags).toEqual(["Urgent", "Réseau"]);
+
+    // (6) hidden from delegates: staff set it (the company must be self-managed); the delegate sees nothing of it
+    expect((await admin.post(`/api/tickets/${plainT.id}/delegate-visibility`, { hidden: true })).json.error).toBe("not_self_managed");
+    expect((await admin.post(`/api/tickets/${hiddenT.id}/delegate-visibility`, { hidden: "oui" })).status).toBe(400);
+    expect((await admin.post(`/api/tickets/${hiddenT.id}/delegate-visibility`, { hidden: true })).json).toMatchObject({ ok: true, hiddenFromDelegates: true });
+    expect((await admin.get(`/api/tickets/${hiddenT.id}`)).json).toMatchObject({ hiddenFromDelegates: true });
+    expect(JSON.stringify((await admin.get(`/api/tickets/${hiddenT.id}`)).json)).toContain("Masqué aux techniciens délégués");
+    const hiddenUrl = `/api/portal/delegate/tickets/${hiddenT.id}`;
+    expect((await dora.get(hiddenUrl)).status).toBe(404);
+    expect((await dora.post(`${hiddenUrl}/notes`, { text: "x" })).status).toBe(404);
+    expect((await dora.patch(hiddenUrl, { priority: "low" })).status).toBe(404);
+    expect((await dora.post(`${hiddenUrl}/checklist`, { text: "x" })).status).toBe(404);
+    expect((await dora.put(`${hiddenUrl}/tags`, { tags: ["x"] })).status).toBe(404);
+    expect((await dora.get(`${hiddenUrl}/merge-targets`)).status).toBe(404);
+    expect((await dora.post(`${hiddenUrl}/merge`, { intoId: mA.id })).status).toBe(404);
+    expect((await dora.post(`/api/portal/delegate/tickets/${mA.id}/merge`, { intoId: hiddenT.id })).status).toBe(404);
+    expect((await dora.get(`${hiddenUrl}/files/00000000-0000-4000-8000-000000000000`)).status).toBe(404);
+    expect(JSON.stringify((await dora.get("/api/portal/delegate/tickets?status=all")).json)).not.toContain(hiddenT.number);
+    // a take by AKAB of a hidden ticket tells none of the delegates
+    expect((await admin.post(`/api/tickets/${hiddenT.id}/take`, {})).status).toBe(200);
+    const takenTold = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, doraUser.id), eq(schema.notifications.type, "ticket.taken")));
+    expect(takenTold.some((n) => (n.data as { number?: string }).number === hiddenT.number)).toBe(false);
+    expect((await admin.post(`/api/tickets/${hiddenT.id}/delegate-visibility`, { hidden: false })).json).toMatchObject({ ok: true, hiddenFromDelegates: false });
+    expect((await dora.get(hiddenUrl)).json).toMatchObject({ akabWorking: true, withClient: false });
+
+    // (7) merge: within the company, both tickets visible to the delegate, no alert, no other company
+    const targets = (await dora.get(`/api/portal/delegate/tickets/${mA.id}/merge-targets?q=doublon`)).json.items.map((x: { number: string }) => x.number);
+    expect(targets).toContain(mB.number);
+    expect(targets).not.toContain(mA.number);
+    expect(targets).not.toContain(otherT.number);
+    expect(JSON.stringify((await dora.get(`/api/portal/delegate/tickets/${mA.id}/merge-targets?q=alerte`)).json)).not.toContain(alertT.number);
+    expect((await dora.post(`/api/portal/delegate/tickets/${mA.id}/merge`, { intoId: otherT.id })).status).toBe(404);
+    expect((await dora.post(`/api/portal/delegate/tickets/${mA.id}/merge`, { intoId: alertT.id })).status).toBe(404);
+    expect((await dora.post(`/api/portal/delegate/tickets/${alertT.id}/merge`, { intoId: mA.id })).status).toBe(404);
+    expect((await dora.post(`/api/portal/delegate/tickets/${mA.id}/merge`, { intoId: mA.id })).status).toBe(400);
+    expect((await dora.post(`/api/portal/delegate/tickets/${mA.id}/merge`, { intoId: mB.id })).json).toMatchObject({ ok: true });
+    const [mergedA] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, mA.id));
+    expect(mergedA).toMatchObject({ status: "merged", mergedIntoId: mB.id });
+    expect((await dora.get(`/api/portal/delegate/tickets/${mA.id}`)).status).toBe(404);
+    expect((await dora.post(`/api/portal/delegate/tickets/${mB.id}/merge`, { intoId: mA.id })).status).toBe(404);
+    expect(JSON.stringify((await dora.get(`/api/portal/delegate/tickets/${mB.id}/merge-targets`)).json)).not.toContain(mA.number);
+
+    // (8) the list: the contact's tickets, leaving one out
+    const byA = (await dora.get(`/api/portal/delegate/tickets?contactId=${contactA.id}`)).json.items.map((x: { number: string }) => x.number);
+    expect(byA).toEqual(expect.arrayContaining([listed.number, teamT.number]));
+    expect(byA).not.toContain(steps.number);
+    const exA = (await dora.get(`/api/portal/delegate/tickets?contactId=${contactA.id}&exclude=${listed.id}`)).json.items.map((x: { number: string }) => x.number);
+    expect(exA).toContain(teamT.number);
+    expect(exA).not.toContain(listed.number);
+    expect((await dora.get("/api/portal/delegate/tickets")).json.items.find((x: { number: string }) => x.number === made.json.number)).toMatchObject({ delegate: { id: doraUser.id, name: "Dora Déléguée" } });
+
+    // (9) the staff side sees the delegate of a ticket made by a delegate
+    expect((await admin.get(`/api/tickets/${made.json.id}`)).json).toMatchObject({ delegate: { id: doraUser.id, name: "Dora Déléguée" } });
+
+    // (10) the writes are audited
+    const actions = (await db().select({ action: schema.auditLog.action }).from(schema.auditLog)).map((r) => r.action);
+    for (const act of ["delegate.checklist", "delegate.tags", "delegate.delegate_set", "delegate.merged", "ticket.delegate_visibility"]) expect(actions).toContain(act);
   });
 });

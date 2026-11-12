@@ -158,6 +158,7 @@ export function DelegatePage() {
                   <th className="px-4 py-2.5 font-semibold">{t("selfManaged.delegate.columns.status")}</th>
                   <th className="hidden px-4 py-2.5 font-semibold sm:table-cell">{t("selfManaged.delegate.columns.priority")}</th>
                   <th className="hidden px-4 py-2.5 font-semibold lg:table-cell">{t("selfManaged.delegate.columns.contact")}</th>
+                  <th className="hidden px-4 py-2.5 font-semibold xl:table-cell">{t("selfManaged.delegate.columns.technician")}</th>
                   <th className="hidden px-4 py-2.5 font-semibold md:table-cell">{t("selfManaged.delegate.columns.due")}</th>
                   <th className="hidden px-4 py-2.5 font-semibold xl:table-cell">{t("selfManaged.delegate.columns.updated")}</th>
                 </tr>
@@ -182,7 +183,7 @@ export function DelegatePage() {
                         >
                           {x.title}
                         </button>
-                        {!x.withClient && (
+                        {x.akabWorking && (
                           <span className="inline-flex shrink-0 items-center rounded-full border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/12 px-2 py-0.5 text-[11px] font-semibold text-primary">
                             {t("selfManaged.delegate.badgeAkab")}
                           </span>
@@ -197,6 +198,7 @@ export function DelegatePage() {
                       <PriorityBadge priority={x.priority} />
                     </td>
                     <td className="hidden px-4 py-3 text-muted-foreground lg:table-cell">{x.contact ?? t("selfManaged.delegate.noDue")}</td>
+                    <td className="hidden px-4 py-3 text-muted-foreground xl:table-cell">{x.delegate?.name ?? t("selfManaged.delegate.noDue")}</td>
                     <td className="hidden whitespace-nowrap px-4 py-3 md:table-cell">
                       <DueCell value={x.dueAt} complete={x.status.kind === "complete"} />
                     </td>
@@ -232,7 +234,7 @@ export function DelegatePage() {
         errorText={errorText}
       />
 
-      <DelegateTicketDialog id={openId} options={options.data} onClose={() => set({ ticket: null })} />
+      <DelegateTicketDialog id={openId} options={options.data} onClose={() => set({ ticket: null })} onOpen={(id) => set({ ticket: String(id) })} />
     </div>
   );
 }

@@ -1,8 +1,9 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { permissionsOf } from "./auth.ts";
 import type { PermissionKey } from "../../shared/permissions.ts";
 import { notify } from "./notify.ts";
+import { selfManagedCompanyIds } from "./selfManaged.ts";
 
 /**
  * The delegated technicians of a self-managed company: the active client users
@@ -44,4 +45,32 @@ export async function delegatesOfCompany(companyId: number): Promise<string[]> {
 export async function notifyDelegates(companyId: number, n: Parameters<typeof notify>[1], except?: string): Promise<void> {
   const ids = (await delegatesOfCompany(companyId)).filter((id) => id !== except);
   await notify(ids, n);
+}
+
+/** Whether a ticket is hidden from its company's delegates (staff set it): nothing is told to them about it */
+export async function hiddenFromDelegatesOf(ticketId: number): Promise<boolean> {
+  const [r] = await db().select({ h: schema.tickets.hiddenFromDelegates }).from(schema.tickets).where(eq(schema.tickets.id, ticketId));
+  return Boolean(r?.h);
+}
+
+/**
+ * The delegate and the hidden flag of the tickets of self-managed companies, for the staff lists and detail.
+ * One query; the other tickets are not in the map.
+ */
+export async function delegateInfoOf(ids: number[]): Promise<Map<number, { delegate: { id: string; name: string } | null; hiddenFromDelegates: boolean }>> {
+  const out = new Map<number, { delegate: { id: string; name: string } | null; hiddenFromDelegates: boolean }>();
+  if (!ids.length) return out;
+  const companies = await selfManagedCompanyIds();
+  if (!companies.size) return out;
+  const rows = await db()
+    .select({ id: schema.tickets.id, delegateUserId: schema.tickets.delegateUserId, hidden: schema.tickets.hiddenFromDelegates })
+    .from(schema.tickets)
+    .where(and(inArray(schema.tickets.id, ids), inArray(schema.tickets.companyId, [...companies])));
+  const dIds = [...new Set(rows.map((r) => r.delegateUserId).filter((x): x is string => Boolean(x)))];
+  const names = new Map(dIds.length ? (await db().select({ id: schema.users.id, name: schema.users.name }).from(schema.users).where(inArray(schema.users.id, dIds))).map((u) => [u.id, u.name]) : []);
+  for (const r of rows) {
+    const name = r.delegateUserId ? names.get(r.delegateUserId) : undefined;
+    out.set(r.id, { delegate: r.delegateUserId && name !== undefined ? { id: r.delegateUserId, name } : null, hiddenFromDelegates: r.hidden });
+  }
+  return out;
 }
