@@ -3,7 +3,7 @@ import { db, schema } from "../db/index.ts";
 import { permissionsOf } from "./auth.ts";
 import type { PermissionKey } from "../../shared/permissions.ts";
 
-export type NotificationType = "message.new" | "user.locked" | "timer.pending" | "ticket.pinned" | "calendar.reminder" | "sms.received" | "ticket.client" | "ticket.work" | "ticket.notify" | "pipeline.assigned" | "pipeline.day_added" | "project.reminder" | "project.note" | "security.alert" | "breakroom.invite" | "breakroom.complots" | "hr.negative" | "billing.card_failed" | "billing.autopay_client_off" | "ticket.hidden";
+export type NotificationType = "message.new" | "user.locked" | "timer.pending" | "ticket.pinned" | "calendar.reminder" | "sms.received" | "ticket.client" | "ticket.work" | "ticket.notify" | "pipeline.assigned" | "pipeline.day_added" | "project.reminder" | "project.note" | "security.alert" | "breakroom.invite" | "breakroom.complots" | "hr.negative" | "billing.card_failed" | "billing.autopay_client_off" | "ticket.hidden" | "ticket.help" | "ticket.taken" | "ticket.sent_back";
 
 type Notice = { type: NotificationType; data: Record<string, unknown>; link: string };
 

@@ -75,7 +75,7 @@ export type TicketDetail = Omit<TicketSummary, "checklist"> & {
   /** Notes and time entries (work done), oldest first */
   /** Every file of the ticket (no content): came with an email, went with our reply, added by a technician or by the client */
   attachments?: TicketFile[];
-  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; billedHours?: number; userId?: string | null; system?: boolean; by?: "client" | "tech"; mergedFrom?: string }[];
+  notes: { id: string; author: string; at: string; text: string; internal: boolean; kind?: "note" | "time"; hours?: number; internalText?: string; billable?: boolean; offsetHours?: number; billedHours?: number; userId?: string | null; system?: boolean; by?: "client" | "tech"; mergedFrom?: string; /** written by a client's delegated technician (self-managed companies) */ byDelegate?: boolean }[];
   /** AI assistant available to me */
   ai: boolean;
   /** The ticket device (absent while the full ticket loads) */
@@ -199,7 +199,7 @@ export type View = "mine" | "unassigned" | "due" | "all";
 export const VIEWS: View[] = ["mine", "unassigned", "due", "all"];
 
 /** Filters kept in the address bar (shareable, survive a refresh). */
-export const FILTER_KEYS = ["q", "assignee", "attention", "statusKind", "due", "created", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "sort"] as const;
+export const FILTER_KEYS = ["q", "assignee", "attention", "statusKind", "due", "created", "status", "priority", "company", "queue", "dueFrom", "dueTo", "startFrom", "startTo", "selfManaged", "sort"] as const;
 
 export const PRIORITY_STYLE: Record<PriorityKind, { bar: string; text: string; dot: string }> = {
   critical: { bar: "bg-red-500", text: "text-red-400", dot: "bg-red-500" },

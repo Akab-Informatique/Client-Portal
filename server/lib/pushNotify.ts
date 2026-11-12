@@ -33,6 +33,9 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "billing.card_failed": { fr: "Prélèvement par carte refusé", en: "Card charge declined" },
   "billing.autopay_client_off": { fr: "Paiement automatique retiré par un client", en: "Automatic payment turned off by a client" },
   "ticket.hidden": { fr: "Billets retirés de votre vue", en: "Tickets taken off your view" },
+  "ticket.help": { fr: "Aide demandée sur un billet", en: "Help asked on a ticket" },
+  "ticket.taken": { fr: "Billet repris par AKAB", en: "Ticket taken by AKAB" },
+  "ticket.sent_back": { fr: "Billet renvoyé au client", en: "Ticket sent back to the client" },
 };
 const GENERIC = { fr: "Touchez pour ouvrir le portail.", en: "Tap to open the portal." };
 
@@ -52,6 +55,9 @@ export function pushText(type: NotificationType, data: Record<string, unknown>, 
     case "ticket.work":
     case "ticket.notify":
     case "ticket.client":
+    case "ticket.help":
+    case "ticket.taken":
+    case "ticket.sent_back":
       body = join(data.number, data.title, data.preview ?? data.note ?? data.message);
       break;
     case "calendar.reminder":

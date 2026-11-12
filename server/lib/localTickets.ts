@@ -173,7 +173,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
       const items: Note[] = [
         ...notes
           .filter((n) => !isSmsNote(n.text))
-          .map((n) => ({ id: `n-${n.id}`, author: n.author, at: n.createdAt.toISOString(), text: n.text, internal: n.internal, kind: "note" as const, ...(n.system ? { system: true } : {}), ...(n.mergedFrom ? { mergedFrom: n.mergedFrom } : {}) })),
+          .map((n) => ({ id: `n-${n.id}`, author: n.author, at: n.createdAt.toISOString(), text: n.text, internal: n.internal, kind: "note" as const, ...(n.system ? { system: true } : {}), ...(n.byDelegate ? { byDelegate: true } : {}), ...(n.mergedFrom ? { mergedFrom: n.mergedFrom } : {}) })),
         ...times.map((x) => ({
           id: `t-${x.id}`,
           author: x.author,
@@ -257,7 +257,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
       await one(id);
       await db()
         .insert(schema.ticketNotes)
-        .values({ ticketId: id, author: a.realUser.name, userId: a.realUser.kind === "staff" ? a.realUser.id : null, text: p.text, internal: p.internal });
+        .values({ ticketId: id, author: a.realUser.name, userId: a.realUser.kind === "staff" ? a.realUser.id : null, text: p.text, internal: p.internal, byDelegate: p.byDelegate ?? false });
       await touch(id);
     },
     async create(p, a) {

@@ -2,6 +2,9 @@ import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
 import fr from "./fr";
 import en from "./en";
+import * as smStaff from "./selfManaged.staff";
+import * as smClient from "./selfManaged.client";
+import * as smDelegate from "./selfManaged.delegate";
 
 export type Locale = "fr" | "en";
 
@@ -33,6 +36,9 @@ function applyLocale(lng: string) {
   document.documentElement.lang = l;
   document.title = TITLE[l];
 }
+// the self-managed clients feature keeps its texts in their own files
+for (const lng of ["fr", "en"] as const) for (const m of [smStaff, smClient, smDelegate]) i18n.addResourceBundle(lng, "translation", m[lng], true, false);
+
 applyLocale(i18n.language);
 i18n.on("languageChanged", applyLocale);
 

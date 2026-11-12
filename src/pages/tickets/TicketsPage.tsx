@@ -38,7 +38,8 @@ import {
   UserX,
 
   X,
-  type LucideIcon, CalendarPlus, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle } from "lucide-react";
+  type LucideIcon, CalendarPlus, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle, Hand } from "lucide-react";
+import { ManagedBadge, useManagedCompanies, useTakeOver, type ManagedCompany } from "./managed";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -116,6 +117,10 @@ export function TicketsPage() {
     }, { replace: true });
   }, [sortDefault, params, setParams]);
   const { data, isLoading, dataUpdatedAt, isFetching, refetch } = useTickets(view, params);
+  // self-managed clients (tickets.selfManaged): the filter lists them with their hidden tickets
+  const canManaged = can("tickets.selfManaged");
+  const { data: managedCompanies = [] } = useManagedCompanies(canManaged);
+  const takeOver = useTakeOver();
   const [creating, setCreating] = useState(false);
   // tickets ticked in the list (several at a time: the bar above the filters)
   const [picked, setPicked] = useState<Set<number>>(new Set());
@@ -196,7 +201,7 @@ export function TicketsPage() {
       },
       { replace: true },
     );
-  const activeFilters = FILTER_KEYS.filter((k) => k !== "sort" && k !== "q" && params.get(k));
+  const activeFilters = FILTER_KEYS.filter((k) => k !== "sort" && k !== "q" && (k !== "selfManaged" || canManaged) && params.get(k));
 
   // Shortcuts: "/" search, "n" new ticket (not while typing)
   useEffect(() => {
@@ -301,6 +306,18 @@ export function TicketsPage() {
             <div>
               <MultiFilter label={t("tickets.fields.company")} param="company" options={data.facets.companies.map((c) => ({ value: String(c.id), label: c.name }))} params={params} set={set} searchable />
             </div>
+            {canManaged && (
+              <div>
+                <MultiFilter
+                  label={t("selfManaged.staff.filter")}
+                  param="selfManaged"
+                  options={managedCompanies.map((c) => ({ value: String(c.companyId), label: `${c.name} (${c.hidden})` }))}
+                  params={params}
+                  set={set}
+                  searchable
+                />
+              </div>
+            )}
             <div>
               <MoreFilters data={data} params={params} set={set} />
             </div>
@@ -316,7 +333,7 @@ export function TicketsPage() {
                 onClick={() => set({ [k]: null })}
                 className="flex items-center gap-1 rounded-full border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/[0.06] px-2 py-0.5 text-[11px] text-muted-foreground hover:border-destructive/50 hover:text-foreground"
               >
-                {t(`tickets.filter.${k}`)}: <span className="font-medium text-foreground">{filterLabel(k, params.get(k)!, data, t)}</span>
+                {k === "selfManaged" ? t("selfManaged.staff.filter") : t(`tickets.filter.${k}`)}: <span className="font-medium text-foreground">{filterLabel(k, params.get(k)!, data, t, managedCompanies)}</span>
                 <X className="size-3" />
               </button>
             ))}
@@ -401,6 +418,8 @@ export function TicketsPage() {
                   })
                 }
                 onMerge={can("tickets.edit") && tk.statusKind !== "complete" ? () => setMerging(tk) : undefined}
+                // a client's own ticket (self-managed company): take it over for AKAB
+                onTake={canManaged && can("tickets.edit") && tk.managed === "client" ? () => takeOver.take(tk.id) : undefined}
                 onAddDay={can("pipeline.edit") && tk.statusKind !== "complete" ? () => setAddingDay(tk) : undefined}
                 onDelete={
                   can("tickets.delete")
@@ -866,6 +885,7 @@ function TicketRow({
   picked,
   onPick,
   onMerge,
+  onTake,
   onAddDay,
   onDelete,
   onHover,
@@ -883,6 +903,8 @@ function TicketRow({
   onPick: () => void;
   /** Merge into another ticket of the client (open tickets, tickets.edit) */
   onMerge?: () => void;
+  /** Take a self-managed client's ticket over for AKAB (tickets.edit + tickets.selfManaged) */
+  onTake?: () => void;
   /** Put the ticket on my day (pipeline.edit) */
   onAddDay?: () => void;
   /** Only for those who may delete tickets */
@@ -931,7 +953,7 @@ function TicketRow({
           <Checkbox checked={picked} onCheckedChange={onPick} aria-label={t("tickets.bulk.pick", { number: tk.number })} className="size-3.5 rounded-[4px] border-muted-foreground/50" />
         </span>
         {/* The line on the left: it glows with the checkpoint moment (the due date when there is none) and opens the row's menu (accept the ticket, open it, delete it) */}
-        {(editable || onDelete || onMerge || onAddDay) && (
+        {(editable || onDelete || onMerge || onAddDay || onTake) && (
           // out of the grid (absolute): it must not take a column of the row
           <span className="absolute inset-y-0 left-0 z-10 flex" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <DropdownMenu>
@@ -991,6 +1013,11 @@ function TicketRow({
                     <GitMerge className="size-4" /> {t("tickets.merge.button")}
                   </DropdownMenuItem>
                 )}
+                {onTake && (
+                  <DropdownMenuItem onSelect={onTake}>
+                    <Hand className="size-4 text-primary" /> {t("selfManaged.staff.take")}
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onSelect={onOpen}>
                   <ExternalLink className="size-4" /> {t("tickets.rowMenu.open")}
                 </DropdownMenuItem>
@@ -1012,6 +1039,7 @@ function TicketRow({
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
             <span className="min-w-0 break-words font-medium">{tk.title}</span>
+            <ManagedBadge managed={tk.managed} />
             {tk.checklist && tk.checklist.total > 0 && (
               <span
                 className={cn("flex shrink-0 items-center gap-0.5 rounded-full border px-1.5 text-[10px] font-semibold", tk.checklist.done === tk.checklist.total ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300" : "border-border text-muted-foreground")}
@@ -1851,9 +1879,11 @@ function AiPlanButton({ visibleIds }: { visibleIds: number[] }) {
   );
 }
 
-function filterLabel(key: string, value: string, data: TicketList | undefined, t: (k: string) => string) {
+function filterLabel(key: string, value: string, data: TicketList | undefined, t: (k: string) => string, managed: ManagedCompany[] = []) {
   const parts = value.split(",");
   switch (key) {
+    case "selfManaged":
+      return parts.map((p) => managed.find((c) => String(c.companyId) === p)?.name ?? p).join(", ");
     case "assignee":
       return parts.map((p) => (p === "none" ? t("tickets.unassigned") : (data?.facets.technicians.find((x) => x.id === p)?.name ?? p))).join(", ");
     case "status":

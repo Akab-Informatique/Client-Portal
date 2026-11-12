@@ -63,6 +63,8 @@ export type Note = {
   userId?: string | null;
   /** Written by the system itself (workflow rule, forward, merge…), not by a technician or the client */
   system?: boolean;
+  /** Written by a client's delegated technician (self-managed companies): an internal note or a public reply */
+  byDelegate?: boolean;
   /** Who wrote it: the client (a contact, or a reply made in the client portal) or a technician. Absent: told by the name. */
   by?: "client" | "tech";
   /** Written on a ticket that was merged into this one (its number) */
@@ -261,7 +263,7 @@ export interface TicketSource {
   list(): Promise<NTicket[]>;
   get(id: number): Promise<NTicket | null>;
   update(id: number, p: TicketPatch, a: AuthContext): Promise<void>;
-  addNote(id: number, p: { text: string; internal: boolean }, a: AuthContext): Promise<void>;
+  addNote(id: number, p: { text: string; internal: boolean; byDelegate?: boolean }, a: AuthContext): Promise<void>;
   create(p: NewTicket, a: AuthContext): Promise<number>;
   companies(): Promise<Company[]>;
   contacts(companyId: number): Promise<Contact[]>;

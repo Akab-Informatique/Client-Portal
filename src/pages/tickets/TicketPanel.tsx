@@ -6,7 +6,8 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, FolderKanban, FolderInput } from "lucide-react";
+import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, FolderKanban, FolderInput, Hand, Undo2 } from "lucide-react";
+import { ManagedBadge, useTakeOver } from "./managed";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -302,6 +303,8 @@ function TicketBody({
   });
   const askDelete = () =>
     void confirm({ title: t("tickets.delete.title", { number: tk.number }), description: t("tickets.delete.text"), confirmLabel: t("tickets.delete.confirm"), destructive: true }).then((ok) => ok && remove.mutate());
+  // self-managed clients: take the ticket over for AKAB, or send it back to the client
+  const takeOver = useTakeOver();
   const statusOpt = tk.options.statuses.find((s) => s.value === view.status);
   // where the ticket came from, in the portal's own words (Admin › Billets)
   const sourceName = (tk.options.sources ?? []).find((x) => x.value === tk.source)?.label ?? (tk.source ? t(`tickets.source.${tk.source}`, { defaultValue: tk.source }) : "");
@@ -423,6 +426,8 @@ function TicketBody({
               />
               {tk.contact && <span className="truncate">· {tk.contact}</span>}
             </span>
+            <ManagedBadge managed={tk.managed} />
+
             <span className="ml-auto">
               <PresenceLight viewers={viewers} />
             </span>
@@ -435,6 +440,16 @@ function TicketBody({
                   <AiDirection id={`ticket:${tk.id}`} />
                 </span>
               ) : <AiSetupHint label={t("tickets.ai.button")} />)}
+            {can("tickets.edit") && can("tickets.selfManaged") && !partial && tk.managed === "client" && (
+              <Button variant="outline" size="sm" className="h-9 gap-1.5" disabled={takeOver.pending} onClick={() => takeOver.take(tk.id)}>
+                <Hand className="size-4 text-primary" /> {t("selfManaged.staff.take")}
+              </Button>
+            )}
+            {can("tickets.edit") && can("tickets.selfManaged") && !partial && tk.managed === "akab" && (
+              <Button variant="outline" size="sm" className="h-9 gap-1.5" disabled={takeOver.pending} onClick={() => takeOver.sendBack(tk.id)}>
+                <Undo2 className="size-4" /> {t("selfManaged.staff.sendBack")}
+              </Button>
+            )}
             {can("tickets.edit") && !partial && <NotifyTech tk={tk} />}
             <NotificationBell />
             {can("tickets.delete") && !partial && (
@@ -1315,6 +1330,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
             const head = (
               <p className="flex flex-wrap items-baseline gap-x-2 text-xs">
                 <span className="font-semibold">{n.author}</span>
+                {n.byDelegate && <span className="rounded-full border border-[color:var(--gold)]/30 px-1.5 text-[10px] font-medium text-primary">{t("selfManaged.staff.delegate")}</span>}
                 <span className="text-muted-foreground">{longDateTime(n.at)}</span>
               </p>
             );

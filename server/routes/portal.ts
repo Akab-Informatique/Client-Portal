@@ -13,6 +13,7 @@ import { notify, usersWith } from "../lib/notify.ts";
 import { body } from "../lib/validate.ts";
 import { contactOfUser, ticketCompanyOf } from "../lib/clientTickets.ts";
 import { isAlert, lookup, techniciansViewing } from "./tickets.ts";
+import { notifyDelegates } from "../lib/delegates.ts";
 
 /**
  * Client portal › Admin settings: what a client's admin may see about their
@@ -382,7 +383,11 @@ async function run<T>(fn: () => Promise<T>): Promise<T> {
  */
 async function tellTechnicians(t: NTicket, a: AuthContext, kind: "comment" | "file" | "escalation", text: string, dispatchers = false) {
   // a self-managed client's ticket that AKAB has not taken: our team is not told
-  if (await isTicketHidden(t.id)) return;
+  if (await isTicketHidden(t.id)) {
+    // a self-managed company's own delegates work it (the author is left out)
+    await notifyDelegates(t.company.id, { type: "ticket.client", data: { kind, number: t.number, title: t.title, from: a.user.name, company: t.company.name, preview: text.slice(0, 140) }, link: `/tickets?ticket=${t.id}` }, a.user.id);
+    return;
+  }
   const people = [t.assignee, ...t.secondary].filter((p): p is NonNullable<typeof p> => Boolean(p)).map((p) => p.id).filter((id) => !id.startsWith("at-"));
   const to = people.length && !dispatchers ? people : [...people, ...(await usersWith("staff", "tickets.plan"))];
   await notify(to, {

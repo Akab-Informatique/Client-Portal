@@ -12263,3 +12263,206 @@ describe("self-managed clients: staff routes", () => {
     }
   });
 });
+
+
+describe("delegated technician", () => {
+  it("a self-managed company's delegate works its own tickets: never our internal notes, alerts or other companies; help hands a ticket to AKAB and back; takes and send-backs tell the delegate", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const { clearSelfManagedCache } = await import("../server/lib/selfManaged.ts");
+    const { clientRoleId } = await import("../server/lib/clientRoles.ts");
+    const { hashPassword } = await import("../server/lib/crypto.ts");
+    const [co] = await db().insert(schema.clients).values({ name: "Zz Délégué Co (test)", autotaskId: 9_600_001, portalEnabled: true, selfManaged: "on" }).returning();
+    const [other] = await db().insert(schema.clients).values({ name: "Zz Délégué Autre (test)", autotaskId: 9_600_002, portalEnabled: true }).returning();
+    const [plain] = await db().insert(schema.clients).values({ name: "Zz Délégué Simple (test)", autotaskId: 9_600_003, portalEnabled: true }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    clearSelfManagedCache();
+    const passwordHash = await hashPassword(PASSWORD);
+    const mkUser = async (email: string, name: string, clientId: string, slug: string) => {
+      const roleId = await clientRoleId(clientId, slug);
+      await db().insert(schema.users).values({ email, name, kind: "client", clientId, roleId, active: true, passwordHash, mustChangePassword: false });
+    };
+    await mkUser("delegue1@zz-deleg.example", "Dany Délégué", co.id, "client-delegate");
+    await mkUser("employe-deleg@zz-deleg.example", "Eve Employée", co.id, "client-user");
+    await mkUser("delegue-simple@zz-deleg.example", "Simon Délégué", plain.id, "client-delegate");
+    const delegate = await signIn("delegue1@zz-deleg.example");
+    const employee = await signIn("employe-deleg@zz-deleg.example");
+    const simple = await signIn("delegue-simple@zz-deleg.example");
+    const [adminUser] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const [delegateUser] = await db().select().from(schema.users).where(eq(schema.users.email, "delegue1@zz-deleg.example"));
+    const [employeeUser] = await db().select().from(schema.users).where(eq(schema.users.email, "employe-deleg@zz-deleg.example"));
+    const denyTech = () => db().insert(schema.userPermissions).values({ userId: techUser.id, permission: "tickets.selfManaged", effect: "deny" });
+    const allowTech = () => db().delete(schema.userPermissions).where(eq(schema.userPermissions.userId, techUser.id));
+
+    const mk = async (title: string, companyId: number, queue = "support") =>
+      (await admin.post("/api/tickets", { title, description: "x", companyId, priority: "medium", queue, assigneeId: null, dueDate: "2026-12-05" })).json;
+    // made by the delegates' side (not by our staff): AKAB has not taken them
+    const outside = async (t: { id: number }) => {
+      await db().update(schema.tickets).set({ akabTakenAt: null }).where(eq(schema.tickets.id, t.id));
+      return t;
+    };
+    const own = await outside(await mk("Billet délégué", co.autotaskId!));
+    const alertT = await outside(await mk("Alerte délégué", co.autotaskId!, "alerts"));
+    const otherT = await outside(await mk("Billet autre entreprise", other.autotaskId!));
+    const closer = await outside(await mk("Billet à fermer", co.autotaskId!));
+    const blocked = await outside(await mk("Billet avec étape ouverte", co.autotaskId!));
+    const helpT = await outside(await mk("Billet à aider", co.autotaskId!));
+    const takeT = await outside(await mk("Billet repris", co.autotaskId!));
+    const contact = (await admin.post(`/api/tickets/companies/${co.autotaskId}/contacts`, { firstName: "Dany", lastName: "Délégué", email: "delegue1@zz-deleg.example" })).json;
+    const eve = (await admin.post(`/api/tickets/companies/${co.autotaskId}/contacts`, { firstName: "Eve", lastName: "Employée", email: "employe-deleg@zz-deleg.example" })).json;
+    await db().update(schema.tickets).set({ contactId: eve.id, contactName: "Eve Employée" }).where(eq(schema.tickets.id, own.id));
+    // our side: an internal note (never shown to the delegate), a public reply, an open checklist step
+    await admin.post(`/api/tickets/${own.id}/notes`, { text: "SECRET interne de l'équipe", internal: true });
+    await admin.post(`/api/tickets/${own.id}/notes`, { text: "Réponse publique de l'équipe", internal: false, email: false });
+    await admin.post(`/api/tickets/${blocked.id}/checklist`, { text: "Vérifier l'alimentation" });
+    const opts = (await delegate.get("/api/portal/delegate/options")).json;
+    const done = opts.statuses.find((s: { kind: string }) => s.kind === "complete");
+    const fresh = opts.statuses.find((s: { kind: string }) => s.kind === "new");
+    expect(done).toBeTruthy();
+    expect(fresh).toBeTruthy();
+    expect(opts.contacts.map((x: { id: string }) => x.id)).toEqual(expect.arrayContaining([contact.id, eve.id]));
+
+    // (1) the guard: staff, an employee without the right, a company not self-managed, no sign-in
+    expect((await tech.get("/api/portal/delegate/tickets")).status).toBe(403);
+    expect((await admin.get("/api/portal/delegate/tickets")).status).toBe(403);
+    expect((await employee.get("/api/portal/delegate/tickets")).status).toBe(403);
+    expect((await simple.get("/api/portal/delegate/tickets")).status).toBe(403);
+    expect((await new Agent().get("/api/portal/delegate/tickets")).status).toBe(401);
+    // the delegate's company only: nothing of the staff's time, charges or tickets routes
+    expect((await delegate.post(`/api/tickets/${own.id}/charges`, { name: "Câble", quantity: 1, unitPrice: 5, billable: true })).status).toBe(403);
+    expect((await delegate.get(`/api/tickets/${own.id}`)).status).toBe(403);
+
+    // (2) the list: own company, never alerts, never another company's
+    const list = (await delegate.get("/api/portal/delegate/tickets")).json;
+    const numbers = list.items.map((x: { number: string }) => x.number);
+    expect(numbers).toEqual(expect.arrayContaining([own.number, closer.number, helpT.number, takeT.number]));
+    expect(numbers).not.toContain(alertT.number);
+    expect(numbers).not.toContain(otherT.number);
+    expect(list.items.find((x: { number: string }) => x.number === own.number)).toMatchObject({ withClient: true });
+    expect(JSON.stringify(list)).not.toMatch(/assignee|technician|"hours"/);
+
+    // (3) the detail: public replies only, never our internal note, system note, time or names of staff
+    const det = (await delegate.get(`/api/portal/delegate/tickets/${own.id}`)).json;
+    expect(det.number).toBe(own.number);
+    expect(det.activity.map((n: { text: string }) => n.text)).toContain("Réponse publique de l'équipe");
+    expect(JSON.stringify(det)).not.toContain("SECRET");
+    expect(JSON.stringify(det)).not.toMatch(/"hours"|"assignee"|"technician"|"billable"|"charges"|"secondary"/);
+    expect((await delegate.get(`/api/portal/delegate/tickets/${alertT.id}`)).status).toBe(404);
+    expect((await delegate.get(`/api/portal/delegate/tickets/${otherT.id}`)).status).toBe(404);
+    expect((await delegate.get("/api/portal/delegate/tickets/abc")).status).toBe(404);
+
+    // (4) replies and notes: written by the delegate, flagged, never emailed; staff see the delegate's notes
+    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "Merci, nous redémarrons le poste.", kind: "reply" })).status).toBe(201);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "Note de l'équipe du client", kind: "note" })).status).toBe(201);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "x", kind: "time" })).status).toBe(400);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: "x", kind: "reply", internal: true })).status).toBe(400);
+    const saved = await db().select().from(schema.ticketNotes).where(and(eq(schema.ticketNotes.ticketId, own.id), eq(schema.ticketNotes.byDelegate, true)));
+    expect(saved.find((n) => n.text.startsWith("Merci"))).toMatchObject({ internal: false, byDelegate: true });
+    expect(saved.find((n) => n.text.startsWith("Note de l'équipe"))).toMatchObject({ internal: true, byDelegate: true });
+    const det2 = (await delegate.get(`/api/portal/delegate/tickets/${own.id}`)).json;
+    expect(det2.activity.map((n: { text: string }) => n.text)).toEqual(expect.arrayContaining(["Merci, nous redémarrons le poste.", "Note de l'équipe du client"]));
+    const staffView = (await admin.get(`/api/tickets/${own.id}`)).json;
+    expect(staffView.notes.find((n: { text: string }) => n.text.startsWith("Merci"))).toMatchObject({ byDelegate: true });
+
+    // (5) the PATCH whitelist: anything else refused; the allowed fields change
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${own.id}`, { assigneeId: delegateUser.id })).status).toBe(400);
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${own.id}`, { queue: "alerts" })).status).toBe(400);
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${own.id}`, { companyId: other.autotaskId })).status).toBe(400);
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${own.id}`, { status: "inconnu" })).status).toBe(400);
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${own.id}`, { contactId: "personne" })).json.error).toBe("invalid_contact");
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${own.id}`, { priority: "high", title: "Billet délégué renommé" })).status).toBe(200);
+    const [renamed] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, own.id));
+    expect(renamed).toMatchObject({ priority: "high", title: "Billet délégué renommé", assigneeId: null, companyId: co.autotaskId });
+    // completing: refused while a step is open, allowed once nothing is open
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${blocked.id}`, { status: done.key })).json.error).toBe("checklist_open");
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${closer.id}`, { status: done.key })).status).toBe(200);
+    const [closed] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, closer.id));
+    expect(closed.completedAt).not.toBeNull();
+    expect(JSON.stringify((await delegate.get("/api/portal/delegate/tickets?status=closed")).json)).toContain(closer.number);
+
+    // (6) a new ticket for the company: hidden from our staff until AKAB takes it, the portal's own
+    const created = await delegate.post("/api/portal/delegate/tickets", { title: "Imprimante du comptoir", description: "Ne répond plus", priority: "high", contactId: contact.id });
+    expect(created.status).toBe(201);
+    const newId = created.json.id as number;
+    expect(created.json.number).toMatch(/^T/);
+    expect((await delegate.post("/api/portal/delegate/tickets", { title: "" })).status).toBe(400);
+    expect((await delegate.post("/api/portal/delegate/tickets", { title: "x", assigneeId: delegateUser.id })).status).toBe(400);
+    expect((await delegate.post("/api/portal/delegate/tickets", { title: "x", contactId: "personne" })).json.error).toBe("invalid_contact");
+    const [row] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, newId));
+    expect(row).toMatchObject({ akabTakenAt: null, assigneeId: null, companyId: co.autotaskId });
+    const [meta] = await db().select().from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, newId));
+    expect(meta?.queue).toBe(await (await import("../server/lib/queues.ts")).defaultQueueKey());
+    const authorNote = await db().select().from(schema.ticketNotes).where(and(eq(schema.ticketNotes.ticketId, newId), eq(schema.ticketNotes.byDelegate, true)));
+    expect(authorNote.some((n) => n.text.startsWith("Créé par Dany Délégué"))).toBe(true);
+    await denyTech();
+    expect((await tech.get(`/api/tickets/${newId}`)).status).toBe(404);
+    await allowTech();
+    expect((await admin.get(`/api/tickets/${newId}`)).status).toBe(200);
+
+    // (7) files: the delegate's upload is downloadable by them; another company's or an alert's never
+    const up = await delegate.post(`/api/portal/delegate/tickets/${own.id}/attachments`, { name: "journal.txt", contentType: "text/plain", data: Buffer.from("bonjour").toString("base64") });
+    expect(up.status).toBe(201);
+    const [mine] = (await db().select().from(schema.ticketAttachments).where(eq(schema.ticketAttachments.ticketId, own.id))).filter((f) => f.name === "journal.txt");
+    const dl = await delegate.get(`/api/portal/delegate/tickets/${own.id}/files/${mine.id}`);
+    expect(dl.status).toBe(200);
+    expect(dl.headers.get("content-disposition")).toContain("attachment");
+    await admin.post(`/api/tickets/${otherT.id}/attachments`, { name: "autre.txt", contentType: "text/plain", data: Buffer.from("secret").toString("base64") });
+    await admin.post(`/api/tickets/${alertT.id}/attachments`, { name: "alerte.txt", contentType: "text/plain", data: Buffer.from("alerte").toString("base64") });
+    const [foreign] = await db().select().from(schema.ticketAttachments).where(eq(schema.ticketAttachments.ticketId, otherT.id));
+    const [alertFile] = await db().select().from(schema.ticketAttachments).where(eq(schema.ticketAttachments.ticketId, alertT.id));
+    expect((await delegate.get(`/api/portal/delegate/tickets/${otherT.id}/files/${foreign.id}`)).status).toBe(404);
+    expect((await delegate.get(`/api/portal/delegate/tickets/${alertT.id}/files/${alertFile.id}`)).status).toBe(404);
+
+    // (8) a comment from the client on a ticket with the delegates tells them (not the author)
+    expect((await employee.post(`/api/portal/tickets/${own.id}/comments`, { text: "Le poste est toujours bloqué" })).status).toBe(201);
+    const told = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, delegateUser.id), eq(schema.notifications.type, "ticket.client")));
+    expect(told.some((n) => (n.data as { number?: string }).number === own.number)).toBe(true);
+    expect((await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, employeeUser.id), eq(schema.notifications.type, "ticket.client")))).length).toBe(0);
+
+    // (9) help: AKAB has the ticket (unassigned, a new status), the planners are told; the delegate reads but cannot write
+    const helped = await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/help`, { message: "Le serveur ne démarre plus" });
+    expect(helped.status).toBe(201);
+    const [h] = await db().select().from(schema.tickets).where(eq(schema.tickets.id, helpT.id));
+    expect(h.akabTakenAt).not.toBeNull();
+    expect(h.helpRequestedBy).toBe(delegateUser.id);
+    expect(h.assigneeId).toBeNull();
+    expect(h.status).toBe(fresh.key);
+    const helpNotes = await db().select().from(schema.ticketNotes).where(and(eq(schema.ticketNotes.ticketId, helpT.id), eq(schema.ticketNotes.internal, true), eq(schema.ticketNotes.byDelegate, true)));
+    expect(helpNotes.some((n) => n.text.startsWith("Aide demandée par Dany Délégué") && n.text.includes("Le serveur ne démarre plus"))).toBe(true);
+    expect((await admin.get(`/api/tickets/${helpT.id}`)).json.managed).toBe("akab");
+    const helpTold = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, adminUser.id), eq(schema.notifications.type, "ticket.help")));
+    expect(helpTold.some((n) => (n.data as { number?: string }).number === helpT.number)).toBe(true);
+    const read = await delegate.get(`/api/portal/delegate/tickets/${helpT.id}`);
+    expect(read.status).toBe(200);
+    expect(read.json).toMatchObject({ withAkab: true, withClient: false });
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/notes`, { text: "x", kind: "note" })).json.error).toBe("with_akab");
+    expect((await delegate.patch(`/api/portal/delegate/tickets/${helpT.id}`, { priority: "low" })).json.error).toBe("with_akab");
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/attachments`, { name: "a.txt", contentType: "text/plain", data: "YQ==" })).json.error).toBe("with_akab");
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/help`, {})).json.error).toBe("with_akab");
+    expect(JSON.stringify((await delegate.get("/api/portal/delegate/tickets?withAkab=1")).json)).toContain(helpT.number);
+
+    // (10) send back: hidden again for our staff without the right; the delegate writes again
+    expect((await admin.post(`/api/tickets/${helpT.id}/send-back`, {})).status).toBe(200);
+    await denyTech();
+    expect((await tech.get(`/api/tickets/${helpT.id}`)).status).toBe(404);
+    await allowTech();
+    expect((await delegate.post(`/api/portal/delegate/tickets/${helpT.id}/notes`, { text: "Reprise par le client", kind: "reply" })).status).toBe(201);
+    expect((await delegate.get(`/api/portal/delegate/tickets/${helpT.id}`)).json).toMatchObject({ withClient: true });
+    const backTold = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, delegateUser.id), eq(schema.notifications.type, "ticket.sent_back")));
+    expect(backTold.some((n) => (n.data as { number?: string }).number === helpT.number)).toBe(true);
+
+    // (11) a take by AKAB tells the delegates; a write meanwhile is refused
+    expect((await admin.post(`/api/tickets/${takeT.id}/take`, {})).status).toBe(200);
+    const takenTold = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, delegateUser.id), eq(schema.notifications.type, "ticket.taken")));
+    expect(takenTold.some((n) => (n.data as { number?: string }).number === takeT.number)).toBe(true);
+    expect((await delegate.post(`/api/portal/delegate/tickets/${takeT.id}/notes`, { text: "x", kind: "reply" })).json.error).toBe("with_akab");
+
+    // (12) rate limits: notes 60 an hour
+    let refused = 0;
+    for (let i = 0; i < 70 && !refused; i++) if ((await delegate.post(`/api/portal/delegate/tickets/${own.id}/notes`, { text: `Suivi ${i}`, kind: "note" })).status === 429) refused = i;
+    expect(refused).toBeGreaterThan(50);
+  });
+});

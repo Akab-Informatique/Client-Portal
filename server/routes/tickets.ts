@@ -35,6 +35,7 @@ import { refreshAccrual, splitBillable } from "../lib/hr.ts";
 import { cleanDirection, directionPrompt } from "../lib/aiDirection.ts";
 import { quebecStamp, scheduleTickets, type SchedIn } from "../lib/ticketSchedule.ts";
 import { billingSettings } from "../lib/billing.ts";
+import { notifyDelegates } from "../lib/delegates.ts";
 
 /**
  * Tickets (staff). Data come from the ticket source: the portal's database,
@@ -2045,13 +2046,14 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!a.permissions.includes("tickets.selfManaged")) throw new HTTPException(403, { message: "forbidden" });
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
-    const [row] = await db().select({ id: schema.tickets.id }).from(schema.tickets).where(eq(schema.tickets.id, id));
+    const [row] = await db().select({ id: schema.tickets.id, companyId: schema.tickets.companyId, number: schema.tickets.number, title: schema.tickets.title }).from(schema.tickets).where(eq(schema.tickets.id, id));
     if (!row) throw new HTTPException(404, { message: "not_found" });
     if (!(await isTicketHidden(id))) throw new HTTPException(409, { message: "not_hidden" });
     const src = await ticketSource(ticketScopeOf(c));
     await run(() => src.addNote(id, { text: `Pris en charge par AKAB — ${a.realUser.name}`, internal: true }, a));
     await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, id));
     await audit(a.user.id, "ticket.taken", String(id));
+    await notifyDelegates(row.companyId, { type: "ticket.taken", data: { number: row.number, title: row.title }, link: `/tickets?ticket=${id}` });
     return c.json({ ok: true });
   })
 
@@ -2061,7 +2063,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!a.permissions.includes("tickets.selfManaged")) throw new HTTPException(403, { message: "forbidden" });
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
-    const [row] = await db().select({ id: schema.tickets.id, companyId: schema.tickets.companyId, akabTakenAt: schema.tickets.akabTakenAt }).from(schema.tickets).where(eq(schema.tickets.id, id));
+    const [row] = await db().select({ id: schema.tickets.id, companyId: schema.tickets.companyId, number: schema.tickets.number, title: schema.tickets.title, akabTakenAt: schema.tickets.akabTakenAt }).from(schema.tickets).where(eq(schema.tickets.id, id));
     if (!row) throw new HTTPException(404, { message: "not_found" });
     const companies = await selfManagedCompanyIds();
     if (!row.akabTakenAt || !companies.has(row.companyId)) throw new HTTPException(409, { message: "not_taken" });
@@ -2069,6 +2071,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     await run(() => src.addNote(id, { text: `Renvoyé au client — ${a.realUser.name}`, internal: true }, a));
     await db().update(schema.tickets).set({ akabTakenAt: null, assigneeId: null, assigneeName: null, secondary: [] }).where(eq(schema.tickets.id, id));
     await audit(a.user.id, "ticket.sent_back", String(id));
+    await notifyDelegates(row.companyId, { type: "ticket.sent_back", data: { number: row.number, title: row.title }, link: `/tickets?ticket=${id}` });
     return c.json({ ok: true });
   })
 
