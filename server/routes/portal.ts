@@ -385,7 +385,7 @@ async function tellTechnicians(t: NTicket, a: AuthContext, kind: "comment" | "fi
   // a self-managed client's ticket that AKAB has not taken: our team is not told
   if (await isTicketHidden(t.id)) {
     // a self-managed company's own delegates work it (the author is left out)
-    await notifyDelegates(t.company.id, { type: "ticket.client", data: { kind, number: t.number, title: t.title, from: a.user.name, company: t.company.name, preview: text.slice(0, 140) }, link: `/tickets?ticket=${t.id}` }, a.user.id);
+    await notifyDelegates(t.company.id, { type: "ticket.client", data: { kind, number: t.number, title: t.title, from: a.user.name, company: t.company.name, preview: text.slice(0, 140) }, link: `/manage?ticket=${t.id}` }, a.user.id);
     return;
   }
   const people = [t.assignee, ...t.secondary].filter((p): p is NonNullable<typeof p> => Boolean(p)).map((p) => p.id).filter((id) => !id.startsWith("at-"));

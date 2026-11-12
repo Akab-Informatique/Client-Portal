@@ -2053,7 +2053,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     await run(() => src.addNote(id, { text: `Pris en charge par AKAB — ${a.realUser.name}`, internal: true }, a));
     await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, id));
     await audit(a.user.id, "ticket.taken", String(id));
-    await notifyDelegates(row.companyId, { type: "ticket.taken", data: { number: row.number, title: row.title }, link: `/tickets?ticket=${id}` });
+    await notifyDelegates(row.companyId, { type: "ticket.taken", data: { number: row.number, title: row.title }, link: `/manage?ticket=${id}` });
     return c.json({ ok: true });
   })
 
@@ -2071,7 +2071,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     await run(() => src.addNote(id, { text: `Renvoyé au client — ${a.realUser.name}`, internal: true }, a));
     await db().update(schema.tickets).set({ akabTakenAt: null, assigneeId: null, assigneeName: null, secondary: [] }).where(eq(schema.tickets.id, id));
     await audit(a.user.id, "ticket.sent_back", String(id));
-    await notifyDelegates(row.companyId, { type: "ticket.sent_back", data: { number: row.number, title: row.title }, link: `/tickets?ticket=${id}` });
+    await notifyDelegates(row.companyId, { type: "ticket.sent_back", data: { number: row.number, title: row.title }, link: `/manage?ticket=${id}` });
     return c.json({ ok: true });
   })
 

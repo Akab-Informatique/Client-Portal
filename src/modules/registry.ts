@@ -1,4 +1,4 @@
-import { FilePlus2, FileText, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Newspaper, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
+import { FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Newspaper, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -88,6 +88,7 @@ export type ClientNavModule = Omit<NavModule, "section" | "optIn"> & { section: 
 export const CLIENT_MODULES: ClientNavModule[] = [
   { key: "board", path: "/", labelKey: "client.nav.board", icon: Megaphone, section: "board", permission: "board.view" },
   { key: "tickets", path: "/tickets", labelKey: "client.nav.tickets", icon: Ticket, section: "operations", permission: "clientTickets.view" },
+  { key: "delegate", path: "/manage", labelKey: "selfManaged.delegate.nav", icon: Kanban, section: "operations", permission: "clientTickets.delegate" },
   { key: "projects", path: "/projects", labelKey: "client.nav.projects", icon: FolderKanban, section: "operations", permission: "clientProjects.view" },
   { key: "devices", path: "/devices", labelKey: "client.nav.devices", icon: MonitorSmartphone, section: "operations", permission: "clientDevices.view", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "client.nav.documentation", icon: BookOpen, section: "operations", permission: "clientDocs.view", upcoming: true },
