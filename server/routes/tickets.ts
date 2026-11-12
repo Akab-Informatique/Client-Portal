@@ -583,7 +583,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     const tagsOf = await allTags();
     /** The tickets a set of list parameters selects (the list, and the saved filters' buttons). */
     const select = (q: Record<string, string | undefined>) => {
-      const view = ((q.view ?? "") in views ? q.view : "mine") as keyof typeof views;
+      // "Clients autogérés" picked: only those companies' tickets (the filter chooses what to see, it does not add to My tickets)
+      const picked = list(q.selfManaged).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+      const view = (picked.length && (!q.view || q.view === "mine") ? "all" : (q.view ?? "") in views ? q.view : "mine") as keyof typeof views;
       const status = list(q.status);
       const statusKinds = list(q.statusKind);
       const priority = list(q.priority);
@@ -594,7 +596,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       return all
       .filter(views[view])
       // Completed tickets only when asked for (a status filter) or in "all" — and not when a team member is picked: all of their open tickets
-      .filter((t) => (status.length || statusKinds.length ? true : (view === "all" && !assignee.length) || open(t)))
+      .filter((t) => (status.length || statusKinds.length ? true : (view === "all" && !assignee.length && !picked.length) || open(t)))
+      .filter((t) => !picked.length || picked.includes(t.company.id))
       .filter((t) => !status.length || status.includes(t.status))
       .filter((t) => !statusKinds.length || statusKinds.includes(L.statusKind(t.status)))
       .filter((t) => !priority.length || priority.includes(t.priority))

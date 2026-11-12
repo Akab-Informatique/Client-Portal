@@ -11945,6 +11945,12 @@ describe("self-managed clients: hidden from staff", () => {
       expect((await tech.get(`/api/tickets/${hiddenT.id}`)).status).toBe(200);
       expect(JSON.stringify((await tech.get("/api/tickets?view=all")).json)).not.toContain(hiddenT.number);
       expect(JSON.stringify((await tech.get(`/api/tickets?view=all&selfManaged=${own.autotaskId}`)).json)).toContain(hiddenT.number);
+      // the filter chooses what is shown: only that company, even with the default "My tickets" view, never added to the usual list
+      for (const url of [`/api/tickets?selfManaged=${own.autotaskId}`, `/api/tickets?view=mine&selfManaged=${own.autotaskId}`]) {
+        const only = (await tech.get(url)).json.items as { company: { id: number } }[];
+        expect(only.length).toBeGreaterThan(0);
+        expect(only.every((x) => x.company.id === own.autotaskId)).toBe(true);
+      }
       expect(JSON.stringify((await admin.get("/api/tickets?view=all")).json)).not.toContain(hiddenT.number);
       expect(JSON.stringify((await admin.get(`/api/tickets?view=all&selfManaged=${own.autotaskId}`)).json)).toContain(hiddenT.number);
 
