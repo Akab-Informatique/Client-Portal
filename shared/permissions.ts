@@ -452,6 +452,26 @@ export const MODULES = [
     ],
   },
   {
+    key: "tv",
+    audience: "staff",
+    label: { fr: "Dashboard TV", en: "Dashboard TV" },
+    permissions: [
+      {
+        key: "tv.view",
+        label: { fr: "Voir le Dashboard TV", en: "View the TV dashboard" },
+        description: { fr: "Voir l'état des robots (au repos, au travail, besoin d'aide)", en: "See the bots' status (idle, working, needs help)" },
+      },
+      {
+        key: "tv.manage",
+        label: { fr: "Gérer le Dashboard TV", en: "Manage the TV dashboard" },
+        description: {
+          fr: "Ajouter, renommer et retirer des robots, leurs liens de rapport et la clé d'affichage de la télé",
+          en: "Add, rename and remove bots, their report links and the TV display key",
+        },
+      },
+    ],
+  },
+  {
     key: "admin",
     audience: "staff",
     label: { fr: "Paramètres admin", en: "Admin settings" },
@@ -640,7 +660,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  * page, or right by right. Every module appears exactly once (tested).
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
-  { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom"] },
+  { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom", "tv"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "newsletter", "hr"] },
@@ -714,6 +734,7 @@ export const SYSTEM_ROLES: Array<{
     description: { fr: "Gère ses billets et ses clients", en: "Manages their tickets and clients" },
     permissions: [
       "dashboard.view",
+      "tv.view",
       "tickets.view",
       "tickets.edit",
       "tickets.planSelf",

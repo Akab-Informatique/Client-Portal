@@ -3519,3 +3519,32 @@ export const invoiceCreditApplications = pgTable(
   },
   (t) => [index("invoice_credit_apps_invoice_idx").on(t.invoiceId)],
 );
+
+/**
+ * Dashboard TV: the AI bots shown on the lobby screen. `id` is a stable slug. `nameKey` (lowercase, no accents)
+ * keeps names unique. The report key is stored as a SHA-256 hash (to find the bot) and sealed (to show the link).
+ */
+export const tvBots = pgTable(
+  "tv_bots",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    nameKey: text("name_key").notNull(),
+    keyHash: text("key_hash").notNull(),
+    keySealed: text("key_sealed").notNull(),
+    sort: integer("sort").notNull().default(0),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("tv_bots_name_key_unique").on(t.nameKey), uniqueIndex("tv_bots_key_hash_unique").on(t.keyHash)],
+);
+
+/** Current status of a bot. `updatedAt` is its last report (staleness is worked out from it when read). */
+export const tvStatus = pgTable("tv_status", {
+  botId: text("bot_id")
+    .primaryKey()
+    .references(() => tvBots.id, { onDelete: "cascade" }),
+  state: text("state").notNull().default("idle"),
+  label: text("label"),
+  since: timestamp("since", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: updated(),
+});

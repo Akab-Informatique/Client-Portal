@@ -30,6 +30,8 @@ export function clientIp(c: Context): string {
 export const sameOriginJson: MiddlewareHandler = async (c, next) => {
   const m = c.req.method;
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return next();
+  // Dashboard TV report links: a bot can only open a URL, and the secret in it is the proof (it changes one bot's public status)
+  if (c.req.path.startsWith("/api/tv/r/")) return next();
   const ct = c.req.header("content-type") || "";
   const hasBody = m !== "DELETE";
   if (hasBody && !ct.toLowerCase().startsWith("application/json")) {
@@ -62,6 +64,17 @@ export function rateLimit(key: string, limit: number, windowMs: number): { ok: b
   }
   b.count++;
   return { ok: b.count <= limit, retryAfter: Math.ceil((b.resetAt - now) / 1000) };
+}
+
+/** Is this bucket already at its limit? (Looks without counting.) */
+export function rateLimitFull(key: string, limit: number): boolean {
+  const b = buckets.get(key);
+  return !!b && b.resetAt > Date.now() && b.count >= limit;
+}
+
+/** A path that is safe to log: the secret report links of Dashboard TV are hidden. */
+export function logPath(path: string): string {
+  return path.startsWith("/api/tv/r/") ? "/api/tv/r/***" : path;
 }
 
 export function resetRateLimit(key: string) {

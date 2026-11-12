@@ -9,7 +9,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { config } from "./config.ts";
 import { loadAuth, readOnlyViewAs, requireStaff, type AppEnv } from "./lib/auth.ts";
 import { audit } from "./lib/audit.ts";
-import { sameOriginJson } from "./lib/http.ts";
+import { logPath, sameOriginJson } from "./lib/http.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { pushAuthRoutes } from "./routes/pushAuth.ts";
 import { meRoutes } from "./routes/me.ts";
@@ -63,11 +63,17 @@ import { billablesRoutes } from "./routes/billables.ts";
 import { timeRoutes } from "./routes/time.ts";
 import { hrRoutes } from "./routes/hr.ts";
 import { chatRoutes } from "./routes/chat.ts";
+import { tvRoutes } from "./routes/tv.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
   // gzip/deflate responses (JSON lists, HTML, JS) when the browser accepts it
   app.use("*", compress());
+  // Dashboard TV public links carry a secret key in the URL: never sent on as a referrer (set after secureHeaders below has run)
+  app.use("/api/tv/*", async (c, next) => {
+    await next();
+    if (c.req.path.startsWith("/api/tv/display/") || c.req.path.startsWith("/api/tv/r/")) c.header("Referrer-Policy", "no-referrer");
+  });
 
   app.use(
     "*",
@@ -110,7 +116,7 @@ export function createApp() {
     const k = c.var.auth?.apiKey;
     const m = c.req.method;
     if (k && m !== "GET" && m !== "HEAD" && c.res.status < 400) {
-      await audit(c.var.auth!.user.id, "api_key.write", c.req.path, { key: k.name, keyId: k.id, method: m, path: c.req.path, status: c.res.status });
+      await audit(c.var.auth!.user.id, "api_key.write", logPath(c.req.path), { key: k.name, keyId: k.id, method: m, path: logPath(c.req.path), status: c.res.status });
     }
   });
   api.use("*", async (c, next) => {
@@ -177,6 +183,8 @@ export function createApp() {
   api.route("/time", timeRoutes);
   api.route("/hr", hrRoutes);
   api.route("/chat", chatRoutes);
+  // Dashboard TV: the lobby screen's bots (public display and report links use secret keys; the rest needs tv.view / tv.manage)
+  api.route("/tv", tvRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.route("/portal", portalRoutes);
@@ -198,7 +206,7 @@ export function createApp() {
       const fields = Array.isArray(err.cause) ? err.cause : undefined;
       return c.json({ error: err.message, ...(fields ? { fields } : {}) }, err.status);
     }
-    console.error("[api]", c.req.method, c.req.path, err);
+    console.error("[api]", c.req.method, logPath(c.req.path), err);
     return c.json({ error: "server_error" }, 500);
   });
 
