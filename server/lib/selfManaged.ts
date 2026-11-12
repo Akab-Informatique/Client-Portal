@@ -20,10 +20,10 @@ export type TicketScope = { all: true } | { right?: boolean; include?: number[] 
 const ALERT_SOURCE = /alert|monitor/i;
 const ALERT_LABEL = /alert/i;
 
-type ClientRow = { id: string; parentId: string | null; selfManaged: "on" | "off" | null; autotaskId: number | null; active: boolean };
+export type ClientRow = { id: string; parentId: string | null; selfManaged: "on" | "off" | null; autotaskId: number | null; active: boolean };
 
 /** A client is self-managed when its own flag says so, else the nearest flag up its parents (an "off" stops it). */
-function effectiveOn(row: ClientRow, byId: Map<string, ClientRow>): boolean {
+export function effectiveOn(row: ClientRow, byId: Map<string, ClientRow>): boolean {
   const seen = new Set<string>();
   let cur: ClientRow | undefined = row;
   while (cur && !seen.has(cur.id)) {
@@ -76,7 +76,7 @@ export async function isSelfManagedClient(clientId: string): Promise<boolean> {
  * The hidden tickets, with their company: open to AKAB only when not taken
  * (akab_taken_at), not an alert. One query, none when no company is self-managed.
  */
-async function hiddenTickets(): Promise<Map<number, number>> {
+export async function hiddenTickets(): Promise<Map<number, number>> {
   const companies = await selfManagedCompanyIds();
   if (companies.size === 0) return new Map();
   const rows = await db()
@@ -143,6 +143,45 @@ export function ticketScopeOf(c: Context<AppEnv>): TicketScope {
     .map((x) => Number(x))
     .filter((n) => Number.isInteger(n) && n > 0);
   return { right: true, include };
+}
+
+/**
+ * The effective state of every client, and what changes when one client takes `value` (null = inherits).
+ * `hiddenNow`: the clients that become self-managed, `shownNow`: the ones that stop being so.
+ */
+export function flipsWith<T extends ClientRow>(rows: T[], id: string, value: "on" | "off" | null): { hiddenNow: T[]; shownNow: T[] } {
+  const before = new Map(rows.map((r) => [r.id, r]));
+  const after = new Map(rows.map((r) => [r.id, r.id === id ? { ...r, selfManaged: value } : r]));
+  const hiddenNow: T[] = [];
+  const shownNow: T[] = [];
+  for (const r of rows) {
+    const was = effectiveOn(r, before);
+    const now = effectiveOn(after.get(r.id)!, after);
+    if (was === now) continue;
+    (now ? hiddenNow : shownNow).push(r);
+  }
+  return { hiddenNow, shownNow };
+}
+
+/** Whether a client is effectively self-managed, from a set of rows (for the flag screens). */
+export function effectiveIn(rows: ClientRow[], id: string): boolean {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const row = byId.get(id);
+  return row ? effectiveOn(row, byId) : false;
+}
+
+/** For the tickets of self-managed companies: "client" (their delegates have it) or "akab" (AKAB took it). Others are not in the map. One query. */
+export async function managedOf(ids: number[]): Promise<Map<number, "client" | "akab">> {
+  const out = new Map<number, "client" | "akab">();
+  if (!ids.length) return out;
+  const companies = await selfManagedCompanyIds();
+  if (!companies.size) return out;
+  const rows = await db()
+    .select({ id: schema.tickets.id, akabTakenAt: schema.tickets.akabTakenAt })
+    .from(schema.tickets)
+    .where(and(inArray(schema.tickets.id, ids), inArray(schema.tickets.companyId, [...companies])));
+  for (const r of rows) out.set(r.id, r.akabTakenAt ? "akab" : "client");
+  return out;
 }
 
 const notFound = () => new SourceError("not_found");

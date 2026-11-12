@@ -16,7 +16,10 @@ import { ensureSoleContact, syncContactRoles } from "../lib/contactDefaults.ts";
 import { body, zEmail, zOptText, zUuid } from "../lib/validate.ts";
 import { ticketSource, type NTicket } from "../lib/ticketSource.ts";
 import { crmState, descendantsOf, ensureCrm, rememberCompany, rememberContact, syncCrm } from "../lib/crm.ts";
-import { lookup, run } from "./tickets.ts";
+import { isAlert, lookup, run } from "./tickets.ts";
+import { clearSelfManagedCache, effectiveIn, flipsWith, hiddenTickets } from "../lib/selfManaged.ts";
+import { unsyncBlock, unsyncPin } from "../lib/planning.ts";
+import { notify } from "../lib/notify.ts";
 import { pushInvoice } from "../lib/quickbooks.ts";
 import { DraftError, recalcInvoiceTaxes, renumberInvoice, taxesByLine } from "../lib/billables.ts";
 import { applyToLines, contractsIn, runningLinesOf } from "../lib/servicePrices.ts";
@@ -42,6 +45,13 @@ import { quickbooksHttp } from "./billing.ts";
 type Client = typeof schema.clients.$inferSelect;
 
 const zText = (max: number) => zOptText(max);
+
+/** The clients as the self-managed rules read them */
+function flagRows() {
+  return db()
+    .select({ id: schema.clients.id, name: schema.clients.name, parentId: schema.clients.parentId, selfManaged: schema.clients.selfManaged, autotaskId: schema.clients.autotaskId, active: schema.clients.active })
+    .from(schema.clients);
+}
 
 async function clientOr404(id: string): Promise<Client> {
   const [c] = await db().select().from(schema.clients).where(eq(schema.clients.id, zUuid.parse(id)));
@@ -494,6 +504,126 @@ export const crmRoutes = new Hono<AppEnv>()
     await syncContactRoles(client.id);
     await audit(a.user.id, "crm.billing_contact_set", client.id, { contact: p.contactId });
     return c.json({ billingContactId: inv.billingContactId ?? null, billingEmail: inv.billingEmail ?? null });
+  })
+
+  // ── Self-managed clients: their tickets are hidden from our team until AKAB takes them ──
+  /** The flag of a client, what it inherits, and its children (crm.view) */
+  .get("/clients/:id/self-managed", requirePermission("crm.view"), async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    const rows = await flagRows();
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    let inheritedFrom: { id: string; name: string } | null = null;
+    if (client.selfManaged == null) {
+      const seen = new Set<string>([client.id]);
+      let cur = client.parentId ? byId.get(client.parentId) : undefined;
+      while (cur && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        if (cur.selfManaged) {
+          inheritedFrom = { id: cur.id, name: cur.name };
+          break;
+        }
+        cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+      }
+    }
+    return c.json({
+      own: client.selfManaged ?? null,
+      effective: effectiveIn(rows, client.id),
+      inheritedFrom,
+      children: rows.filter((r) => r.parentId === client.id).map((r) => ({ id: r.id, name: r.name, own: r.selfManaged ?? null, effective: effectiveIn(rows, r.id) })),
+    });
+  })
+
+  /** What changing the flag would do to this client and its descendants (admin.clients) */
+  .get("/clients/:id/self-managed/preview", requirePermission("admin.clients"), async (c) => {
+    const client = await clientOr404(c.req.param("id"));
+    const v = c.req.query("value");
+    if (v !== "on" && v !== "off" && v !== "inherit") throw new HTTPException(400, { message: "invalid_value" });
+    const rows = await flagRows();
+    const { hiddenNow, shownNow } = flipsWith(rows, client.id, v === "inherit" ? null : v);
+    const flipped = [...hiddenNow, ...shownNow];
+    const clients = flipped.map((r) => ({ id: r.id, name: r.name }));
+    const companies = new Set(flipped.filter((r) => r.active && r.autotaskId != null).map((r) => r.autotaskId as number));
+    if (!companies.size) return c.json({ clients, openTickets: 0, withTechnician: [], timers: 0, pins: 0, plannedBlocks: 0, alerts: 0 });
+    const src = await ticketSource({ all: true });
+    const [all, o] = await run(() => Promise.all([src.list(), src.options()]));
+    const L = lookup(o);
+    const alert = isAlert(L);
+    const open = (t: NTicket) => L.statusKind(t.status) !== "complete";
+    const inCompanies = all.filter((t) => companies.has(t.company.id) && open(t));
+    const taken = new Set(
+      (await db().select({ id: schema.tickets.id }).from(schema.tickets).where(and(inArray(schema.tickets.companyId, [...companies]), isNotNull(schema.tickets.akabTakenAt)))).map((r) => r.id),
+    );
+    // the tickets that change with the flag: open, not taken by AKAB, not a monitoring alert
+    const candidates = inCompanies.filter((t) => !taken.has(t.id) && !alert(t));
+    const byTech = new Map<string, number>();
+    for (const t of candidates) if (t.assignee) byTech.set(t.assignee.name, (byTech.get(t.assignee.name) ?? 0) + 1);
+    const withTechnician = [...byTech].map(([name, count]) => ({ name, count })).sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
+    const ids = candidates.map((t) => t.id);
+    const [timers, pins, blocks] = ids.length
+      ? await Promise.all([
+          db().select({ id: schema.ticketTimers.id }).from(schema.ticketTimers).where(inArray(schema.ticketTimers.ticketId, ids)),
+          db().select({ id: schema.ticketPins.id }).from(schema.ticketPins).where(inArray(schema.ticketPins.ticketId, ids)),
+          db().select({ id: schema.calendarBlocks.id }).from(schema.calendarBlocks).where(inArray(schema.calendarBlocks.ticketId, ids)),
+        ])
+      : [[], [], []];
+    return c.json({
+      clients,
+      openTickets: candidates.length,
+      withTechnician,
+      timers: timers.length,
+      pins: pins.length,
+      plannedBlocks: blocks.length,
+      alerts: inCompanies.filter((t) => alert(t)).length,
+    });
+  })
+
+  /**
+   * Set the flag (admin.clients, it hides tickets from the team). Turning a company on removes the pins, day
+   * additions and planned blocks of the tickets that just became hidden, and tells their technicians (no titles).
+   */
+  .put("/clients/:id/self-managed", requirePermission("admin.clients"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const p = await body(c, z.object({ value: z.enum(["on", "off"]).nullable() }));
+    if (client.selfManaged === p.value) return c.json({ ok: true, value: p.value, hidden: 0, removed: { pins: 0, dayAdds: 0, blocks: 0 } });
+    const rows = await flagRows();
+    const { hiddenNow } = flipsWith(rows, client.id, p.value);
+    await db().update(schema.clients).set({ selfManaged: p.value, updatedAt: new Date() }).where(eq(schema.clients.id, client.id));
+    clearSelfManagedCache();
+    await audit(a.user.id, "crm.self_managed", client.id, { from: client.selfManaged ?? null, to: p.value });
+    const companies = new Set(hiddenNow.filter((r) => r.active && r.autotaskId != null).map((r) => r.autotaskId as number));
+    const removed = { pins: 0, dayAdds: 0, blocks: 0 };
+    let hidden = 0;
+    if (companies.size) {
+      const now = await hiddenTickets();
+      const ids = [...now].filter(([, company]) => companies.has(company)).map(([id]) => id);
+      hidden = ids.length;
+      if (ids.length) {
+        const [pins, blocks, dayAdds, tk] = await Promise.all([
+          db().select().from(schema.ticketPins).where(inArray(schema.ticketPins.ticketId, ids)),
+          db().select().from(schema.calendarBlocks).where(inArray(schema.calendarBlocks.ticketId, ids)),
+          db().select({ id: schema.ticketDayAdds.id }).from(schema.ticketDayAdds).where(inArray(schema.ticketDayAdds.ticketId, ids)),
+          db().select({ id: schema.tickets.id, assigneeId: schema.tickets.assigneeId, secondary: schema.tickets.secondary }).from(schema.tickets).where(inArray(schema.tickets.id, ids)),
+        ]);
+        // the Outlook events of the pins and blocks (a failure there does not stop the change)
+        for (const x of pins) await unsyncPin(x).catch(() => undefined);
+        for (const x of blocks) await unsyncBlock(x).catch(() => undefined);
+        await db().delete(schema.ticketPins).where(inArray(schema.ticketPins.ticketId, ids));
+        await db().delete(schema.calendarBlocks).where(inArray(schema.calendarBlocks.ticketId, ids));
+        await db().delete(schema.ticketDayAdds).where(inArray(schema.ticketDayAdds.ticketId, ids));
+        removed.pins = pins.length;
+        removed.blocks = blocks.length;
+        removed.dayAdds = dayAdds.length;
+        // the technicians on them: one bell each, with a count and the client (never a title)
+        const perTech = new Map<string, number>();
+        for (const t of tk) {
+          const people = new Set([t.assigneeId, ...t.secondary.map((x) => x.id)].filter((x): x is string => !!x));
+          for (const u of people) perTech.set(u, (perTech.get(u) ?? 0) + 1);
+        }
+        for (const [userId, count] of perTech) await notify([userId], { type: "ticket.hidden", data: { count, client: client.name }, link: "/tickets" });
+      }
+    }
+    return c.json({ ok: true, value: p.value, hidden, removed });
   })
 
   /**

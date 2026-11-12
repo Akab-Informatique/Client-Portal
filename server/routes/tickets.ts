@@ -24,7 +24,7 @@ import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJs
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { deleteTicket, mergeTickets, ticketFile, ticketsLocal } from "../lib/localTickets.ts";
-import { hiddenFromCaller, ticketScopeOf } from "../lib/selfManaged.ts";
+import { hiddenFromCaller, hiddenTickets, isTicketHidden, managedOf, selfManagedClientIds, selfManagedCompanyIds, ticketScopeOf } from "../lib/selfManaged.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
@@ -518,6 +518,26 @@ export const ticketRoutes = new Hono<AppEnv>()
     await next();
   })
 
+  /** "Clients autogérés": the self-managed companies with their hidden and open tickets (tickets.selfManaged) */
+  .get("/self-managed-companies", requirePermission("tickets.selfManaged"), async (c) => {
+    const ids = await selfManagedClientIds();
+    const rows = ids.size
+      ? (await db().select({ id: schema.clients.id, name: schema.clients.name, autotaskId: schema.clients.autotaskId, active: schema.clients.active }).from(schema.clients).where(inArray(schema.clients.id, [...ids]))).filter((r) => r.active && r.autotaskId != null)
+      : [];
+    const hidden = new Map<number, number>();
+    for (const company of (await hiddenTickets()).values()) hidden.set(company, (hidden.get(company) ?? 0) + 1);
+    const src = await ticketSource({ all: true });
+    const [all, o] = await run(() => Promise.all([src.list(), src.options()]));
+    const L = lookup(o);
+    const open = new Map<number, number>();
+    for (const t of all) if (L.statusKind(t.status) !== "complete") open.set(t.company.id, (open.get(t.company.id) ?? 0) + 1);
+    return c.json(
+      rows
+        .map((r) => ({ companyId: r.autotaskId!, clientId: r.id, name: r.name, hidden: hidden.get(r.autotaskId!) ?? 0, open: open.get(r.autotaskId!) ?? 0 }))
+        .sort((x, y) => x.name.localeCompare(y.name)),
+    );
+  })
+
   .get("/", async (c) => {
     const a = auth(c);
     const q = c.req.query();
@@ -593,7 +613,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     };
     const selected = select(q);
     const checks = await checklistCounts(selected.map((t) => t.id));
-    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null }));
+    // "managed" only on the tickets of self-managed companies (client's delegates, or AKAB took it)
+    const managed = await managedOf(selected.map((t) => t.id));
+    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null, managed: managed.get(t.id) }));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -1638,7 +1660,10 @@ export const ticketRoutes = new Hono<AppEnv>()
   .get("/:id", async (c) => {
     const a = auth(c);
     const src = await ticketSource(ticketScopeOf(c));
-    return c.json(await run(() => detailOf(src, Number(c.req.param("id")), a)));
+    const id = Number(c.req.param("id"));
+    const detail = await run(() => detailOf(src, id, a));
+    const managed = (await managedOf([id])).get(id);
+    return c.json(managed ? { ...detail, managed } : detail);
   })
 
   // ── AI on one ticket ──
@@ -2014,6 +2039,39 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true, ...(mail ?? {}), ...(told.length ? { notified: told.length, notifyFailed: told.filter((x) => x.email === "failed" || x.email === "no_address" || x.chat === "failed" || x.chat === "not_ready").length, ...(told.some((x) => x.chat === "not_ready") ? { chatNotReady: true } : {}) } : {}) }, 201);
   })
 
+  /** Take a hidden ticket of a self-managed client for AKAB (tickets.edit + tickets.selfManaged) */
+  .post("/:id/take", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("tickets.selfManaged")) throw new HTTPException(403, { message: "forbidden" });
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const [row] = await db().select({ id: schema.tickets.id }).from(schema.tickets).where(eq(schema.tickets.id, id));
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    if (!(await isTicketHidden(id))) throw new HTTPException(409, { message: "not_hidden" });
+    const src = await ticketSource(ticketScopeOf(c));
+    await run(() => src.addNote(id, { text: `Pris en charge par AKAB — ${a.realUser.name}`, internal: true }, a));
+    await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, id));
+    await audit(a.user.id, "ticket.taken", String(id));
+    return c.json({ ok: true });
+  })
+
+  /** Send a ticket AKAB took back to its client's delegates (tickets.edit + tickets.selfManaged): it is hidden again, assignees cleared */
+  .post("/:id/send-back", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("tickets.selfManaged")) throw new HTTPException(403, { message: "forbidden" });
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const [row] = await db().select({ id: schema.tickets.id, companyId: schema.tickets.companyId, akabTakenAt: schema.tickets.akabTakenAt }).from(schema.tickets).where(eq(schema.tickets.id, id));
+    if (!row) throw new HTTPException(404, { message: "not_found" });
+    const companies = await selfManagedCompanyIds();
+    if (!row.akabTakenAt || !companies.has(row.companyId)) throw new HTTPException(409, { message: "not_taken" });
+    const src = await ticketSource(ticketScopeOf(c));
+    await run(() => src.addNote(id, { text: `Renvoyé au client — ${a.realUser.name}`, internal: true }, a));
+    await db().update(schema.tickets).set({ akabTakenAt: null, assigneeId: null, assigneeName: null, secondary: [] }).where(eq(schema.tickets.id, id));
+    await audit(a.user.id, "ticket.sent_back", String(id));
+    return c.json({ ok: true });
+  })
+
   /**
    * Delete a ticket for good (tickets.delete: administrators): it leaves every
    * list, count and statistic, with its notes, time and charges. Only tickets the
@@ -2241,6 +2299,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (p.contractId && !(await run(() => src.contracts(p.companyId))).some((x) => x.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
     const { checklist: checklistItems, ...rest } = p;
     const id = await run(() => src.create({ ...rest, contactId: p.contactId ?? null, contractId: p.contractId ?? null }, a));
+    // a ticket our staff make is ours: it stays in their view even when its company is self-managed
+    if (await ticketsLocal()) await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, id));
     await createItems(id, checklistItems, a.user.id);
     if (p.startDate) {
       await db()

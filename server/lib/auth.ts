@@ -7,6 +7,7 @@ import { config } from "../config.ts";
 import { randomToken, sha256 } from "./crypto.ts";
 import { clientIp } from "./http.ts";
 import { authFromKey } from "./apiKeys.ts";
+import { usableGrant } from "./clientGrants.ts";
 import {
   effectivePermissions,
   isAdmin,
@@ -51,6 +52,16 @@ export async function permissionsOf(user: User): Promise<PermissionKey[]> {
     .filter((r) => isPermissionKey(r.permission))
     .map((r) => ({ key: r.permission as PermissionKey, effect: r.effect }));
   return effectivePermissions(user.kind, rolePerms, overrides);
+}
+
+/**
+ * The permissions of a role alone, for a company a client user entered through a grant: the user's own
+ * per-user overrides belong to their home company and do not follow them.
+ */
+async function permissionsOfRole(roleId: string, kind: User["kind"]): Promise<PermissionKey[]> {
+  const [role] = await db().select().from(schema.roles).where(eq(schema.roles.id, roleId));
+  const rolePerms = role && role.audience === kind ? (role.permissions ?? []) : [];
+  return effectivePermissions(kind, rolePerms, []);
 }
 
 export async function createSession(c: Context, userId: string, mfaVerified: boolean): Promise<void> {
@@ -127,7 +138,18 @@ export const loadAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
         isAdmin: row.user.kind === "staff" && isAdmin(permissions),
         viewAs: null,
       };
-      c.set("auth", await applyViewAs(base, row.session.viewAsClientId));
+      // a client user who entered another company (a grant): that company, its role and rights, checked on every request
+      let effective = base;
+      const entered = row.session.activeClientId;
+      if (row.user.kind === "client" && entered && entered !== row.user.clientId) {
+        const grant = await usableGrant(row.user, entered);
+        if (grant) {
+          effective = { ...base, user: { ...row.user, clientId: entered, roleId: grant.roleId }, permissions: await permissionsOfRole(grant.roleId, "client") };
+        } else {
+          await db().update(schema.sessions).set({ activeClientId: null }).where(eq(schema.sessions.id, id));
+        }
+      }
+      c.set("auth", await applyViewAs(effective, row.session.viewAsClientId));
       if (now.getTime() - row.session.lastSeenAt.getTime() > 60_000) {
         await db().update(schema.sessions).set({ lastSeenAt: now }).where(eq(schema.sessions.id, id));
       }

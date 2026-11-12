@@ -32,6 +32,7 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "hr.negative": { fr: "Solde RH négatif", en: "Negative HR balance" },
   "billing.card_failed": { fr: "Prélèvement par carte refusé", en: "Card charge declined" },
   "billing.autopay_client_off": { fr: "Paiement automatique retiré par un client", en: "Automatic payment turned off by a client" },
+  "ticket.hidden": { fr: "Billets retirés de votre vue", en: "Tickets taken off your view" },
 };
 const GENERIC = { fr: "Touchez pour ouvrir le portail.", en: "Tap to open the portal." };
 

@@ -33,6 +33,8 @@ export type TicketSummary = {
   queueLabel: string;
   assignee: { id: string; name: string } | null;
   secondary: { id: string; name: string }[];
+  /** Self-managed companies only: "client" = their delegates have it, "akab" = AKAB took it */
+  managed?: "client" | "akab";
   excerpt: string;
   createdAt: string;
   dueAt: string;

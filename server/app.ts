@@ -54,6 +54,7 @@ import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
 import { portalRoutes } from "./routes/portal.ts";
+import { portalCompanyRoutes } from "./routes/portalCompanies.ts";
 import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { breakroomRoutes } from "./routes/breakroom.ts";
@@ -180,6 +181,7 @@ export function createApp() {
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.route("/portal", portalRoutes);
+  api.route("/portal", portalCompanyRoutes);
   api.use("/dashboard/*", requireStaff);
   api.route("/dashboard", dashboardRoutes);
   api.use("/tickets/*", requireStaff);

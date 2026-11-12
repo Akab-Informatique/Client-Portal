@@ -14,6 +14,7 @@ import { forgetPasswordLinks, sendPasswordLink } from "../lib/passwordLinks.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { rememberContact } from "../lib/crm.ts";
 import { ensureClientRoles } from "../lib/clientRoles.ts";
+import { chainOf, grantsOf } from "../lib/clientGrants.ts";
 import { body, zEmail, zName, zOptText, zPhone, zUuid } from "../lib/validate.ts";
 import {
   effectivePermissions,
@@ -27,6 +28,31 @@ import {
 } from "../../shared/permissions.ts";
 
 type UserRow = typeof schema.users.$inferSelect;
+
+/** The grants of a client user: home, the granted companies, and the companies of the chain they could be given. */
+async function grantsView(target: UserRow) {
+  const d = db();
+  const home = target.clientId!;
+  const [homeClient] = await d.select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, home));
+  const [homeRole] = target.roleId ? await d.select({ name: schema.roles.name }).from(schema.roles).where(eq(schema.roles.id, target.roleId)) : [];
+  const candidates = [];
+  for (const link of await chainOf(home)) {
+    const [company] = await d.select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, link.id));
+    if (!company) continue;
+    const roles = await d
+      .select({ id: schema.roles.id, name: schema.roles.name })
+      .from(schema.roles)
+      .where(and(eq(schema.roles.clientId, link.id), eq(schema.roles.audience, "client")))
+      .orderBy(asc(schema.roles.name));
+    candidates.push({ id: link.id, name: company.name, relation: link.relation, roles });
+  }
+  const grants = await grantsOf(target.id);
+  return {
+    home: { clientId: home, clientName: homeClient?.name ?? null, roleId: target.roleId, roleName: homeRole?.name ?? null },
+    grants: grants.map((g) => ({ clientId: g.clientId, clientName: g.clientName, roleId: g.roleId, roleName: g.roleName })),
+    candidates,
+  };
+}
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function publicUser(u: UserRow, overrides: { permission: string; effect: "allow" | "deny" }[] = []) {
@@ -566,6 +592,48 @@ export const adminRoutes = new Hono<AppEnv>()
     await db().delete(schema.calendarLinks).where(eq(schema.calendarLinks.id, link.id));
     await audit(a.user.id, "calendar.unlinked", link.technicianId, { linkId: link.id });
     return c.json(await o365View(await getUser(link.technicianId)));
+  })
+
+  /** A client user's other companies (of their chain) they may enter, and the companies they could be given (lib/clientGrants.ts). */
+  .get("/users/:id/grants", requirePermission("admin.clients"), async (c) => {
+    const target = await getUser(zUuid.parse(c.req.param("id")));
+    if (target.kind !== "client" || !target.clientId) throw new HTTPException(400, { message: "not_client_user" });
+    return c.json(await grantsView(target));
+  })
+
+  /** Replaces the whole set of companies a client user may enter: each in their chain, with a role of that company. */
+  .put("/users/:id/grants", requirePermission("admin.clients"), async (c) => {
+    const a = auth(c);
+    const target = await getUser(zUuid.parse(c.req.param("id")));
+    if (target.kind !== "client" || !target.clientId) throw new HTTPException(400, { message: "not_client_user" });
+    const { grants } = await body(c, z.object({ grants: z.array(z.object({ clientId: zUuid, roleId: zUuid })).max(20) }));
+    const ids = grants.map((g) => g.clientId);
+    if (new Set(ids).size !== ids.length) throw new HTTPException(400, { message: "duplicate_company" });
+    const d = db();
+    for (const g of grants) {
+      const [company] = await d.select({ id: schema.clients.id }).from(schema.clients).where(eq(schema.clients.id, g.clientId));
+      const [role] = await d.select().from(schema.roles).where(eq(schema.roles.id, g.roleId));
+      if (!company || !role) throw new HTTPException(404, { message: "not_found" });
+      if (g.clientId === target.clientId) throw new HTTPException(400, { message: "is_home_company" });
+      if (role.audience !== "client" || role.clientId !== g.clientId) throw new HTTPException(400, { message: "invalid_role" });
+    }
+    const chain = await chainOf(target.clientId);
+    if (grants.some((g) => !chain.some((x) => x.id === g.clientId))) throw new HTTPException(400, { message: "company_not_in_chain" });
+    const before = (await grantsOf(target.id)).map((g) => ({ clientId: g.clientId, roleId: g.roleId }));
+    await d.transaction(async (tx) => {
+      await tx.delete(schema.clientUserGrants).where(eq(schema.clientUserGrants.userId, target.id));
+      if (grants.length) {
+        await tx.insert(schema.clientUserGrants).values(grants.map((g) => ({ userId: target.id, clientId: g.clientId, roleId: g.roleId, createdBy: a.user.id })));
+      }
+      // a session working as a company no longer granted goes back home on its next request
+      const keep = new Set(ids);
+      const sessions = await tx.select({ id: schema.sessions.id, active: schema.sessions.activeClientId }).from(schema.sessions).where(eq(schema.sessions.userId, target.id));
+      for (const s of sessions) {
+        if (s.active && !keep.has(s.active)) await tx.update(schema.sessions).set({ activeClientId: null }).where(eq(schema.sessions.id, s.id));
+      }
+    });
+    await audit(a.user.id, "admin.grants_set", target.id, { before, after: grants.map((g) => ({ clientId: g.clientId, roleId: g.roleId })) });
+    return c.json(await grantsView(target));
   })
 
   /** Rights granted or denied directly to this user (on top of the role). */

@@ -11911,6 +11911,8 @@ describe("self-managed clients: hidden from staff", () => {
       const alertT = await mk("Alerte autogérée", own.autotaskId!, "alerts");
       const takenT = await mk("Billet repris", own.autotaskId!);
       await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, takenT.id));
+      // created by our staff, so AKAB has them: back to the portal-made state (the test is about the delegates' tickets)
+      await db().update(schema.tickets).set({ akabTakenAt: null }).where(inArray(schema.tickets.id, [hiddenT.id, inherited.id]));
       expect(hiddenT.id).toBeTruthy();
 
       // (a) staff without the right: the delegated tickets are not there at all
@@ -11957,6 +11959,306 @@ describe("self-managed clients: hidden from staff", () => {
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();
       await db().update(schema.clients).set({ selfManaged: null }).where(eq(schema.clients.id, parent.id));
+      clearSelfManagedCache();
+    }
+  });
+});
+
+describe("client company grants", () => {
+  const roleOfClient = async (clientId: string, slug: string) => {
+    const [r] = await db().select().from(schema.roles).where(and(eq(schema.roles.clientId, clientId), eq(schema.roles.slug, slug)));
+    return r!;
+  };
+  const mkClient = async (name: string, parentId: string | null = null) => {
+    const [c] = await db().insert(schema.clients).values({ name, portalEnabled: true, parentId }).returning();
+    const { ensureClientRoles } = await import("../server/lib/clientRoles.ts");
+    await ensureClientRoles(c.id);
+    return c;
+  };
+  const makeUser = async (admin: Agent, clientId: string, email: string, slug: string) => {
+    const role = await roleOfClient(clientId, slug);
+    const made = await admin.post(`/api/admin/clients/${clientId}/users`, { email, name: `Usager ${email.split("@")[0]}`, roleId: role.id, sendWelcome: false });
+    expect(made.status).toBe(201);
+    const { hashPassword } = await import("../server/lib/crypto.ts");
+    await db().update(schema.users).set({ passwordHash: await hashPassword(PASSWORD), mustChangePassword: false }).where(eq(schema.users.email, email));
+    return made.json.user.id as string;
+  };
+
+  // a parent with a child and a sibling of that child, plus an unrelated company
+  let P: { id: string; name: string };
+  let C: { id: string; name: string };
+  let S: { id: string; name: string };
+  let U: { id: string; name: string };
+  let sw: string; // home: the parent, role client-accounting (invoices), an override that denies invoices at home
+  let plain: string; // home: the parent, role client-user
+  let kid: string; // home: the child, role client-accounting
+
+  it("sets up the companies, the people and their grants", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    P = await mkClient("Zz Grants Parent inc.");
+    C = await mkClient("Zz Grants Enfant inc.", P.id);
+    S = await mkClient("Zz Grants Soeur inc.", P.id);
+    U = await mkClient("Zz Grants Autre inc.");
+    await db().insert(schema.clientInvoices).values([
+      { clientId: P.id, number: "ZG-P1", issuedOn: "2026-10-01", dueOn: "2026-10-31", totalCents: 11498, taxCents: 1498, source: "portal" },
+      { clientId: C.id, number: "ZG-C1", issuedOn: "2026-10-01", dueOn: "2026-10-31", totalCents: 5000, taxCents: 0, source: "portal" },
+    ]);
+    sw = await makeUser(admin, P.id, "switch@grants.example", "client-accounting");
+    expect((await admin.put(`/api/admin/users/${sw}/permissions`, { overrides: [{ key: "clientInvoices.view", effect: "deny" }] })).status).toBe(200);
+    plain = await makeUser(admin, P.id, "plain@grants.example", "client-user");
+    kid = await makeUser(admin, C.id, "kid@grants.example", "client-accounting");
+    expect((await admin.put(`/api/admin/users/${sw}/grants`, { grants: [{ clientId: C.id, roleId: (await roleOfClient(C.id, "client-accounting")).id }] })).status).toBe(200);
+    expect((await admin.put(`/api/admin/users/${plain}/grants`, { grants: [{ clientId: C.id, roleId: (await roleOfClient(C.id, "client-user")).id }] })).status).toBe(200);
+  });
+
+  it("the grants screen lists the chain and the roles of each company; never a sibling or an unrelated one", async () => {
+    const admin = await signIn("admin@akab.local");
+    const view = (await admin.get(`/api/admin/users/${sw}/grants`)).json;
+    expect(view.home.clientId).toBe(P.id);
+    expect(view.grants).toEqual([expect.objectContaining({ clientId: C.id, roleId: (await roleOfClient(C.id, "client-accounting")).id })]);
+    const ids = view.candidates.map((x: any) => x.id);
+    expect(ids).toEqual(expect.arrayContaining([C.id, S.id]));
+    expect(ids).not.toContain(U.id);
+    expect(ids).not.toContain(P.id);
+    expect(view.candidates.find((x: any) => x.id === C.id)).toMatchObject({ relation: "child" });
+    expect(view.candidates.find((x: any) => x.id === C.id).roles.map((r: any) => r.id)).toContain((await roleOfClient(C.id, "client-user")).id);
+  });
+
+  it("a grant to a sibling, an unrelated or unknown company, the home company or a role of another company is refused; a technician is not a client user", async () => {
+    const admin = await signIn("admin@akab.local");
+    const put = (id: string, grants: unknown[]) => admin.put(`/api/admin/users/${id}/grants`, { grants });
+    const userRole = async (c: { id: string }) => (await roleOfClient(c.id, "client-user")).id;
+    // the child's chain is its parent (and the parent's ancestors), not the sibling
+    expect((await put(kid, [{ clientId: S.id, roleId: await userRole(S) }])).json.error).toBe("company_not_in_chain");
+    expect((await put(kid, [{ clientId: U.id, roleId: await userRole(U) }])).json.error).toBe("company_not_in_chain");
+    expect((await put(kid, [{ clientId: C.id, roleId: await userRole(C) }])).json.error).toBe("is_home_company");
+    expect((await put(kid, [{ clientId: P.id, roleId: await userRole(S) }])).json.error).toBe("invalid_role");
+    expect((await put(kid, [{ clientId: crypto.randomUUID(), roleId: await userRole(P) }])).status).toBe(404);
+    expect((await put(kid, [{ clientId: P.id, roleId: crypto.randomUUID() }])).status).toBe(404);
+    const tech = (await admin.get("/api/admin/staff")).json.find((u: any) => u.email === "tech@akab.local");
+    expect((await put(tech.id, [])).json.error).toBe("not_client_user");
+    // nothing was written by the refused requests
+    expect((await admin.get(`/api/admin/users/${kid}/grants`)).json.grants).toEqual([]);
+    // the parent is in the child's chain: a grant there is accepted
+    expect((await put(kid, [{ clientId: P.id, roleId: await userRole(P) }])).status).toBe(200);
+    expect((await put(kid, [])).status).toBe(200);
+  });
+
+  it("switching company changes the company, its role and its rights; the home overrides stay at home", async () => {
+    const agent = await signIn("switch@grants.example");
+    const me = (await agent.get("/api/me")).json;
+    expect(me.client.id).toBe(P.id);
+    expect(me.activeClientId).toBe(P.id);
+    expect(me.clientCompanies).toHaveLength(2);
+    expect(me.clientCompanies[0]).toMatchObject({ id: P.id, home: true });
+    expect(me.clientCompanies[1]).toMatchObject({ id: C.id, home: false, parentName: P.name });
+    // at home an override denies invoices; the rest of the role still holds
+    expect((await agent.get("/api/client-billing/invoices")).status).toBe(403);
+    expect((await agent.get("/api/portal/tickets?scope=company")).status).toBe(200);
+    expect((await agent.get("/api/portal/companies")).json).toMatchObject({ active: P.id });
+
+    const put = await agent.put("/api/portal/active-company", { clientId: C.id });
+    expect(put.status).toBe(200);
+    expect(put.json).toMatchObject({ active: C.id });
+    const at = (await agent.get("/api/me")).json;
+    expect(at.client.id).toBe(C.id);
+    expect(at.role.slug).toBe("client-accounting");
+    expect(at.permissions).toContain("clientInvoices.view");
+    const invoices = (await agent.get("/api/client-billing/invoices")).json.map((i: any) => i.number);
+    expect(invoices).toContain("ZG-C1");
+    expect(invoices).not.toContain("ZG-P1");
+
+    // back home: the override applies again
+    expect((await agent.put("/api/portal/active-company", { clientId: null })).json).toMatchObject({ active: P.id });
+    expect((await agent.get("/api/client-billing/invoices")).status).toBe(403);
+    expect((await agent.put("/api/portal/active-company", { clientId: C.id })).status).toBe(200);
+
+    const log = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "portal.company_switched"));
+    expect(log.length).toBeGreaterThan(0);
+  });
+
+  it("a company entered with a role of its own: the rights of that role only", async () => {
+    const agent = await signIn("plain@grants.example");
+    expect((await agent.get("/api/client-billing/invoices")).status).toBe(403);
+    expect((await agent.put("/api/portal/active-company", { clientId: C.id })).status).toBe(200);
+    expect((await agent.get("/api/me")).json.client.id).toBe(C.id);
+    expect((await agent.get("/api/client-billing/invoices")).status).toBe(403);
+    expect((await agent.get("/api/portal/tickets?scope=company")).status).toBe(403);
+    expect((await agent.get("/api/portal/tickets")).status).toBe(200);
+  });
+
+  it("a forged company (sibling, unrelated) is refused with 403; a company in the chain is enterable only with a grant", async () => {
+    const agent = await signIn("kid@grants.example");
+    expect((await agent.put("/api/portal/active-company", { clientId: S.id })).status).toBe(403);
+    expect((await agent.put("/api/portal/active-company", { clientId: U.id })).status).toBe(403);
+    expect((await agent.put("/api/portal/active-company", { clientId: P.id })).status).toBe(403);
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.put(`/api/admin/users/${kid}/grants`, { grants: [{ clientId: P.id, roleId: (await roleOfClient(P.id, "client-user")).id }] })).status).toBe(200);
+    expect((await agent.put("/api/portal/active-company", { clientId: P.id })).json).toMatchObject({ active: P.id });
+    expect((await agent.put("/api/portal/active-company", { clientId: null })).status).toBe(200);
+  });
+
+  it("removing a grant while switched sends the session home on its next request", async () => {
+    const agent = await signIn("switch@grants.example");
+    expect((await agent.put("/api/portal/active-company", { clientId: C.id })).status).toBe(200);
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.put(`/api/admin/users/${sw}/grants`, { grants: [] })).status).toBe(200);
+    const me = (await agent.get("/api/me")).json;
+    expect(me.client.id).toBe(P.id);
+    expect(me.activeClientId).toBe(P.id);
+    expect((await agent.get("/api/portal/companies")).json.companies).toHaveLength(1);
+    // granted again
+    expect((await admin.put(`/api/admin/users/${sw}/grants`, { grants: [{ clientId: C.id, roleId: (await roleOfClient(C.id, "client-accounting")).id }] })).status).toBe(200);
+    expect((await agent.put("/api/portal/active-company", { clientId: C.id })).status).toBe(200);
+  });
+
+  it("a company whose portal is closed, or that is switched off, is left: the session goes back home and cannot be entered", async () => {
+    const agent = await signIn("switch@grants.example");
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.put(`/api/crm/clients/${C.id}/portal`, { enabled: false, sendWelcome: false })).status).toBe(200);
+    expect((await agent.get("/api/me")).json.client.id).toBe(P.id);
+    expect((await agent.put("/api/portal/active-company", { clientId: C.id })).status).toBe(403);
+    expect((await admin.put(`/api/crm/clients/${C.id}/portal`, { enabled: true, sendWelcome: false })).status).toBe(200);
+    expect((await agent.put("/api/portal/active-company", { clientId: C.id })).status).toBe(200);
+    // the company switched off
+    await db().update(schema.clients).set({ active: false }).where(eq(schema.clients.id, C.id));
+    expect((await agent.get("/api/me")).json.client.id).toBe(P.id);
+    expect((await agent.put("/api/portal/active-company", { clientId: C.id })).status).toBe(403);
+    await db().update(schema.clients).set({ active: true }).where(eq(schema.clients.id, C.id));
+  });
+
+  it("staff cannot use the company switch and an anonymous request gets 401", async () => {
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.get("/api/portal/companies")).status).toBe(403);
+    expect((await admin.put("/api/portal/active-company", { clientId: null })).status).toBe(403);
+    expect((await new Agent().get("/api/portal/companies")).status).toBe(401);
+    const log = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "admin.grants_set"));
+    expect(log.length).toBeGreaterThan(0);
+  });
+});
+
+describe("self-managed clients: staff routes", () => {
+  it("the flag (who may set it, the preview, the hidden tickets' pins and planned time, the technicians told), take and send back, the companies list and the managed field", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const { clearSelfManagedCache } = await import("../server/lib/selfManaged.ts");
+    const [parent] = await db().insert(schema.clients).values({ name: "Zz Flag P (test)", autotaskId: 9_400_001 }).returning();
+    const [child] = await db().insert(schema.clients).values({ name: "Zz Flag C (test)", autotaskId: 9_400_002, parentId: parent.id }).returning();
+    const [plain] = await db().insert(schema.clients).values({ name: "Zz Flag N (test)", autotaskId: 9_400_003 }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    clearSelfManagedCache();
+    try {
+      const mk = async (title: string, companyId: number, queue = "support", assigneeId: string | null = null) =>
+        (await admin.post("/api/tickets", { title, description: "x", companyId, priority: "medium", queue, assigneeId, dueDate: "2026-12-05" })).json;
+      // made outside (portal, email): AKAB has not taken them. Made by our staff: taken from the start.
+      const outside = async (t: { id: number }) => {
+        await db().update(schema.tickets).set({ akabTakenAt: null }).where(eq(schema.tickets.id, t.id));
+        return t;
+      };
+      const open1 = await outside(await mk("Billet portail", parent.autotaskId!, "support", techUser.id));
+      const open2 = await outside(await mk("Billet enfant", child.autotaskId!));
+      const alertT = await outside(await mk("Alerte du parent", parent.autotaskId!, "alerts"));
+      const made = await mk("Billet fait par nous", parent.autotaskId!);
+      const seen = await mk("Billet ailleurs", plain.autotaskId!);
+
+      // only an administrator sets the flag; an unknown client is a 404
+      expect((await tech.put(`/api/crm/clients/${parent.id}/self-managed`, { value: "on" })).status).toBe(403);
+      expect((await tech.get(`/api/crm/clients/${parent.id}/self-managed/preview?value=on`)).status).toBe(403);
+      expect((await admin.put(`/api/crm/clients/${nodeCrypto.randomUUID()}/self-managed`, { value: "on" })).status).toBe(404);
+
+      // what switching on would change: the tickets that become hidden, pins and planned time included
+      const day = "2026-12-05";
+      await db().insert(schema.ticketPins).values({ ticketId: open1.id, ticketNumber: open1.number, ticketTitle: "Billet portail", technicianId: techUser.id, forDate: day });
+      await db().insert(schema.calendarBlocks).values({ technicianId: techUser.id, ticketId: open1.id, ticketNumber: open1.number, title: "Travail", startsAt: new Date("2026-12-05T14:00:00Z"), endsAt: new Date("2026-12-05T15:00:00Z") });
+      await db().insert(schema.ticketDayAdds).values({ ticketId: open1.id, userId: techUser.id, forDate: day });
+      const prev = (await admin.get(`/api/crm/clients/${parent.id}/self-managed/preview?value=on`)).json;
+      expect(prev.clients.map((x: { id: string }) => x.id).sort()).toEqual([parent.id, child.id].sort());
+      expect(prev.openTickets).toBe(2);
+      expect(prev.alerts).toBe(1);
+      expect(prev.withTechnician).toEqual([{ name: techUser.name, count: 1 }]);
+      expect(prev.pins).toBe(1);
+      expect(prev.plannedBlocks).toBe(1);
+      expect(prev.timers).toBe(0);
+
+      // staff without the right do not see the delegates' tickets; the staff-made one stays in its creator's view
+      await db().insert(schema.userPermissions).values({ userId: techUser.id, permission: "tickets.selfManaged", effect: "deny" });
+      expect((await admin.get(`/api/tickets/${made.id}`)).json.managed).toBeUndefined();
+
+      // switch on: the two hidden tickets; pins, day additions and blocks go; the technician is told without a title
+      const on = await admin.put(`/api/crm/clients/${parent.id}/self-managed`, { value: "on" });
+      expect(on.status).toBe(200);
+      expect(on.json.hidden).toBe(2);
+      expect(on.json.removed).toEqual({ pins: 1, dayAdds: 1, blocks: 1 });
+      expect(await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.ticketId, open1.id))).toHaveLength(0);
+      expect(await db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.ticketId, open1.id))).toHaveLength(0);
+      expect(await db().select().from(schema.ticketDayAdds).where(eq(schema.ticketDayAdds.ticketId, open1.id))).toHaveLength(0);
+      const told = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, techUser.id), eq(schema.notifications.type, "ticket.hidden")));
+      const mine = told.find((n) => (n.data as { client?: string }).client === parent.name);
+      expect(mine).toBeTruthy();
+      expect((mine!.data as { count: number }).count).toBe(1);
+      expect(JSON.stringify(told)).not.toContain("Billet portail");
+
+      // the flag as the screens read it: the child inherits it from its parent
+      expect((await admin.get(`/api/crm/clients/${child.id}/self-managed`)).json).toMatchObject({ own: null, effective: true, inheritedFrom: { id: parent.id } });
+      const parentFlag = (await admin.get(`/api/crm/clients/${parent.id}/self-managed`)).json;
+      expect(parentFlag).toMatchObject({ own: "on", effective: true, inheritedFrom: null });
+      expect(parentFlag.children.map((x: { id: string }) => x.id)).toContain(child.id);
+
+      // hidden from the technician without the right; alerts and the staff-made one stay visible
+      const hiddenList = JSON.stringify((await tech.get("/api/tickets?view=all")).json);
+      expect(hiddenList).not.toContain(open1.number);
+      expect(hiddenList).not.toContain(open2.number);
+      expect(hiddenList).toContain(alertT.number);
+      expect(hiddenList).toContain(made.number);
+      expect((await tech.get(`/api/tickets/${open1.id}`)).status).toBe(404);
+      expect((await tech.get("/api/tickets/self-managed-companies")).status).toBe(403);
+      expect((await admin.get(`/api/tickets/${made.id}`)).json.managed).toBe("akab");
+      expect((await admin.get(`/api/tickets/${open1.id}`)).json.managed).toBe("client");
+      expect((await admin.get(`/api/tickets/${seen.id}`)).json.managed).toBeUndefined();
+
+      // take: needs the right; a hidden ticket only, once
+      expect((await tech.post(`/api/tickets/${open1.id}/take`, {})).status).toBe(404);
+      await db().delete(schema.userPermissions).where(eq(schema.userPermissions.userId, techUser.id));
+      expect((await tech.post(`/api/tickets/${seen.id}/take`, {})).status).toBe(409);
+      expect((await tech.post(`/api/tickets/${alertT.id}/take`, {})).status).toBe(409);
+      expect((await tech.post(`/api/tickets/${open1.id}/take`, {})).json).toEqual({ ok: true });
+      expect((await tech.post(`/api/tickets/${open1.id}/take`, {})).status).toBe(409);
+      expect((await tech.get(`/api/tickets/${open1.id}`)).json.managed).toBe("akab");
+      const items = (await tech.get(`/api/tickets?view=all&selfManaged=${parent.autotaskId}`)).json.items as { id: number; managed?: string }[];
+      expect(items.find((x) => x.id === open1.id)?.managed).toBe("akab");
+      expect(items.find((x) => x.id === alertT.id)?.managed).toBe("client");
+      expect(items.find((x) => x.id === seen.id)?.managed).toBeUndefined();
+
+      // send back: only a ticket AKAB took of a self-managed company; assignee cleared; hidden again
+      expect((await tech.post(`/api/tickets/${alertT.id}/send-back`, {})).status).toBe(409);
+      expect((await tech.post(`/api/tickets/${open1.id}/send-back`, {})).json).toEqual({ ok: true });
+      expect((await tech.post(`/api/tickets/${open1.id}/send-back`, {})).status).toBe(409);
+      const back = (await tech.get(`/api/tickets/${open1.id}`)).json;
+      expect(back.managed).toBe("client");
+      expect(back.assignee ?? null).toBeNull();
+      await db().insert(schema.userPermissions).values({ userId: techUser.id, permission: "tickets.selfManaged", effect: "deny" });
+      expect(JSON.stringify((await tech.get("/api/tickets?view=all")).json)).not.toContain(open1.number);
+      await db().delete(schema.userPermissions).where(eq(schema.userPermissions.userId, techUser.id));
+
+      // the "Clients autogérés" list: the self-managed companies, hidden and open counts
+      const companies = (await admin.get("/api/tickets/self-managed-companies")).json as { clientId: string; companyId: number; hidden: number; open: number }[];
+      expect(companies.find((x) => x.clientId === parent.id)).toMatchObject({ companyId: parent.autotaskId, hidden: 1, open: 3 });
+      expect(companies.some((x) => x.clientId === plain.id)).toBe(false);
+
+      // the flag off: visible again at once
+      const off = await admin.put(`/api/crm/clients/${parent.id}/self-managed`, { value: null });
+      expect(off.json).toMatchObject({ ok: true, value: null, hidden: 0 });
+      expect(JSON.stringify((await tech.get("/api/tickets?view=all")).json)).toContain(open1.number);
+      expect((await admin.get(`/api/crm/clients/${parent.id}/self-managed`)).json).toMatchObject({ own: null, effective: false });
+    } finally {
+      await db().delete(schema.userPermissions).where(eq(schema.userPermissions.userId, techUser.id));
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+      await db().update(schema.clients).set({ selfManaged: null }).where(inArray(schema.clients.id, [parent.id, child.id]));
       clearSelfManagedCache();
     }
   });
