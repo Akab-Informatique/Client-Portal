@@ -109,7 +109,7 @@ async function contactByName(name: string | null): Promise<Found | null> {
 
 /** A contact whose phone number is written in the email (signature…), the first that is known. */
 async function contactByPhoneIn(text: string): Promise<Found | null> {
-  const src = await ticketSource();
+  const src = await ticketSource({ all: true });
   const numbers = [...new Set((text.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/g) ?? []).map((n) => n.replace(/\D/g, "").slice(-10)))].slice(0, 5);
   for (const n of numbers) {
     const hit = await src.contactByPhone(n).catch(() => null);
@@ -120,7 +120,7 @@ async function contactByPhoneIn(text: string): Promise<Found | null> {
 
 /** Our own client (AKAB): where an email nobody can be matched to goes, to be changed later. */
 export async function ownCompany(): Promise<{ id: number; name: string } | null> {
-  const list = await (await ticketSource()).companies().catch(() => []);
+  const list = await (await ticketSource({ all: true })).companies().catch(() => []);
   const own = list.find((c) => c.id === 0) ?? list.find((c) => /\bakab\b/i.test(c.name));
   return own ? { id: own.id, name: own.name } : null;
 }
@@ -133,7 +133,7 @@ export type Matched = { contact: Found | null; company: { id: number; name: stri
  * client). Nothing matches: our own client, AKAB, and a technician changes it later.
  */
 export async function matchSender(address: string, name: string | null = null, text = ""): Promise<Matched> {
-  const src = await ticketSource();
+  const src = await ticketSource({ all: true });
   const byEmail = await src.contactByEmail(address).catch(() => null);
   const named = byEmail ?? (await contactByName(name).catch(() => null));
   const byPhone = named ?? (await contactByPhoneIn(text).catch(() => null));
@@ -206,7 +206,7 @@ export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; 
       await done("skipped", { note: "automatic" });
       return { outcome: "skipped" };
     }
-    const src = await ticketSource();
+    const src = await ticketSource({ all: true });
     const s = await intakeSettings();
 
     // naming a ticket: the client's message on it

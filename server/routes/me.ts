@@ -8,6 +8,14 @@ import { auth, requireAuth, type AppEnv, type AuthContext } from "../lib/auth.ts
 import { body, zName, zOptText, zPhone } from "../lib/validate.ts";
 import { o365Ready } from "../lib/o365.ts";
 import { SYSTEM_ROLES } from "../../shared/permissions.ts";
+import { companiesOf } from "../lib/clientGrants.ts";
+
+/** A client user's companies (home first) when they may enter more than one; null otherwise. */
+async function clientCompaniesOf(a: AuthContext) {
+  if (a.viewAs || a.realUser.kind !== "client") return null;
+  const companies = await companiesOf(a.realUser);
+  return companies.length > 1 ? companies : null;
+}
 
 export type Me = Awaited<ReturnType<typeof loadMe>>;
 
@@ -42,6 +50,10 @@ export async function loadMe(a: AuthContext) {
     features: { passbolt: await passboltMenuShown() },
     /** Fills in a weekly timesheet (otherwise the Timesheets entry is hidden, unless they manage everyone's) */
     timesheetRequired: u.timesheetRequired,
+    /** The company the session works as now (a client user who entered another company through a grant; the home one otherwise) */
+    activeClientId: u.clientId ?? null,
+    /** The companies a client user may enter (home first), only when there are more than one */
+    clientCompanies: await clientCompaniesOf(a),
     preferences: { sortDefaults: prefs?.sortDefaults ?? {}, dashboard: prefs?.dashboard ?? null, theme: prefs?.theme ?? "dark", outlook: prefs?.outlook ?? false, bankHours: prefs?.bankHoursDefault ?? false, ticketLayout: prefs?.ticketLayout ?? null, notify: prefs?.notifyDefaults ?? { email: true, sms: false, teams: false }, pushDetails: prefs?.pushDetails ?? false, navFavorites: prefs?.navFavorites ?? [] },
   };
 }

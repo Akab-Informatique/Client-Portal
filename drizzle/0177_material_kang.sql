@@ -1,0 +1,1 @@
+ALTER TABLE "tickets" ADD COLUMN "hidden_from_delegates" boolean DEFAULT false NOT NULL;

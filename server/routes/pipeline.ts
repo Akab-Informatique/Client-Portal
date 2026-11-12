@@ -13,6 +13,7 @@ import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
 import { startAtNow, calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds, allocOf, dayItems } from "../lib/pipeline.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
+import { hiddenFromCaller, ticketScopeOf, type TicketScope } from "../lib/selfManaged.ts";
 import { editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { splitBillable } from "../lib/hr.ts";
 import { notifyTechs } from "../lib/techNotify.ts";
@@ -172,8 +173,8 @@ async function activeStaff(id: string | string[]) {
   if (rows.length !== ids.length) throw new HTTPException(400, { message: "invalid_assignee" });
 }
 
-async function ticketRef(id: number) {
-  const t = await (await ticketSource()).get(id).catch(() => null);
+async function ticketRef(id: number, scope: TicketScope = {}) {
+  const t = await (await ticketSource(scope)).get(id).catch(() => null);
   if (!t) throw new HTTPException(400, { message: "invalid_ticket" });
   return { ticketId: t.id, ticketNumber: t.number, ticketTitle: t.title };
 }
@@ -345,6 +346,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const id = Number(c.req.param("ticketId"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    if (await hiddenFromCaller(ticketScopeOf(c), id)) throw new HTTPException(404, { message: "not_found" });
     const who = await dayTarget(a, c.req.query("userId"));
     await resetDayAdds();
     const [row] = await db().select().from(schema.ticketDayAdds).where(and(eq(schema.ticketDayAdds.ticketId, id), eq(schema.ticketDayAdds.userId, who), eq(schema.ticketDayAdds.forDate, todayQc())));
@@ -357,7 +359,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
     const p = await body(c, z.object({ time: zHm.nullable().default(null), userId: zUuid.optional() }));
     const who = await dayTarget(a, p.userId);
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [t, o] = await Promise.all([src.get(id).catch(() => null), src.options()]);
     if (!t) throw new HTTPException(404, { message: "not_found" });
     if (o.statuses.find((s) => s.value === t.status)?.kind === "complete") throw new HTTPException(409, { message: "ticket_complete" });
@@ -688,7 +690,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     for (const it of p.checklist) if (typeof it !== "string" && it.assigneeId) await activeStaff(it.assigneeId);
     if (p.parentId) await taskOr404(c, p.parentId);
     if (p.blockedById) await taskOr404(c, p.blockedById);
-    const ticket = p.ticketId ? await ticketRef(p.ticketId) : { ticketId: null, ticketNumber: null, ticketTitle: null };
+    const ticket = p.ticketId ? await ticketRef(p.ticketId, ticketScopeOf(c)) : { ticketId: null, ticketNumber: null, ticketTitle: null };
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [row] = await db()
       .insert(schema.pipelineTasks)
@@ -816,7 +818,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
       }
       set.blockedById = p.blockedById;
     }
-    if (p.ticketId !== undefined) Object.assign(set, p.ticketId ? await ticketRef(p.ticketId) : { ticketId: null, ticketNumber: null, ticketTitle: null });
+    if (p.ticketId !== undefined) Object.assign(set, p.ticketId ? await ticketRef(p.ticketId, ticketScopeOf(c)) : { ticketId: null, ticketNumber: null, ticketTitle: null });
     if (p.status !== undefined && p.status !== cur.status) {
       const waitsOn = (set.blockedById !== undefined ? set.blockedById : cur.blockedById) ?? null;
       if (p.status === "doing" || p.status === "done") {

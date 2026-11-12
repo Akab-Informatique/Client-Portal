@@ -57,7 +57,7 @@ export function syncCrm(): Promise<CrmState> {
       await saveState(s);
       return s;
     }
-    const src = await ticketSource();
+    const src = await ticketSource({ all: true });
     const source = "sample";
     const before = await crmState();
     try {

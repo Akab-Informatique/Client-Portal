@@ -9,6 +9,7 @@ import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ProfileDialog } from "@/components/ProfileDialog";
+import { CompanySwitcher } from "@/components/CompanySwitcher";
 import { ViewAsBanner, ViewSwitcher } from "@/components/ViewSwitcher";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -208,9 +209,9 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
       <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenu} aria-label="Menu">
         <Menu className="size-5" />
       </Button>
-      <span className="hidden min-w-0 items-center gap-2.5 sm:flex">
-        <span className="size-1.5 shrink-0 rounded-full bg-grad-gold shadow-[0_0_10px_var(--gold)]" />
-        <span className="truncate text-sm font-medium">{me.viewAs ? me.viewAs.clientName : me.client?.name}</span>
+      <span className="flex min-w-0 items-center gap-2.5">
+        <span className="hidden size-1.5 shrink-0 rounded-full bg-grad-gold shadow-[0_0_10px_var(--gold)] sm:block" />
+        {me.viewAs ? <span className="hidden truncate text-sm font-medium sm:block">{me.viewAs.clientName}</span> : <CompanySwitcher name={me.client?.name} />}
       </span>
       {me.viewAs && <ViewSwitcher />}
       <div className="ml-auto flex items-center gap-3">

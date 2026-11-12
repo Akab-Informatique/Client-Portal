@@ -1169,7 +1169,7 @@ const en: Dict = {
         carry: "Roll over to next month",
         carryHint: "Unused hours are added to next month; the full bank is still bought every month.",
         topup: "Are deducted from next month",
-        topupHint: "Unused hours stay with the client; next month he only buys what tops the bank back up.",
+        topupHint: "Unused hours stay with the client and can all be used, even above the monthly bank. Each month he only buys what brings the bank back to its hours (nothing when he has more). Hours taken from next month are bought back too.",
         adjustTitle: "Adjust the bank's hours",
         adjustHours: "Hours (+ or −)",
         adjustHoursHint: "+ adds hours, − takes some off",

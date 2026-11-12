@@ -87,7 +87,7 @@ async function newTicketReply(): Promise<number> {
   const st = await workflowState(key);
   if (!st.enabled || !st.enabledAt) return 0;
   const since = Math.max(Date.parse(st.enabledAt), Date.now() - MAX_AGE_MS);
-  const src = await ticketSource();
+  const src = await ticketSource({ all: true });
   const [all, options] = await Promise.all([src.list(), src.options()]);
   const L = lookup(options);
   const alert = isAlert(L);
@@ -134,7 +134,7 @@ async function replyTo(key: WorkflowKey, t: NTicket): Promise<boolean> {
       .set({ status, toEmail: extra.toEmail ?? null, reason: extra.reason ?? null })
       .where(eq(r.id, claim.id));
   try {
-    const src = await ticketSource();
+    const src = await ticketSource({ all: true });
     const contact = t.contactId ? ((await src.contacts(t.company.id).catch(() => [])).find((c) => c.id === t.contactId) ?? null) : null;
     const email = contact?.email?.trim().toLowerCase() || null;
     if (!email) {

@@ -9,6 +9,7 @@ import { audit } from "../lib/audit.ts";
 import { notify } from "../lib/notify.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
+import { hiddenFromCaller, hiddenIdsFor, ticketScopeOf, type TicketScope } from "../lib/selfManaged.ts";
 import { calendarsOf, onCalendar, syncBlock, syncPin, unsyncBlock, unsyncPin } from "../lib/planning.ts";
 import { O365Error, outlookEvents, type OutlookEvent } from "../lib/o365.ts";
 import { holidaysBetween } from "../../shared/holidays.ts";
@@ -117,20 +118,20 @@ async function technician(id: string) {
 }
 
 /** Number and title of a ticket (local copy first). */
-async function ticketInfo(id: number) {
-  const src = await ticketSource();
+async function ticketInfo(id: number, scope: TicketScope = {}) {
+  const src = await ticketSource(scope);
   const t = (await src.list().catch(() => [])).find((x) => x.id === id) ?? (await src.get(id).catch(() => null));
   if (!t) throw new HTTPException(404, { message: "not_found" });
   return t;
 }
 
 /** Pin (or update the direction of) a ticket for a technician; tells them. */
-async function pin(a: AuthContext, p: { ticketId: number; technicianId: string; note?: string; horizon?: "day" | "week"; forDate?: string }) {
+async function pin(a: AuthContext, p: { ticketId: number; technicianId: string; note?: string; horizon?: "day" | "week"; forDate?: string }, scope: TicketScope = {}) {
   const horizon = p.horizon ?? "week";
   const day = p.forDate ?? today();
   const forDate = horizon === "week" ? monday(day) : day;
   const tech = await technician(p.technicianId);
-  const t = await ticketInfo(p.ticketId);
+  const t = await ticketInfo(p.ticketId, scope);
   const [existing] = await db()
     .select()
     .from(schema.ticketPins)
@@ -204,8 +205,8 @@ export const planningRoutes = new Hono<AppEnv>()
       .leftJoin(schema.users, eq(schema.users.id, schema.ticketPins.pinnedBy))
       .where(inArray(schema.ticketPins.technicianId, ids))
       .orderBy(asc(schema.ticketPins.rank), asc(schema.ticketPins.createdAt));
-    const src = await ticketSource();
-    const [list, o] = await Promise.all([src.list().catch(() => []), src.options().catch(() => null)]);
+    const src = await ticketSource(ticketScopeOf(c));
+    const [list, o, hiddenIds] = await Promise.all([src.list().catch(() => []), src.options().catch(() => null), hiddenIdsFor(ticketScopeOf(c))]);
     const bucket = (p: typeof schema.ticketPins.$inferSelect): "day" | "week" | "carried" | null => {
       if (p.horizon === "day" && p.forDate === day) return "day";
       if (p.horizon === "week" && p.forDate === week) return "week";
@@ -215,7 +216,7 @@ export const planningRoutes = new Hono<AppEnv>()
     return c.json(
       rows
         .map((r) => ({ ...r, bucket: bucket(r.pin) }))
-        .filter((r) => r.bucket)
+        .filter((r) => r.bucket && !hiddenIds.has(r.pin.ticketId))
         .map(({ pin: p, by, bucket: b }) => {
         const t = list.find((x) => x.id === p.ticketId);
         const st = o?.statuses.find((s) => s.value === t?.status);
@@ -238,6 +239,7 @@ export const planningRoutes = new Hono<AppEnv>()
   .get("/pins/ticket/:ticketId", async (c) => {
     const id = Number(c.req.param("ticketId"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
+    if (await hiddenFromCaller(ticketScopeOf(c), id)) throw new HTTPException(404, { message: "not_found" });
     const by = sql<string | null>`(select name from users where users.id = ${schema.ticketPins.pinnedBy})`;
     return c.json(
       await db()
@@ -272,7 +274,7 @@ export const planningRoutes = new Hono<AppEnv>()
       }),
     );
     mustEdit(a, p.technicianId);
-    return c.json(await pin(a, p), 201);
+    return c.json(await pin(a, p, ticketScopeOf(c)), 201);
   })
 
   /** Done (or not): the technician it is for, or a planner. */
@@ -282,6 +284,7 @@ export const planningRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ done: z.boolean() }));
     const [row] = await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.id, id));
     if (!row) throw new HTTPException(404, { message: "not_found" });
+    if (await hiddenFromCaller(ticketScopeOf(c), row.ticketId)) throw new HTTPException(404, { message: "not_found" });
     if (row.technicianId !== a.user.id && !canPlan(a)) throw new HTTPException(403, { message: "forbidden" });
     const [next] = await db().update(schema.ticketPins).set({ doneAt: p.done ? new Date() : null, updatedAt: new Date() }).where(eq(schema.ticketPins.id, id)).returning();
     await syncPin(next);
@@ -295,6 +298,7 @@ export const planningRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ note: z.string().trim().max(2000).optional(), horizon: z.enum(["day", "week"]).optional(), forDate: zDay.optional() }));
     const [cur] = await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.id, id));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
+    if (await hiddenFromCaller(ticketScopeOf(c), cur.ticketId)) throw new HTTPException(404, { message: "not_found" });
     mustEdit(a, cur.technicianId);
     const horizon = p.horizon ?? cur.horizon;
     const day = p.forDate ?? cur.forDate;
@@ -316,6 +320,7 @@ export const planningRoutes = new Hono<AppEnv>()
     const p = await body(c, z.object({ dir: z.enum(["up", "down"]) }));
     const [row] = await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.id, id));
     if (!row) throw new HTTPException(404, { message: "not_found" });
+    if (await hiddenFromCaller(ticketScopeOf(c), row.ticketId)) throw new HTTPException(404, { message: "not_found" });
     mustEdit(a, row.technicianId);
     const list = await db()
       .select()
@@ -338,6 +343,7 @@ export const planningRoutes = new Hono<AppEnv>()
     const id = zUuid.parse(c.req.param("id"));
     const [cur] = await db().select().from(schema.ticketPins).where(eq(schema.ticketPins.id, id));
     if (!cur) return c.json({ ok: true });
+    if (await hiddenFromCaller(ticketScopeOf(c), cur.ticketId)) throw new HTTPException(404, { message: "not_found" });
     mustEdit(a, cur.technicianId);
     const [row] = await db().delete(schema.ticketPins).where(eq(schema.ticketPins.id, id)).returning();
     if (row) {
@@ -362,13 +368,22 @@ export const planningRoutes = new Hono<AppEnv>()
       .orderBy(asc(schema.calendarBlocks.startsAt));
     // a block on a ticket that is done (complete) says so: the week panels leave it out
     const doneIds = new Set<number>();
+    const scope = ticketScopeOf(c);
+    const hiddenIds = await hiddenIdsFor(scope);
     if (rows.some((b) => b.ticketId)) {
-      const src = await ticketSource();
+      const src = await ticketSource(scope);
       const [list, o] = await Promise.all([src.list().catch(() => []), src.options().catch(() => null)]);
       const complete = new Set((o?.statuses ?? []).filter((s) => s.kind === "complete").map((s) => s.value));
       for (const t of list) if (complete.has(t.status)) doneIds.add(t.id);
     }
-    return c.json(rows.map((b) => ({ ...asSeen(b, full), ...(b.ticketId && doneIds.has(b.ticketId) ? { done: true } : {}) })));
+    // a block on a hidden ticket is only "busy" for this viewer: no number, title, client or note
+    return c.json(
+      rows.map((b) =>
+        b.ticketId && hiddenIds.has(b.ticketId)
+          ? { ...asSeen(b, false), title: "Occupé", note: "", ticketId: null, ticketNumber: null, companyName: null }
+          : { ...asSeen(b, full), ...(b.ticketId && doneIds.has(b.ticketId) ? { done: true } : {}) },
+      ),
+    );
   })
 
   /** Everyone's reserved time for a week (the team calendar), each as this viewer may see it. */
@@ -471,8 +486,9 @@ export const planningRoutes = new Hono<AppEnv>()
     let companyName: string | null = null;
     const ticketId = p.kind === "slot" ? null : p.ticketId;
     if (ticketId) {
-      const info = await ticketInfo(ticketId);
-      if (p.priority !== "none") await pin(a, { ticketId, technicianId: tech.id, forDate: dayOf(startsAt), ...(p.priority === "day" ? { horizon: "day" as const } : {}) });
+      const scope = ticketScopeOf(c);
+      const info = await ticketInfo(ticketId, scope);
+      if (p.priority !== "none") await pin(a, { ticketId, technicianId: tech.id, forDate: dayOf(startsAt), ...(p.priority === "day" ? { horizon: "day" as const } : {}) }, scope);
       number = info.number;
       title ||= info.title;
       companyName = info.company.name;
@@ -519,6 +535,7 @@ export const planningRoutes = new Hono<AppEnv>()
     );
     const [cur] = await db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, id));
     if (!cur) throw new HTTPException(404, { message: "not_found" });
+    if (cur.ticketId && (await hiddenFromCaller(ticketScopeOf(c), cur.ticketId))) throw new HTTPException(404, { message: "not_found" });
     mustEdit(a, cur.technicianId);
     const startsAt = p.startsAt ? new Date(p.startsAt) : cur.startsAt;
     const endsAt = p.endsAt ? new Date(p.endsAt) : cur.endsAt;
@@ -552,6 +569,7 @@ export const planningRoutes = new Hono<AppEnv>()
     const id = zUuid.parse(c.req.param("id"));
     const [cur] = await db().select().from(schema.calendarBlocks).where(eq(schema.calendarBlocks.id, id));
     if (!cur) return c.json({ ok: true, warnings: [] });
+    if (cur.ticketId && (await hiddenFromCaller(ticketScopeOf(c), cur.ticketId))) throw new HTTPException(404, { message: "not_found" });
     mustEdit(a, cur.technicianId);
     const warnings: string[] = [];
     const o365 = await unsyncBlock(cur);

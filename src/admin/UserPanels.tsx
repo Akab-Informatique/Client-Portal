@@ -24,6 +24,7 @@ import { OverridesEditor, type OverrideMap } from "./PermissionMatrix";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { O365Panel } from "./CalendarLinks";
 import { HrFile } from "@/components/HrFile";
+import { ClientGrants } from "./ClientGrants";
 
 function invalidateUsers(qc: ReturnType<typeof useQueryClient>) {
   void qc.invalidateQueries({ queryKey: ["admin"] });
@@ -304,6 +305,11 @@ export function UserSheet({ user, onClose }: { user: AdminUser | null; onClose: 
               </TabsContent>
               <TabsContent value="access" className="pt-4">
                 <AccessTab key={user.id} user={user} roles={roles} />
+                {user.kind === "client" && can("admin.clients") && (
+                  <div className="mt-8 border-t pt-6">
+                    <ClientGrants key={user.id} userId={user.id} />
+                  </div>
+                )}
               </TabsContent>
               {user.kind === "staff" && can("hr.manage") && (
                 <TabsContent value="hr" className="pt-4">

@@ -2,7 +2,7 @@
  * The hours bank of a contract: hours of work sold by the month (a quantity of hours at a price per hour). The hours worked
  * under the contract are drawn from it. What happens to the hours not used in a month is the contract's choice:
  *  - `carry`: they add to next month's hours (the full bank is still bought every month);
- *  - `topup`: they stay for next month, which only buys what tops the bank back up (hours bought = bank − what is left);
+ *  - `topup`: they stay for next month and can all be used, even above the bank (a client with 64 h left uses them and buys nothing); the month only buys what brings the bank back to its hours (hours bought = bank − what is left, none when he has more). Hours taken from next month (the "go negative" choice) are bought back too: 5 h over at a 20 h bank = 25 h bought next month;
  *  - `lose`: they are lost, every month starts with the bank's hours.
  * Months are calendar months (YYYY-MM, Québec time). The portal and the API use the same rule.
  */
@@ -45,8 +45,10 @@ export function bankMonths(p: { hours: number; rollover: BankRollover; start: st
     if (month > last) break;
     // hours worked beyond the bank (the technician chose to go negative) are taken right away from next month
     const adjusted = round2(p.adjust?.get(month) ?? 0);
-    const available = (p.rollover === "carry" ? p.hours + leftover : p.hours) - debt + adjusted;
-    const charge = p.rollover === "topup" ? Math.max(0, p.hours - leftover) : p.hours;
+    // what he still has, once the hours taken from this month are off (below zero after a "go negative")
+    const net = leftover - debt;
+    const available = (p.rollover === "carry" ? p.hours + net : p.rollover === "topup" ? Math.max(p.hours, net) : p.hours - debt) + adjusted;
+    const charge = p.rollover === "topup" ? Math.max(0, p.hours - net) : p.hours;
     const used = round2(p.used.get(month) ?? 0);
     const left = Math.max(0, round2(available - used));
     const over = Math.max(0, round2(used - available));

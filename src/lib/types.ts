@@ -28,6 +28,10 @@ export type Me = {
   features?: { passbolt: boolean };
   /** Fills in a weekly timesheet (set by an admin) */
   timesheetRequired: boolean;
+  /** The company the session works as now (a client user who entered another company) */
+  activeClientId?: string | null;
+  /** A client user's companies (home first), when they may enter more than one */
+  clientCompanies?: { id: string; name: string; parentName: string | null; home: boolean; roleName: string }[] | null;
   preferences: { sortDefaults: Record<string, string>; dashboard: DashboardWidget[] | null; theme: "dark" | "light" | "system"; outlook: boolean; bankHours: boolean; ticketLayout: "standard" | "kanban" | "compact" | null; notify: { email: boolean; sms: boolean; teams: boolean }; pushDetails: boolean; navFavorites: string[] };
 };
 

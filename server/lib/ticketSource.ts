@@ -2,6 +2,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { withPortalQueues } from "./queues.ts";
+import { scopedSource, type TicketScope } from "./selfManaged.ts";
 const cents = (v: number | null | undefined) => Math.round((v ?? 0) * 100);
 import { demoHistory, ensureClientSamples, demoTicketsWithOtherContact,
   addDemoAttachment,
@@ -62,6 +63,10 @@ export type Note = {
   userId?: string | null;
   /** Written by the system itself (workflow rule, forward, merge…), not by a technician or the client */
   system?: boolean;
+  /** Written by a client's delegated technician (self-managed companies): an internal note or a public reply */
+  byDelegate?: boolean;
+  /** Written by a delegate: the time he noted on it, in minutes (informational only, never a time entry) */
+  workedMinutes?: number | null;
   /** Who wrote it: the client (a contact, or a reply made in the client portal) or a technician. Absent: told by the name. */
   by?: "client" | "tech";
   /** Written on a ticket that was merged into this one (its number) */
@@ -260,7 +265,7 @@ export interface TicketSource {
   list(): Promise<NTicket[]>;
   get(id: number): Promise<NTicket | null>;
   update(id: number, p: TicketPatch, a: AuthContext): Promise<void>;
-  addNote(id: number, p: { text: string; internal: boolean }, a: AuthContext): Promise<void>;
+  addNote(id: number, p: { text: string; internal: boolean; byDelegate?: boolean; workedMinutes?: number | null }, a: AuthContext): Promise<void>;
   create(p: NewTicket, a: AuthContext): Promise<number>;
   companies(): Promise<Company[]>;
   contacts(companyId: number): Promise<Contact[]>;
@@ -376,7 +381,12 @@ export class SourceError extends Error {
 const withQueues = new WeakMap<TicketSource, TicketSource>();
 /** Ids given to what was made in the portal before it ran alone, once per start */
 let adopted: Promise<void> | null = null;
-export async function ticketSource(): Promise<TicketSource> {
+/**
+ * The source for a caller. No argument = staff without the tickets.selfManaged
+ * right: the self-managed clients' tickets are hidden (secure by default).
+ * Clients, background jobs and accounting pass `{ all: true }` (see selfManaged.ts).
+ */
+export async function ticketSource(scope: TicketScope = {}): Promise<TicketSource> {
   // production, or Admin › Billets set to the portal's own: everything is in the database, never sample data
   const { ticketsLocal, localTicketSource } = await import("./localTickets.ts");
   let base: TicketSource = demoSource;
@@ -388,7 +398,7 @@ export async function ticketSource(): Promise<TicketSource> {
   }
   // one wrapper per source
   if (!withQueues.has(base)) withQueues.set(base, withPortalQueues(base));
-  return withQueues.get(base)!;
+  return scopedSource(withQueues.get(base)!, scope);
 }
 
 async function staffPeople(): Promise<Person[]> {

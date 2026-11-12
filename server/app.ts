@@ -54,6 +54,8 @@ import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
 import { portalRoutes } from "./routes/portal.ts";
+import { portalCompanyRoutes } from "./routes/portalCompanies.ts";
+import { delegateRoutes } from "./routes/delegate.ts";
 import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { breakroomRoutes } from "./routes/breakroom.ts";
@@ -106,7 +108,7 @@ export function createApp() {
   // Small JSON everywhere; Outlook sends and ticket attachments carry files
   const smallBody = bodyLimit({ maxSize: 256 * 1024 });
   const mailBody = bodyLimit({ maxSize: 7 * 1024 * 1024 });
-  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/(tickets|portal\/tickets)\/\d+\/attachments$/.test(c.req.path) || /^\/api\/pipeline\/tasks\/[0-9a-f-]{36}\/files$/.test(c.req.path) || /^\/api\/projects\/[0-9a-f-]{36}\/files$/.test(c.req.path) || /^\/api\/sops\/[0-9a-f-]{36}\/steps/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
+  api.use("*", (c, next) => (c.req.path.startsWith("/api/outlook/") || c.req.path.startsWith("/api/time/expenses") || /^\/api\/(tickets|portal\/tickets|portal\/delegate\/tickets)\/\d+\/attachments$/.test(c.req.path) || /^\/api\/pipeline\/tasks\/[0-9a-f-]{36}\/files$/.test(c.req.path) || /^\/api\/projects\/[0-9a-f-]{36}\/files$/.test(c.req.path) || /^\/api\/sops\/[0-9a-f-]{36}\/steps/.test(c.req.path) ? mailBody(c, next) : smallBody(c, next)));
   api.use("*", sameOriginJson);
   api.use("*", loadAuth);
   api.use("*", readOnlyViewAs);
@@ -188,6 +190,9 @@ export function createApp() {
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.route("/portal", portalRoutes);
+  api.route("/portal", portalCompanyRoutes);
+  // the delegated technicians of a self-managed company (their own tickets only)
+  api.route("/portal/delegate", delegateRoutes);
   api.use("/dashboard/*", requireStaff);
   api.route("/dashboard", dashboardRoutes);
   api.use("/tickets/*", requireStaff);

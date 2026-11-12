@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Bell, BellOff, BellRing, CalendarClock, CheckCheck, MapPin, Megaphone, MessageSquareReply, Paperclip, ShieldAlert, Siren, Star, Timer, type LucideIcon, MessageSquareText, Swords, Wrench, Workflow } from "lucide-react";
+import { Bell, BellOff, BellRing, CalendarClock, CheckCheck, EyeOff, Hand, LifeBuoy, MapPin, Megaphone, MessageSquareReply, Paperclip, ShieldAlert, Siren, Star, Timer, Undo2, type LucideIcon, MessageSquareText, Swords, Wrench, Workflow } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
@@ -94,6 +94,19 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       return { icon: ShieldAlert, title: t("notifications.autopayClientOff", { client: n.data.client ?? "" }), body: [n.data.contract, n.data.by].filter(Boolean).join(" · "), tone: "alert" };
     case "billing.card_failed":
       return { icon: ShieldAlert, title: t("notifications.cardFailed", { number: n.data.number ?? "" }), body: [n.data.client, n.data.why].filter(Boolean).join(" — "), tone: "alert" };
+    case "ticket.hidden":
+      return { icon: EyeOff, title: t("selfManaged.staff.notif.hidden", { count: Number(n.data.count ?? 0), client: n.data.client ?? "" }), body: "", tone: "gold" };
+    case "ticket.help":
+      return {
+        icon: LifeBuoy,
+        title: t("selfManaged.staff.notif.help", { by: n.data.by ?? "" }),
+        body: [`${n.data.number ?? ""} · ${n.data.title ?? ""}`, n.data.company].filter(Boolean).join(" — "),
+        tone: "gold",
+      };
+    case "ticket.taken":
+      return { icon: Hand, title: t("selfManaged.staff.notif.taken", { number: n.data.number ?? "" }), body: n.data.title ?? "", tone: "gold" };
+    case "ticket.sent_back":
+      return { icon: Undo2, title: t("selfManaged.staff.notif.sentBack", { number: n.data.number ?? "" }), body: n.data.title ?? "", tone: "gold" };
     case "timer.pending":
       return { icon: Timer, title: t("notifications.timerPending"), body: t("notifications.timerPendingBody", { number: n.data.number ?? "", minutes: n.data.minutes ?? "", title: n.data.title ?? "" }), tone: "alert" };
     default:

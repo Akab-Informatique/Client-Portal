@@ -63,6 +63,7 @@ import { ContractWindow, NewContractDialog } from "./ContractDialog";
 import { ClientUsersPanel } from "@/admin/ClientAccess";
 import { ContactWindow } from "./ContactWindow";
 import { ClientDevicesTab, useClientDevices } from "./ClientDevices";
+import { SelfManagedCard } from "./SelfManagedCard";
 
 const TABS = ["info", "tickets", "invoices", "contacts", "portal", "contracts", "invoice", "devices"] as const;
 type Tab = (typeof TABS)[number];
@@ -401,6 +402,8 @@ function InfoTab({ client }: { client: CrmDetail }) {
           )}
         </div>
       </Card>
+
+      <SelfManagedCard clientId={client.id} />
     </div>
   );
 }

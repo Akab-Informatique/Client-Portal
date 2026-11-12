@@ -10,6 +10,13 @@ import { body, zUuid } from "../lib/validate.ts";
 import { conversationForTicket, mapConversation, openTicket, queueReceived, replyAsTechnician, SmsTicketError } from "../lib/sms.ts";
 import { normalizePhone, SmsError, smsReady, smsSettings, SMS_MAX, tokenMatches } from "../lib/voipms.ts";
 import { SourceError, ticketSource } from "../lib/ticketSource.ts";
+import { hiddenFromCaller, ticketScopeOf } from "../lib/selfManaged.ts";
+import type { Context } from "hono";
+
+/** A text linked to a ticket hidden from this caller is as if it did not exist */
+async function refuseHidden(c: Context<AppEnv>, ticketId: number | null | undefined) {
+  if (ticketId && (await hiddenFromCaller(ticketScopeOf(c), ticketId))) throw new HTTPException(404, { message: "not_found" });
+}
 
 /**
  * VoIP.ms "SMS URL Callback": called for each text received, with our secret
@@ -89,6 +96,7 @@ export const smsRoutes = new Hono<AppEnv>()
   /** One conversation with its texts (reading it marks it read). */
   .get("/conversations/:id", async (c) => {
     const conv = await conversation(zUuid.parse(c.req.param("id")));
+    await refuseHidden(c, conv.ticketId);
     const messages = await db()
       .select({
         id: schema.smsMessages.id,
@@ -112,6 +120,7 @@ export const smsRoutes = new Hono<AppEnv>()
   .post("/conversations/:id/messages", async (c) => {
     const a = auth(c);
     const conv = await conversation(zUuid.parse(c.req.param("id")));
+    await refuseHidden(c, conv.ticketId);
     if (!rateLimit(`sms-send:${a.realUser.id}`, 60, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
     const p = await body(c, z.object({ body: z.string().trim().min(1).max(1000) }));
     await run(() => replyAsTechnician(conv, p.body, a));
@@ -122,6 +131,7 @@ export const smsRoutes = new Hono<AppEnv>()
   .post("/conversations/:id/ticket", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const conv = await conversation(zUuid.parse(c.req.param("id")));
+    await refuseHidden(c, conv.ticketId);
     const p = await body(
       c,
       z.object({
@@ -133,6 +143,7 @@ export const smsRoutes = new Hono<AppEnv>()
       }),
     );
     if (p.ticketId) {
+      await refuseHidden(c, p.ticketId);
       await db()
         .update(schema.smsConversations)
         .set({ status: "ticket", ticketId: p.ticketId, ticketNumber: p.ticketNumber ?? String(p.ticketId), autoTicketAt: null, updatedAt: new Date() })
@@ -149,6 +160,7 @@ export const smsRoutes = new Hono<AppEnv>()
   .post("/conversations/:id/close", async (c) => {
     const a = auth(c);
     const conv = await conversation(zUuid.parse(c.req.param("id")));
+    await refuseHidden(c, conv.ticketId);
     await db().update(schema.smsConversations).set({ status: "closed", autoTicketAt: null, unread: 0, updatedAt: new Date() }).where(eq(schema.smsConversations.id, conv.id));
     await audit(a.realUser.id, "sms.closed", conv.id, {});
     return c.json({ ok: true });
@@ -167,6 +179,7 @@ export const smsRoutes = new Hono<AppEnv>()
   .delete("/conversations/:id", async (c) => {
     const a = auth(c);
     const conv = await conversation(zUuid.parse(c.req.param("id")));
+    await refuseHidden(c, conv.ticketId);
     await db().delete(schema.smsConversations).where(eq(schema.smsConversations.id, conv.id));
     await audit(a.realUser.id, "sms.deleted", conv.id, { phone: conv.phone, status: conv.status });
     return c.json({ ok: true });
@@ -177,6 +190,7 @@ export const smsRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const ticketId = Number(c.req.param("ticketId"));
     if (!Number.isInteger(ticketId)) throw new HTTPException(400, { message: "invalid_id" });
+    await refuseHidden(c, ticketId);
     if (!rateLimit(`sms-send:${a.realUser.id}`, 60, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
     // one number (the ticket's client by default), or several people: a group text
     const p = await body(
@@ -233,6 +247,7 @@ export const smsRoutes = new Hono<AppEnv>()
   .post("/ticket/:ticketId/read", async (c) => {
     const ticketId = Number(c.req.param("ticketId"));
     if (!Number.isInteger(ticketId)) throw new HTTPException(400, { message: "invalid_id" });
+    await refuseHidden(c, ticketId);
     await db().update(schema.smsConversations).set({ unread: 0 }).where(and(eq(schema.smsConversations.ticketId, ticketId), sql`${schema.smsConversations.unread} > 0`));
     return c.json({ ok: true });
   })
@@ -241,6 +256,7 @@ export const smsRoutes = new Hono<AppEnv>()
   .get("/ticket/:ticketId", async (c) => {
     const ticketId = Number(c.req.param("ticketId"));
     if (!Number.isInteger(ticketId)) throw new HTTPException(400, { message: "invalid_id" });
+    await refuseHidden(c, ticketId);
     const convs = await db().select().from(schema.smsConversations).where(eq(schema.smsConversations.ticketId, ticketId));
     if (!convs.length) return c.json({ conversations: [], messages: [] });
     const messages = await db()

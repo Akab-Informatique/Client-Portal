@@ -1,5 +1,5 @@
 {
-  "id": "e9d1df86-3a83-480d-b405-50d5796ba5b7",
+  "id": "8ed0d733-254e-408b-a655-a4cddf457525",
   "prevId": "2d3d30fc-53f8-42a4-ad4e-98d8285f671a",
   "version": "7",
   "dialect": "postgresql",
@@ -2308,6 +2308,111 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.client_user_grants": {
+      "name": "client_user_grants",
+      "schema": "",
+      "columns": {
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "client_id": {
+          "name": "client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role_id": {
+          "name": "role_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "client_user_grants_user_id_users_id_fk": {
+          "name": "client_user_grants_user_id_users_id_fk",
+          "tableFrom": "client_user_grants",
+          "tableTo": "users",
+          "columnsFrom": [
+            "user_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "client_user_grants_client_id_clients_id_fk": {
+          "name": "client_user_grants_client_id_clients_id_fk",
+          "tableFrom": "client_user_grants",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "client_user_grants_role_id_roles_id_fk": {
+          "name": "client_user_grants_role_id_roles_id_fk",
+          "tableFrom": "client_user_grants",
+          "tableTo": "roles",
+          "columnsFrom": [
+            "role_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "restrict",
+          "onUpdate": "no action"
+        },
+        "client_user_grants_created_by_users_id_fk": {
+          "name": "client_user_grants_created_by_users_id_fk",
+          "tableFrom": "client_user_grants",
+          "tableTo": "users",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {
+        "client_user_grants_user_id_client_id_pk": {
+          "name": "client_user_grants_user_id_client_id_pk",
+          "columns": [
+            "user_id",
+            "client_id"
+          ]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.clients": {
       "name": "clients",
       "schema": "",
@@ -2324,6 +2429,12 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true
+        },
+        "self_managed": {
+          "name": "self_managed",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
         },
         "code": {
           "name": "code",
@@ -13343,6 +13454,12 @@
           "notNull": true,
           "default": false
         },
+        "active_client_id": {
+          "name": "active_client_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "view_as_client_id": {
           "name": "view_as_client_id",
           "type": "uuid",
@@ -13411,6 +13528,19 @@
             "id"
           ],
           "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "sessions_active_client_id_clients_id_fk": {
+          "name": "sessions_active_client_id_clients_id_fk",
+          "tableFrom": "sessions",
+          "tableTo": "clients",
+          "columnsFrom": [
+            "active_client_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
           "onUpdate": "no action"
         },
         "sessions_view_as_client_id_clients_id_fk": {
@@ -16297,6 +16427,13 @@
           "notNull": true,
           "default": false
         },
+        "by_delegate": {
+          "name": "by_delegate",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "system": {
           "name": "system",
           "type": "boolean",
@@ -17221,6 +17358,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "akab_taken_at": {
+          "name": "akab_taken_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "help_requested_by": {
+          "name": "help_requested_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
         "autotask_synced_at": {
           "name": "autotask_synced_at",
           "type": "timestamp with time zone",
@@ -17842,154 +17991,6 @@
             "id"
           ],
           "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.tv_bots": {
-      "name": "tv_bots",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "name_key": {
-          "name": "name_key",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_hash": {
-          "name": "key_hash",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "key_sealed": {
-          "name": "key_sealed",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "sort": {
-          "name": "sort",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "default": 0
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "tv_bots_name_key_unique": {
-          "name": "tv_bots_name_key_unique",
-          "columns": [
-            {
-              "expression": "name_key",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "tv_bots_key_hash_unique": {
-          "name": "tv_bots_key_hash_unique",
-          "columns": [
-            {
-              "expression": "key_hash",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {},
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
-    "public.tv_status": {
-      "name": "tv_status",
-      "schema": "",
-      "columns": {
-        "bot_id": {
-          "name": "bot_id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "state": {
-          "name": "state",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'idle'"
-        },
-        "label": {
-          "name": "label",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "since": {
-          "name": "since",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {},
-      "foreignKeys": {
-        "tv_status_bot_id_tv_bots_id_fk": {
-          "name": "tv_status_bot_id_tv_bots_id_fk",
-          "tableFrom": "tv_status",
-          "tableTo": "tv_bots",
-          "columnsFrom": [
-            "bot_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },

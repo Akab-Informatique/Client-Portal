@@ -25,7 +25,7 @@ export async function clientInfo(companyId: number): Promise<ClientInfo> {
     .from(schema.clients)
     .innerJoin(schema.clientClasses, eq(schema.clientClasses.key, schema.clients.classKey))
     .where(eq(schema.clients.autotaskId, companyId));
-  const src = await ticketSource();
+  const src = await ticketSource({ all: true });
   // the client's tickets: the source's list (open and recent) and its older, completed ones
   const [now, old] = await Promise.all([src.list(), src.companyHistory(companyId)]);
   const ids = [...new Set([...now.filter((t) => t.company.id === companyId), ...old].map((t) => t.id))];
