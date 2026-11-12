@@ -777,6 +777,10 @@ export const tickets = pgTable(
     akabTakenAt: timestamp("akab_taken_at", { withTimezone: true }),
     /** The delegate who asked for AKAB's help */
     helpRequestedBy: uuid("help_requested_by"),
+    /** Self-managed clients: the delegated technician (a client user) who has the ticket — shown as its main technician, AKAB's people are secondary */
+    delegateUserId: uuid("delegate_user_id"),
+    /** Self-managed clients: our staff hid this ticket from the client's delegates (an internal matter) — they neither see nor reach it */
+    hiddenFromDelegates: boolean("hidden_from_delegates").notNull().default(false),
     /** When it was last written from Autotask (null: made in the portal). Edited in the portal since: an import keeps the portal's version. */
     autotaskSyncedAt: timestamp("autotask_synced_at", { withTimezone: true }),
   },
@@ -811,6 +815,8 @@ export const ticketNotes = pgTable(
     internal: boolean("internal").notNull().default(false),
     /** Written by a client's delegated technician: a note (internal, seen by delegates and by us) or a reply (public) */
     byDelegate: boolean("by_delegate").notNull().default(false),
+    /** A delegated technician's note: the time he says he worked (minutes), only noted, never billed nor drawn from a bank */
+    workedMinutes: integer("worked_minutes"),
     /** Written by the system (an Autotask workflow rule…), not by a person */
     system: boolean("system").notNull().default(false),
     /** The number of the ticket it was written on before that ticket was merged into this one */

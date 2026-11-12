@@ -476,7 +476,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
 
   return (
     <Dialog open onOpenChange={(o) => !o && onLater()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <TimerIcon className="size-5 text-primary" /> {t("tickets.timer.entryTitle")}
