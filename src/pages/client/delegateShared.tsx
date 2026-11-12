@@ -154,6 +154,8 @@ export const isNotSelfManaged = (e: unknown) => e instanceof ApiError && e.code 
 /** The day of an ISO date (YYYY-MM-DD) for a date input, or "" */
 export function dayOf(value: string | null | undefined): string {
   if (!value) return "";
-  const m = /^(\d{4}-\d{2}-\d{2})/.exec(value);
-  return m ? m[1] : "";
+  // a timestamp is read in Québec time (a due at 11 pm must not show as the next day); a plain day stays as it is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 }
