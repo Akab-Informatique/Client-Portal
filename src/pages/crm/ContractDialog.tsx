@@ -19,7 +19,7 @@ import { contractCharges, chargesOn, linesForCharges, type BillingPeriod, type C
 import { prorata } from "@shared/prorata";
 import { combineBps, netCents } from "@shared/rebate";
 import { RebateInput, percentOf } from "@/components/RebateInput";
-import { bankBundle, type BankMonth, type BankRollover } from "@shared/bank";
+import { bankBundle, withTopupCharges, type BankMonth, type BankRollover } from "@shared/bank";
 import { shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { MapItcloudDialog, NewServiceDialog, type Unmapped } from "./ContractServices";
 import { money, useContractTypes, type CrmContract, type CrmDetail } from "./shared";
@@ -47,7 +47,7 @@ type Line = {
   periods: { from: string; to: string; days: number; periodDays: number; full: boolean; amountCents: number }[];
 };
 type Summary = { billedThrough?: string | null; billedCents?: number; revenueCents: number; perPeriodCents: number; yearlyExtraCents: number; endsOn: string | null; dueCents: number; next: { date: string; amountCents: number; prorated: boolean } | null };
-type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; bankMonths?: BankMonth[]; bankUsage?: { company: string; month: string; hours: number }[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
+type Detail = CrmContract & { billingPeriod: BillingPeriod; endedOn: string | null; billedThrough: string | null; services: Line[]; bankMonths?: BankMonth[]; topupHours?: Record<string, number> | null; bankUsage?: { company: string; month: string; hours: number }[]; summary: Summary; charged: { has: boolean; billingItems: number; timeEntries: number; servicesStarted: number } };
 type CatalogItem = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; costCents: number };
 export type Event = { id: string; kind: string; source: string; detail: Record<string, any>; at: string; actor: string | null };
 
@@ -942,10 +942,12 @@ function LineEditor({ l, term, fromVendor, busy, onSave, onCancel, contractRebat
 function ChargesTab({ k, lang }: { k: Detail; lang: string }) {
   const { t } = useTranslation();
   const today = todayYmd();
-  const ch = useMemo(
+  const full = useMemo(
     () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: l.rebateBps })))),
     [k],
   );
+  // an hours bank that tops up only buys what the month before left unused
+  const ch = k.topupHours && k.bank?.rateCents != null ? withTopupCharges(full, new Map(Object.entries(k.topupHours)), k.bank.rateCents) : full;
   const on = chargesOn(ch, today, k.billedThrough);
   if (!k.startDate || !k.endDate) return <p className="text-sm text-amber-300">{t("crm.contracts.needTerm")}</p>;
   if (!ch.entries.length) return <p className="rounded-lg border border-dashed py-6 text-center text-sm text-muted-foreground">{t("crm.contracts.window.noCharges")}</p>;

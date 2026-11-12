@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bankBundle, bankMonths, bankNow } from "../shared/bank.ts";
+import { bankBundle, bankMonths, bankNow, withTopupCharges } from "../shared/bank.ts";
 
 const used = (o: Record<string, number>) => new Map(Object.entries(o));
 
@@ -54,5 +54,18 @@ describe("the hours bank of a contract", () => {
   it("is empty with no hours or no start day", () => {
     expect(bankMonths({ hours: 0, rollover: "lose", start: "2026-01-01", today: "2026-02-01", used: new Map() })).toEqual([]);
     expect(bankMonths({ hours: 5, rollover: "lose", start: null, today: "2026-02-01", used: new Map() })).toEqual([]);
+  });
+});
+
+describe("an hours bank that tops up, foreseen", () => {
+  it("buys nothing next month while the client has more than the bank, and the schedule shows it", () => {
+    // 20 h a month, 64 h unused at the end of the current month: December buys nothing
+    const rows = bankMonths({ hours: 20, rollover: "topup", start: "2026-11-01", end: "2027-03-31", today: "2026-11-12", used: used({ "2026-11": 0 }), adjust: used({ "2026-11": 44 }), project: true });
+    expect(rows.find((r) => r.month === "2026-11")?.charge).toBe(20);
+    expect(rows.find((r) => r.month === "2026-12")?.charge).toBe(0);
+    const ch = { revenueCents: 340000, entries: [{ date: "2026-12-01", amountCents: 170000, prorated: false, pieces: [{ lineId: "bundle", amountCents: 170000, prorated: false }] }, { date: "2027-01-01", amountCents: 170000, prorated: false, pieces: [{ lineId: "bundle", amountCents: 170000, prorated: false }] }] };
+    const out = withTopupCharges(ch, new Map(rows.map((r) => [r.month, r.charge])), 8500);
+    expect(out.entries[0].amountCents).toBe(0);
+    expect(out.revenueCents).toBe(0);
   });
 });
