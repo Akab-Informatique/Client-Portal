@@ -1166,7 +1166,7 @@ const fr = {
         carry: "Se reportent au mois suivant",
         carryHint: "Les heures non utilisées s'ajoutent au mois suivant ; la banque complète est quand même achetée chaque mois.",
         topup: "Sont déduites du mois suivant",
-        topupHint: "Les heures non utilisées restent au client ; le mois suivant, il n'achète que ce qu'il faut pour remplir la banque.",
+        topupHint: "Les heures non utilisées restent au client et peuvent toutes être utilisées, même au-delà de la banque du mois. Chaque mois, il n'achète que ce qu'il faut pour revenir aux heures de sa banque (rien s'il en a plus). Les heures prises sur le mois suivant sont rachetées aussi.",
         adjustTitle: "Ajuster les heures de la banque",
         adjustHours: "Heures (+ ou −)",
         adjustHoursHint: "+ ajoute des heures, − en retire",

@@ -26,6 +26,24 @@ describe("the hours bank of a contract", () => {
     expect(r.map((x) => [x.available, x.charge])).toEqual([[10, 10], [10, 4], [10, 0]]);
   });
 
+  it("tops up: hours above the bank (a balance he has) are all usable and nothing is bought until he is under it", () => {
+    // 54 h added by hand in January: 64 h available, 4 used → 60 left, nothing to buy, all 60 usable
+    const r = bankMonths({ hours: 10, rollover: "topup", start: "2026-01-15", end: "2026-12-31", today: "2026-04-10", used: used({ "2026-01": 4, "2026-02": 55, "2026-03": 3 }), adjust: used({ "2026-01": 54 }) });
+    expect(r.map((x) => [x.month, x.available, x.used, x.left, x.charge])).toEqual([
+      ["2026-01", 64, 4, 60, 10],
+      ["2026-02", 60, 55, 5, 0],
+      // 5 left: he buys 5 to be back at 10
+      ["2026-03", 10, 3, 7, 5],
+      ["2026-04", 10, 0, 10, 3],
+    ]);
+  });
+
+  it("tops up: hours taken from next month are bought back (5 h over a 20 h bank = 25 h bought)", () => {
+    const r = bankMonths({ hours: 20, rollover: "topup", start: "2026-01-01", end: "2026-12-31", today: "2026-03-10", used: used({ "2026-01": 25 }) });
+    expect(r[0]).toMatchObject({ available: 20, left: 0, over: 5, charge: 20 });
+    expect(r[1]).toMatchObject({ available: 20, charge: 25 });
+  });
+
   it("takes hours worked past the bank right away from next month", () => {
     const r = run("lose", { "2026-01": 13 });
     expect(r[0]).toMatchObject({ left: 0, over: 3 });
