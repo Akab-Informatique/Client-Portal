@@ -15,6 +15,7 @@ import { bpsOfPercent } from "../../shared/rebate.ts";
 import { chargesOfProject, moveCharge } from "../lib/chargeMove.ts";
 import { banksOf, hourlyRateOf } from "../lib/contracts.ts";
 import { escapeHtml, sendMail } from "../lib/mail.ts";
+import { hiddenFromCaller, hiddenIdsFor, ticketScopeOf } from "../lib/selfManaged.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { billProject, depositOfProject, linkTicket, ProjectBillError, projectBilling, projectOfTicket, ticketsOfProject } from "../lib/projectLinks.ts";
 
@@ -743,6 +744,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const p = await loadProject(c.req.param("id"));
     const q = (c.req.query("q") ?? "").trim().toLowerCase();
     const [client] = p.clientId ? await db().select({ at: schema.clients.autotaskId }).from(schema.clients).where(eq(schema.clients.id, p.clientId)) : [];
+    const hiddenIds = await hiddenIdsFor(ticketScopeOf(c));
     const rows = await db()
       .select({ id: schema.tickets.id, number: schema.tickets.number, title: schema.tickets.title, company: schema.tickets.companyName, projectId: schema.ticketMeta.projectId })
       .from(schema.tickets)
@@ -752,7 +754,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       .limit(500);
     return c.json(
       rows
-        .filter((r) => r.projectId !== p.id && (!q || `${r.number} ${r.title}`.toLowerCase().includes(q)))
+        .filter((r) => !hiddenIds.has(r.id) && r.projectId !== p.id && (!q || `${r.number} ${r.title}`.toLowerCase().includes(q)))
         .slice(0, 30)
         .map((r) => ({ id: r.id, number: r.number, title: r.title, company: r.company, otherProject: Boolean(r.projectId) })),
     );
@@ -766,7 +768,7 @@ export const projectsRoutes = new Hono<AppEnv>()
       .select({ id: schema.tickets.id, number: schema.tickets.number, companyId: schema.tickets.companyId })
       .from(schema.tickets)
       .where(typeof r.ticket === "number" ? eq(schema.tickets.id, r.ticket) : sql`upper(${schema.tickets.number}) = ${r.ticket.toUpperCase()}`);
-    if (!t) throw new HTTPException(404, { message: "ticket_not_found" });
+    if (!t || (await hiddenFromCaller(ticketScopeOf(c), t.id))) throw new HTTPException(404, { message: "ticket_not_found" });
     if (p.clientId) {
       const [client] = await db().select({ at: schema.clients.autotaskId }).from(schema.clients).where(eq(schema.clients.id, p.clientId));
       if (client?.at != null && client.at !== t.companyId) throw new HTTPException(409, { message: "ticket_other_client" });
@@ -1476,6 +1478,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     const p = await loadProject(c.req.param("id"));
     const to = await body(c, z.object({ ticketId: z.number().int().positive().optional(), projectId: zUuid.optional() }).refine((v) => (v.ticketId == null) !== (v.projectId == null)));
     if (to.ticketId && !a.permissions.includes("tickets.edit")) throw new HTTPException(403, { message: "Forbidden" });
+    if (to.ticketId && (await hiddenFromCaller(ticketScopeOf(c), to.ticketId))) throw new HTTPException(404, { message: "not_found" });
     const chargeId = c.req.param("chargeId");
     const moved = await moveCharge(chargeId, { projectId: p.id }, to.projectId ? { projectId: to.projectId } : { ticketId: to.ticketId! });
     await audit(a.user.id, "project.charge_moved", p.id, { chargeId, to: to.projectId ? `project:${to.projectId}` : `ticket:${to.ticketId}`, number: moved.number });

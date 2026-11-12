@@ -2878,7 +2878,7 @@ describe("text messages (VoIP.ms)", () => {
     };
     // texts of a ticket are copied as internal notes (Autotask)
     const { ticketSource } = await import("../server/lib/ticketSource.ts");
-    const notes = vi.spyOn(await ticketSource(), "addSmsNote");
+    const notes = vi.spyOn(await ticketSource({ all: true }), "addSmsNote");
 
     // wrong token: "ok", nothing kept
     expect((await hook({ token: "nope", from: "5145550000", message: "x", id: "z" })).status).toBe(200);
@@ -11884,6 +11884,80 @@ describe("charges made right on a project", () => {
     } finally {
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    }
+  });
+});
+
+describe("self-managed clients: hidden from staff", () => {
+  it("a self-managed client's tickets are hidden from staff until AKAB takes them; alerts, taken ones and 'off' stay visible; the right and the company filter show them", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const { clearSelfManagedCache } = await import("../server/lib/selfManaged.ts");
+    // parent on; a child inherits it; a child opting out ("off"); an independent self-managed client
+    const [parent] = await db().insert(schema.clients).values({ name: "Zz Autogere P (test)", autotaskId: 9_300_001, selfManaged: "on" }).returning();
+    const [child] = await db().insert(schema.clients).values({ name: "Zz Autogere C (test)", autotaskId: 9_300_002, parentId: parent.id }).returning();
+    const [optOut] = await db().insert(schema.clients).values({ name: "Zz Autogere F (test)", autotaskId: 9_300_003, parentId: parent.id, selfManaged: "off" }).returning();
+    const [own] = await db().insert(schema.clients).values({ name: "Zz Autogere O (test)", autotaskId: 9_300_004, selfManaged: "on" }).returning();
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    clearSelfManagedCache();
+    try {
+      const mk = async (title: string, companyId: number, queue = "support") => (await admin.post("/api/tickets", { title, description: "x", companyId, priority: "medium", queue, assigneeId: null, dueDate: "2026-12-05" })).json;
+      const hiddenT = await mk("Billet autogéré", own.autotaskId!);
+      const inherited = await mk("Billet enfant", child.autotaskId!);
+      const offT = await mk("Billet ouvert", optOut.autotaskId!);
+      const alertT = await mk("Alerte autogérée", own.autotaskId!, "alerts");
+      const takenT = await mk("Billet repris", own.autotaskId!);
+      await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, takenT.id));
+      expect(hiddenT.id).toBeTruthy();
+
+      // (a) staff without the right: the delegated tickets are not there at all
+      await db().insert(schema.userPermissions).values({ userId: techUser.id, permission: "tickets.selfManaged", effect: "deny" });
+      const list = await tech.get("/api/tickets?view=all");
+      expect(list.status).toBe(200);
+      const text = JSON.stringify(list.json);
+      expect(text).not.toContain(hiddenT.number);
+      expect(text).not.toContain(inherited.number);
+      // (e) and (d) the alert, the taken one and the opted-out child stay visible
+      expect(text).toContain(alertT.number);
+      expect(text).toContain(takenT.number);
+      expect(text).toContain(offT.number);
+      // by id: as if the ticket did not exist
+      expect((await tech.get(`/api/tickets/${hiddenT.id}`)).status).toBe(404);
+      expect((await tech.get(`/api/tickets/${inherited.id}/charges`)).status).toBe(404);
+      expect((await tech.get(`/api/tickets/${hiddenT.id}/checklist`)).status).toBe(404);
+      expect((await tech.post(`/api/tickets/${hiddenT.id}/notes`, { text: "non", internal: false })).status).toBe(404);
+      expect((await tech.post(`/api/tickets/${hiddenT.id}/charges`, { name: "Câble", quantity: 1, unitPrice: 5, billable: true })).status).toBe(404);
+      expect((await tech.post(`/api/tickets/${hiddenT.id}/ai/analyze`, {})).status).toBe(404);
+      expect((await tech.get(`/api/tickets/${hiddenT.id}/files/x`)).status).toBe(404);
+      // a hidden ticket cannot be merged into, nor merged
+      expect((await tech.post(`/api/tickets/${offT.id}/merge`, { intoId: hiddenT.id })).status).toBe(404);
+      expect((await tech.post(`/api/tickets/${hiddenT.id}/merge`, { intoId: offT.id })).status).toBe(404);
+      // a visible ticket still works
+      expect((await tech.get(`/api/tickets/${offT.id}`)).status).toBe(200);
+
+      // (b)/(c) with the right: the company filter shows the client's tickets in lists; by id is allowed
+      await db().delete(schema.userPermissions).where(eq(schema.userPermissions.userId, techUser.id));
+      expect((await tech.get(`/api/tickets/${hiddenT.id}`)).status).toBe(200);
+      expect(JSON.stringify((await tech.get("/api/tickets?view=all")).json)).not.toContain(hiddenT.number);
+      expect(JSON.stringify((await tech.get(`/api/tickets?view=all&selfManaged=${own.autotaskId}`)).json)).toContain(hiddenT.number);
+      expect(JSON.stringify((await admin.get("/api/tickets?view=all")).json)).not.toContain(hiddenT.number);
+      expect(JSON.stringify((await admin.get(`/api/tickets?view=all&selfManaged=${own.autotaskId}`)).json)).toContain(hiddenT.number);
+
+      // (f) the flag switched off: visible again at once (no bulk update)
+      await db().insert(schema.userPermissions).values({ userId: techUser.id, permission: "tickets.selfManaged", effect: "deny" });
+      await db().update(schema.clients).set({ selfManaged: "off" }).where(eq(schema.clients.id, own.id));
+      clearSelfManagedCache();
+      expect(JSON.stringify((await tech.get("/api/tickets?view=all")).json)).toContain(hiddenT.number);
+      expect((await tech.get(`/api/tickets/${hiddenT.id}`)).status).toBe(200);
+    } finally {
+      await db().delete(schema.userPermissions).where(eq(schema.userPermissions.userId, techUser.id));
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+      (await import("../server/lib/localTickets.ts")).resetTicketMode();
+      await db().update(schema.clients).set({ selfManaged: null }).where(eq(schema.clients.id, parent.id));
+      clearSelfManagedCache();
     }
   });
 });

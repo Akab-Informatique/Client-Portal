@@ -2,6 +2,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import type { AuthContext } from "./auth.ts";
 import { withPortalQueues } from "./queues.ts";
+import { scopedSource, type TicketScope } from "./selfManaged.ts";
 const cents = (v: number | null | undefined) => Math.round((v ?? 0) * 100);
 import { demoHistory, ensureClientSamples, demoTicketsWithOtherContact,
   addDemoAttachment,
@@ -376,7 +377,12 @@ export class SourceError extends Error {
 const withQueues = new WeakMap<TicketSource, TicketSource>();
 /** Ids given to what was made in the portal before it ran alone, once per start */
 let adopted: Promise<void> | null = null;
-export async function ticketSource(): Promise<TicketSource> {
+/**
+ * The source for a caller. No argument = staff without the tickets.selfManaged
+ * right: the self-managed clients' tickets are hidden (secure by default).
+ * Clients, background jobs and accounting pass `{ all: true }` (see selfManaged.ts).
+ */
+export async function ticketSource(scope: TicketScope = {}): Promise<TicketSource> {
   // production, or Admin › Billets set to the portal's own: everything is in the database, never sample data
   const { ticketsLocal, localTicketSource } = await import("./localTickets.ts");
   let base: TicketSource = demoSource;
@@ -388,7 +394,7 @@ export async function ticketSource(): Promise<TicketSource> {
   }
   // one wrapper per source
   if (!withQueues.has(base)) withQueues.set(base, withPortalQueues(base));
-  return withQueues.get(base)!;
+  return scopedSource(withQueues.get(base)!, scope);
 }
 
 async function staffPeople(): Promise<Person[]> {

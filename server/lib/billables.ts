@@ -77,7 +77,7 @@ export function syncBillables(): Promise<BillablesState> {
   running ??= (async () => {
     await ensureCrm();
     const s = await billingSettings();
-    const src = await ticketSource();
+    const src = await ticketSource({ all: true });
     const data = await src.billables(s.autotask.itemsSince);
     // the portal's own work only is read (no source of billable work besides the portal): what was copied before is never taken for "gone"
     const alone = await (await import("./localTickets.ts")).ticketsLocal();

@@ -6,6 +6,7 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
 import { SYSTEM_ROLES } from "../../shared/permissions.ts";
 import { isSmsNote, MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type NTicket } from "../lib/ticketSource.ts";
+import { isTicketHidden } from "../lib/selfManaged.ts";
 import { audit } from "../lib/audit.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
@@ -325,7 +326,7 @@ function onTicket(t: NTicket) {
 
 /** The client's ticket company, and how to tell their own tickets from the rest. */
 async function ticketContext(a: AuthContext, clientId: string) {
-  const src = await ticketSource();
+  const src = await ticketSource({ all: true });
   const company = await ticketCompanyOf(clientId, src);
   if (!company) return null;
   const [o, contactId] = await Promise.all([src.options(), contactOfUser(a.user, company.id, src)]);
@@ -380,6 +381,8 @@ async function run<T>(fn: () => Promise<T>): Promise<T> {
  * technicians are told; nobody on it (or an escalation) → the dispatchers too.
  */
 async function tellTechnicians(t: NTicket, a: AuthContext, kind: "comment" | "file" | "escalation", text: string, dispatchers = false) {
+  // a self-managed client's ticket that AKAB has not taken: our team is not told
+  if (await isTicketHidden(t.id)) return;
   const people = [t.assignee, ...t.secondary].filter((p): p is NonNullable<typeof p> => Boolean(p)).map((p) => p.id).filter((id) => !id.startsWith("at-"));
   const to = people.length && !dispatchers ? people : [...people, ...(await usersWith("staff", "tickets.plan"))];
   await notify(to, {

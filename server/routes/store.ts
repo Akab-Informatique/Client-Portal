@@ -7,6 +7,7 @@ import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
+import { hiddenIdsFor, ticketScopeOf } from "../lib/selfManaged.ts";
 import { adjustCount, productsWithStock, receiptsOf, receive, removeSerials, serialsOf, StoreError, suppliers } from "../lib/store.ts";
 
 const zCents = z.number().int().min(0).max(100_000_000);
@@ -208,11 +209,17 @@ export const storeRoutes = new Hono<AppEnv>()
         if (t) info.set(tid, { client: t.company.name, number: t.number });
       }
     }
+    // a ticket hidden from this caller (self-managed client): no number, no client
+    const hidden = await hiddenIdsFor(ticketScopeOf(c));
     return c.json({
       product: { id: p.id, name: p.name, sku: p.sku, priceCents: p.priceCents, serialized: p.serialized },
       assignments: rows
         .sort((x, y) => y.at.getTime() - x.at.getTime())
-        .map((r) => ({ ticketId: r.ticketId, ticketNumber: info.get(r.ticketId)?.number ?? r.ticketNumber, client: info.get(r.ticketId)?.client ?? null, serial: r.serial, at: r.at })),
+        .map((r) =>
+          hidden.has(r.ticketId)
+            ? { ticketId: null, ticketNumber: null, client: null, serial: r.serial, at: r.at }
+            : { ticketId: r.ticketId, ticketNumber: info.get(r.ticketId)?.number ?? r.ticketNumber, client: info.get(r.ticketId)?.client ?? null, serial: r.serial, at: r.at },
+        ),
     });
   })
   .get("/products/:id/receipts", async (c) => c.json(await receiptsOf(zUuid.parse(c.req.param("id")))))

@@ -38,7 +38,7 @@ async function addMessage(conv: Conversation, m: { direction: "in" | "out"; body
 /** A text of a conversation linked to a ticket, copied as an internal note. */
 async function noteInTicket(conv: Conversation, title: string, body: string) {
   if (!conv.ticketId) return;
-  const src = await ticketSource();
+  const src = await ticketSource({ all: true });
   await src.addSmsNote(conv.ticketId, title, body).catch((e) => console.warn("[sms] note:", e instanceof Error ? e.message : e));
 }
 
@@ -95,7 +95,7 @@ export async function receiveSms(p: { from: string; message: string; id?: string
     .limit(1);
   const isNew = !conv;
   if (!conv) {
-    const src = await ticketSource();
+    const src = await ticketSource({ all: true });
     const contact = await src.contactByPhone(phone).catch(() => null);
     [conv] = await db()
       .insert(schema.smsConversations)
@@ -156,7 +156,7 @@ export async function receiveSms(p: { from: string; message: string; id?: string
 /** The ticket goes to "needs attention" because of a text; a failure here never loses the text. */
 async function needsAttention(ticketId: number) {
   try {
-    await (await ticketSource()).markNeedsAttention(ticketId);
+    await (await ticketSource({ all: true })).markNeedsAttention(ticketId);
   } catch (e) {
     console.warn("[sms] needs attention:", e instanceof Error ? e.message : e);
   }

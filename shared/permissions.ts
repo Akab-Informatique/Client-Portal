@@ -89,6 +89,14 @@ export const MODULES = [
         },
       },
       {
+        key: "tickets.selfManaged",
+        label: { fr: "Voir et travailler les billets des clients autogérés", en: "See and work the tickets of self-managed clients" },
+        description: {
+          fr: "Les billets d'un client autogéré sont cachés à l'équipe tant que son technicien délégué n'a pas demandé de l'aide ; ce droit les montre (filtre « Clients autogérés ») et permet d'y intervenir",
+          en: "A self-managed client's tickets are hidden from the team until its delegated technician asks for help; this right shows them (\"Self-managed clients\" filter) and lets one work them",
+        },
+      },
+      {
         key: "tickets.ai",
         label: { fr: "Utiliser l'assistant IA", en: "Use the AI assistant" },
         description: {
@@ -566,6 +574,14 @@ export const MODULES = [
       },
       { key: "clientTickets.attach", label: { fr: "Joindre des documents", en: "Attach documents" } },
       {
+        key: "clientTickets.delegate",
+        label: { fr: "Technicien délégué : gérer les billets de l'entreprise", en: "Delegated technician: manage the company's tickets" },
+        description: {
+          fr: "Pour une entreprise autogérée : créer, répondre, noter et fermer ses billets, et demander l'aide d'AKAB. Ne saisit jamais de temps ni de frais",
+          en: "For a self-managed company: create, reply, note and close its tickets, and ask AKAB for help. Never logs time or charges",
+        },
+      },
+      {
         key: "clientTickets.escalate",
         label: { fr: "Demander une escalade de priorité", en: "Ask for a priority escalation" },
         description: { fr: "L'équipe AKAB reçoit la demande et décide", en: "The AKAB team receives the request and decides" },
@@ -716,6 +732,7 @@ export const SYSTEM_ROLES: Array<{
       "dashboard.view",
       "tickets.view",
       "tickets.edit",
+      "tickets.selfManaged",
       "tickets.planSelf",
       "crm.view",
       "timesheets.use",
@@ -752,7 +769,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Administrateur client", en: "Client administrator" },
     description: { fr: "Responsable chez le client : tout le portail client", en: "Person in charge at the client: the whole client portal" },
-    permissions: permissionsFor("client"),
+    permissions: permissionsFor("client").filter((k) => k !== "clientTickets.delegate"),
     locked: false,
   },
   {
@@ -773,6 +790,14 @@ export const SYSTEM_ROLES: Array<{
       en: "Message board and every ticket of the company (filters by user), without the portal's admin settings",
     },
     permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientProjects.view", "clientProjects.comment"],
+    locked: false,
+  },
+  {
+    slug: "client-delegate",
+    audience: "client",
+    name: { fr: "Technicien délégué", en: "Delegated technician" },
+    description: { fr: "Gère les billets de l'entreprise (entreprise autogérée) : créer, répondre, noter, fermer, demander l'aide d'AKAB", en: "Manages the company's tickets (self-managed company): create, reply, note, close, ask AKAB for help" },
+    permissions: ["board.view", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.delegate"],
     locked: false,
   },
   {

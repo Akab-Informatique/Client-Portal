@@ -24,6 +24,7 @@ import { AI_FEATURE_KEYS, AI_MODELS, AiError, aiSettings, askClaude, askClaudeJs
 import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { deleteTicket, mergeTickets, ticketFile, ticketsLocal } from "../lib/localTickets.ts";
+import { hiddenFromCaller, ticketScopeOf } from "../lib/selfManaged.ts";
 import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
@@ -505,11 +506,22 @@ const submitting = new Set<string>();
 
 export const ticketRoutes = new Hono<AppEnv>()
   .use(requirePermission("tickets.view"))
+  // by-id routes: a ticket hidden from this caller (self-managed client, not taken by AKAB) answers as missing
+  .use("/:id", async (c, next) => {
+    const id = Number(c.req.param("id"));
+    if (Number.isInteger(id) && id > 0 && /^\d+$/.test(c.req.param("id")) && (await hiddenFromCaller(ticketScopeOf(c), id))) throw new HTTPException(404, { message: "not_found" });
+    await next();
+  })
+  .use("/:id/*", async (c, next) => {
+    const id = Number(c.req.param("id"));
+    if (Number.isInteger(id) && id > 0 && /^\d+$/.test(c.req.param("id")) && (await hiddenFromCaller(ticketScopeOf(c), id))) throw new HTTPException(404, { message: "not_found" });
+    await next();
+  })
 
   .get("/", async (c) => {
     const a = auth(c);
     const q = c.req.query();
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [all, o, technicians, meId] = await run(() => Promise.all([src.list(), src.options(), src.technicians(), src.meId(a)]));
     // Client filter: only the clients that have tickets (the full list is /companies)
     const companies = [...new Map(all.map((t) => [t.company.id, t.company])).values()].sort((x, y) => x.name.localeCompare(y.name));
@@ -763,7 +775,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       }),
     );
     const can = (k: string) => a.permissions.includes(k as never);
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [all, o, meId, techs] = await run(() => Promise.all([src.list(), src.options(), src.meId(a), src.technicians().catch(() => [])]));
     const L = lookup(o);
     const open = all.filter((x) => L.statusKind(x.status) !== "complete");
@@ -980,7 +992,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     aiLimit(a.user.id);
     const model = await askedModel(c);
     const direction = await askedDirection(c);
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [all, o, meId] = await run(() => Promise.all([src.list(), src.options(), src.meId(a)]));
     const L = lookup(o);
     const mine = all.filter((x) => meId && (x.assignee?.id === meId || x.secondary.some((p) => p.id === meId)) && L.statusKind(x.status) !== "complete");
@@ -1102,7 +1114,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       });
       await audit(a.user.id, "ai.plan_applied", null, { tickets: p.items.length });
     }
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     let dueFailed = 0;
     for (const it of p.items) {
       const set = {
@@ -1131,14 +1143,14 @@ export const ticketRoutes = new Hono<AppEnv>()
 
   // ── Clients and their contacts ──
   .get("/companies", async (c) => {
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await run(() => src.companies()));
   })
   /** A new client, when the ticket is for someone not yet in the portal. */
   .post("/companies", requirePermission("tickets.clients"), async (c) => {
     const a = auth(c);
     const p = await body(c, z.object({ name: z.string().trim().min(2).max(100), phone: z.string().trim().min(7).max(40) }));
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const same = (await run(() => src.companies())).find((x) => x.name.trim().toLowerCase() === p.name.toLowerCase());
     if (same) throw new HTTPException(409, { message: "company_exists" });
     const company = await run(() => src.addCompany(p, a));
@@ -1147,11 +1159,11 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json(company, 201);
   })
   .get("/companies/:cid/contracts", async (c) => {
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await run(() => src.contracts(Number(c.req.param("cid")))));
   })
   .get("/companies/:cid/contacts", async (c) => {
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await run(() => src.contacts(Number(c.req.param("cid")))));
   })
   .post("/companies/:cid/contacts", requirePermission("tickets.edit"), async (c) => {
@@ -1166,7 +1178,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         phone: z.string().trim().max(40).optional(),
       }),
     );
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const contact = await run(() => src.addContact(companyId, { firstName: p.firstName, lastName: p.lastName, email: p.email || null, phone: p.phone || null }, a));
     await rememberContact(companyId, { id: contact.id, firstName: p.firstName, lastName: p.lastName, email: contact.email, phone: contact.phone });
     await audit(a.user.id, "ticket.contact_created", contact.id, { companyId });
@@ -1230,7 +1242,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const q = (c.req.query("q") ?? "").trim().slice(0, 100);
     if (q.length < 2) return c.json({ items: [], total: 0, archive: [] });
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [all, o] = await run(() => Promise.all([src.list(), src.options()]));
     const words = fold(q).split(/\s+/).filter(Boolean);
     const tagsOf = await allTags();
@@ -1263,7 +1275,7 @@ export const ticketRoutes = new Hono<AppEnv>()
   .get("/companies/:cid/assets", async (c) => {
     const cid = Number(c.req.param("cid"));
     if (!Number.isInteger(cid)) throw new HTTPException(400, { message: "invalid_id" });
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [list, r] = await Promise.all([run(() => src.assets(cid)), rmmSettings()]);
     return c.json(list.map((x) => assetView(x, r)));
   })
@@ -1272,7 +1284,7 @@ export const ticketRoutes = new Hono<AppEnv>()
   .get("/contacts/:contactId/open", async (c) => {
     const contactId = c.req.param("contactId");
     const exclude = Number(c.req.query("exclude"));
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [all, o] = await run(() => Promise.all([src.list(), src.options()]));
     const L = lookup(o);
     const mine = all.filter((t) => t.contactId === contactId && L.statusKind(t.status) !== "complete" && t.id !== exclude).sort((x, y) => y.createdAt.localeCompare(x.createdAt));
@@ -1334,7 +1346,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const q = (c.req.query("q") ?? "").trim().slice(0, 60);
     if (q.length < 2) return c.json([]);
     if (!rateLimit(`products:${a.user.id}`, 60, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await run(() => src.products(q)));
   })
   /** Portal inventory products to charge on a ticket (name, SKU, manufacturer, category). */
@@ -1372,11 +1384,11 @@ export const ticketRoutes = new Hono<AppEnv>()
   })
   /** Choices for a new charge: types, statuses, material codes. */
   .get("/charge-options", requirePermission("tickets.edit"), async (c) => {
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await run(() => src.chargeOptions()));
   })
   .get("/work-types", requirePermission("tickets.edit"), async (c) => {
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await run(() => src.workTypes()));
   })
   /** The page is alive: keeps my running timers going. */
@@ -1420,7 +1432,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       }),
     );
     // the contract: the one picked, else the ticket's; only a contract that does not bill hours makes the time non billable
-    const tkForContract = await (await ticketSource()).get(timer.ticketId).catch(() => null);
+    const tkForContract = await (await ticketSource(ticketScopeOf(c))).get(timer.ticketId).catch(() => null);
     let contract: ContractView | null = null;
     if (tkForContract) {
       const cs = await contractOfTicket(timer.ticketId, tkForContract.company.id);
@@ -1455,7 +1467,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     submitting.add(timer.id);
     try {
     const endedAt = timer.endedAt ?? new Date();
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     // the ticket's status and due date, when the technician changed them with this time (checked before the time is kept)
     if (p.status && !(await run(() => src.options())).statuses.some((x) => x.value === p.status)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.status || p.dueAt) await run(() => src.update(timer.ticketId, { ...(p.status ? { status: p.status } : {}), ...(p.dueAt ? { dueAt: new Date(p.dueAt).toISOString() } : {}) }, a));
@@ -1587,7 +1599,7 @@ export const ticketRoutes = new Hono<AppEnv>()
           .where(eq(schema.ticketTimers.id, existing.id));
       }
     } else {
-      const src = await ticketSource();
+      const src = await ticketSource(ticketScopeOf(c));
       const tk = (await run(() => src.list())).find((x) => x.id === id) ?? (await run(() => src.get(id)));
       if (!tk) throw new HTTPException(404, { message: "not_found" });
       await db()
@@ -1625,7 +1637,7 @@ export const ticketRoutes = new Hono<AppEnv>()
 
   .get("/:id", async (c) => {
     const a = auth(c);
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await run(() => detailOf(src, Number(c.req.param("id")), a)));
   })
 
@@ -1650,7 +1662,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const direction = await askedDirection(c);
     const id = Number(c.req.param("id"));
     try {
-      const tk = await ticketForAi(await ticketSource(), id);
+      const tk = await ticketForAi(await ticketSource(ticketScopeOf(c)), id);
       const out = await askClaudeJson<unknown>({
         system: `${aiRole(a.user.locale)} Tu analyses un billet de support pour le technicien.`,
         feature: "ticket.analyze",
@@ -1681,7 +1693,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const direction = await askedDirection(c);
     const id = Number(c.req.param("id"));
     try {
-      const tk = await ticketForAi(await ticketSource(), id);
+      const tk = await ticketForAi(await ticketSource(ticketScopeOf(c)), id);
       const out = await askClaudeJson<unknown>({
         system: `${aiRole(a.user.locale)} Tu estimes le temps de travail d'un technicien.`,
         feature: "ticket.analyze",
@@ -1709,7 +1721,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const model = await askedModel(c);
     const direction = await askedDirection(c);
     try {
-      const tk = await ticketForAi(await ticketSource(), Number(c.req.param("id")));
+      const tk = await ticketForAi(await ticketSource(ticketScopeOf(c)), Number(c.req.param("id")));
       const text = await askClaude({
         system: `${aiRole(a.user.locale)} Tu rédiges des réponses aux clients : courtoises, claires, sans jargon, sans promettre de délai précis.`,
         feature: "ticket.reply",
@@ -1772,7 +1784,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         source: z.string().trim().max(40).optional(),
       }),
     );
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     if (src.demo) {
       // sample data: values must be from the fixed lists
       const o = await src.options();
@@ -1802,7 +1814,7 @@ export const ticketRoutes = new Hono<AppEnv>()
   .get("/:id/charges", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)));
   })
   .post("/:id/charges", requirePermission("tickets.edit"), async (c) => {
@@ -1832,7 +1844,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         serialIds: z.array(z.uuid()).max(500).default([]),
       }),
     );
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const { storeProductId, locationId, serialIds, ...charge } = p;
     let taken: { movementId: string; serials: string[] } | null = null;
     if (storeProductId) {
@@ -1879,11 +1891,13 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
     const p = await body(c, z.object({ ticketId: z.number().int().positive().optional(), projectId: z.uuid().optional() }).refine((v) => (v.ticketId == null) !== (v.projectId == null)));
     if (p.projectId && !a.permissions.includes("projects.edit")) throw new HTTPException(403, { message: "Forbidden" });
+    // the ticket the charge goes to is a ticket of this caller too (a hidden one is missing)
+    if (p.ticketId && (await hiddenFromCaller(ticketScopeOf(c), p.ticketId))) throw new HTTPException(404, { message: "not_found" });
     const chargeId = c.req.param("chargeId");
     const moved = await moveCharge(chargeId, { ticketId: id }, p.projectId ? { projectId: p.projectId } : { ticketId: p.ticketId! });
     await audit(a.user.id, "ticket.charge_moved", String(id), { chargeId, to: p.projectId ? `project:${p.projectId}` : `ticket:${p.ticketId}`, number: moved.number });
     await syncBillablesNow();
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json({ moved: true, to: moved.number, kind: moved.kind, charges: await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)) });
   })
   // where the goods of a charge stand: ordered, received at the office, or none (not ordered yet)
@@ -1896,7 +1910,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const done = await db().update(schema.ticketCharges).set({ supply: o.supply }).where(and(eq(schema.ticketCharges.id, chargeId), eq(schema.ticketCharges.ticketId, id))).returning({ id: schema.ticketCharges.id });
     if (!done.length) throw new HTTPException(404, { message: "not_found" });
     await audit(a.user.id, "ticket.charge_supply", String(id), { chargeId, supply: o.supply });
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     return c.json(await withBilling(await run(() => src.charges(id)), canSeeInvoices(c)));
   })
   .delete("/:id/charges/:chargeId", requirePermission("tickets.edit"), async (c) => {
@@ -1904,7 +1918,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const id = Number(c.req.param("id"));
     const chargeId = c.req.param("chargeId");
     if (!Number.isInteger(id)) throw new HTTPException(400, { message: "invalid_id" });
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const [line] = await db().select({ status: schema.billingItems.status }).from(schema.billingItems).where(eq(schema.billingItems.sourceId, `pcharge:${chargeId}`));
     // a charge already on an invoice stays (cancel the invoice first)
     if (line && line.status === "posted") throw new HTTPException(409, { message: "charge_billed" });
@@ -1935,7 +1949,7 @@ export const ticketRoutes = new Hono<AppEnv>()
         channels: z.object({ email: z.boolean(), sms: z.boolean(), teams: z.boolean() }),
       }),
     );
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const tk = await run(() => src.get(id));
     if (!tk) throw new HTTPException(404, { message: "not_found" });
     const people = await notifyTechs(tk, { id: a.user.id, name: a.realUser.name }, p.userIds, p.message, p.channels);
@@ -1947,14 +1961,14 @@ export const ticketRoutes = new Hono<AppEnv>()
   // ── The checklist of a ticket (tickets.edit): tasks to complete before the ticket can be; an item may wait for another ──
   .get("/:id/checklist", async (c) => {
     const id = Number(c.req.param("id"));
-    if (!(await run(() => (ticketSource().then((s) => s.get(id)))))) throw new HTTPException(404, { message: "not_found" });
+    if (!(await run(() => (ticketSource(ticketScopeOf(c)).then((s) => s.get(id)))))) throw new HTTPException(404, { message: "not_found" });
     return c.json(await checklistOf(id));
   })
   .post("/:id/checklist", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const id = Number(c.req.param("id"));
     const p = await body(c, z.object({ text: z.string().trim().min(1).max(300), dependsOnId: zUuid.nullable().optional() }));
-    if (!(await run(() => ticketSource().then((s) => s.get(id))))) throw new HTTPException(404, { message: "not_found" });
+    if (!(await run(() => ticketSource(ticketScopeOf(c)).then((s) => s.get(id))))) throw new HTTPException(404, { message: "not_found" });
     await checklistRun(() => addItem(id, p, a.user.id));
     return c.json(await checklistOf(id), 201);
   })
@@ -1983,7 +1997,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const id = Number(c.req.param("id"));
     // email: a reply to the client is also emailed to the ticket's contact unless the technician says not to, and to other addresses if asked
     const p = await body(c, z.object({ text: z.string().trim().min(1).max(8000), internal: z.boolean(), email: z.boolean().optional(), others: z.array(zEmail).max(10).default([]), /** files of this ticket (uploaded just before) that go with the email */ attachmentIds: z.array(zUuid).max(10).default([]), /** colleagues told about an internal note: the bell and an email with the note */ notifyUserIds: z.array(zUuid).max(20).default([]), /** how they are told: the bell, an email, a Teams chat message (bell and email by default) */ notifyChannels: z.object({ bell: z.boolean().default(true), email: z.boolean().default(true), chat: z.boolean().default(false) }).default({ bell: true, email: true, chat: false }) }));
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     // a note written through an API key says so, so nobody takes it for the technician's own words
     const noteText = a.apiKey ? `${p.text}
 
@@ -2024,6 +2038,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
     const p = await body(c, z.object({ intoId: z.number().int().positive() }));
     if (!(await ticketsLocal())) throw new HTTPException(409, { message: "tickets_not_local" });
+    if (await hiddenFromCaller(ticketScopeOf(c), p.intoId)) throw new HTTPException(404, { message: "not_found" });
     const r = await run(() => mergeTickets(id, p.intoId, a));
     return c.json({ ok: true, ...r });
   })
@@ -2104,7 +2119,7 @@ export const ticketRoutes = new Hono<AppEnv>()
       }),
     );
     if (!p.data) throw new HTTPException(400, { message: "Validation failed" });
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const made = await run(() => src.addAttachment(id, p, a));
     await audit(a.user.id, "ticket.attachment_added", String(id), { name: p.name, bytes: Math.floor((p.data.length * 3) / 4) });
     return c.json({ ok: true, id: made && "id" in made ? made.id : null }, 201);
@@ -2163,7 +2178,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
     const p = await body(c, z.object({ contractId: z.uuid().nullable() }));
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const t = await run(() => src.get(id));
     if (!t) throw new HTTPException(404, { message: "not_found" });
     if (p.contractId && !(await contractsOfCompany(t.company.id)).some((k) => k.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
@@ -2219,7 +2234,7 @@ export const ticketRoutes = new Hono<AppEnv>()
           .refine((l) => l.every((x, i) => x.dependsOn == null || x.dependsOn < i), { message: "checklist_dependency" }),
       }),
     );
-    const src = await ticketSource();
+    const src = await ticketSource(ticketScopeOf(c));
     const o = await run(() => src.options());
     if (!o.priorities.some((x) => x.value === p.priority)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.queue && !o.queues.some((x) => x.value === p.queue)) throw new HTTPException(400, { message: "Validation failed" });

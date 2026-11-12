@@ -50,6 +50,8 @@ export const clients = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     name: text("name").notNull(),
+    /** Self-managed: the client's own delegated technicians work its tickets, hidden from our team until they ask for help. null = follows the parent company, "on" / "off" = decided here (a child can opt out) */
+    selfManaged: text("self_managed", { enum: ["on", "off"] }),
     code: text("code"),
     email: text("email"),
     phone: text("phone"),
@@ -606,6 +608,8 @@ export const sessions = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     mfaVerified: boolean("mfa_verified").notNull().default(false),
+    /** A client user who entered another company they have a grant on: the session works as that company (see client_user_grants) */
+    activeClientId: uuid("active_client_id").references(() => clients.id, { onDelete: "set null" }),
     /** Staff "view as client": this session shows the portal as that client (read only) */
     viewAsClientId: uuid("view_as_client_id").references(() => clients.id, { onDelete: "set null" }),
     ip: text("ip"),
@@ -769,6 +773,10 @@ export const tickets = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     /** The ticket this one was merged into (its status is then "merged", a closed one) */
     mergedIntoId: bigint("merged_into_id", { mode: "number" }),
+    /** Self-managed clients: null = the client's delegates have it (hidden from our team); set = AKAB took it (help asked, or made by us) and sees it. Sending it back sets it to null again. */
+    akabTakenAt: timestamp("akab_taken_at", { withTimezone: true }),
+    /** The delegate who asked for AKAB's help */
+    helpRequestedBy: uuid("help_requested_by"),
     /** When it was last written from Autotask (null: made in the portal). Edited in the portal since: an import keeps the portal's version. */
     autotaskSyncedAt: timestamp("autotask_synced_at", { withTimezone: true }),
   },
@@ -801,6 +809,8 @@ export const ticketNotes = pgTable(
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     text: text("text").notNull(),
     internal: boolean("internal").notNull().default(false),
+    /** Written by a client's delegated technician: a note (internal, seen by delegates and by us) or a reply (public) */
+    byDelegate: boolean("by_delegate").notNull().default(false),
     /** Written by the system (an Autotask workflow rule…), not by a person */
     system: boolean("system").notNull().default(false),
     /** The number of the ticket it was written on before that ticket was merged into this one */
@@ -3518,4 +3528,26 @@ export const invoiceCreditApplications = pgTable(
     createdAt: created(),
   },
   (t) => [index("invoice_credit_apps_invoice_idx").on(t.invoiceId)],
+);
+
+/**
+ * A client user may enter other companies of their chain (the parent, the children) with their own role there: switching company
+ * in the portal works as if they had signed in as a user of that company. The home company and role stay on the user.
+ */
+export const clientUserGrants = pgTable(
+  "client_user_grants",
+  {
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "cascade" }),
+    roleId: uuid("role_id")
+      .notNull()
+      .references(() => roles.id, { onDelete: "restrict" }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.clientId] })],
 );
