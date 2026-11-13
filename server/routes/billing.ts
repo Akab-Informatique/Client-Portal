@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
+import { checkProjectsMigration, repairProjectsMigration } from "../lib/projMigration.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { clientIp, rateLimit } from "../lib/http.ts";
 import { config } from "../config.ts";
@@ -164,6 +165,15 @@ export const billingRoutes = new Hono<AppEnv>()
     const [rec] = await d.select({ n: count() }).from(schema.cleanupLog);
     const [unsent] = await d.select({ n: count() }).from(schema.clientInvoices).where(and(eq(schema.clientInvoices.voided, false), isNull(schema.clientInvoices.emailedAt)));
     return c.json({ contractLines: lines?.n ?? 0, timesheets: ts?.n ?? 0, expenses: ex?.n ?? 0, keptLines: kept?.n ?? 0, keptRecords: rec?.n ?? 0, unsentInvoices: unsent?.n ?? 0 });
+  })
+  // TEMPORARY: did the archive projects' work to bill come over to the new projects and Approbation? (read only)
+  .get("/cleanup/projects", requirePermission("admin.billing"), async (c) => c.json(await checkProjectsMigration()))
+  // ... and puts right what did not (nothing is deleted)
+  .post("/cleanup/projects", requirePermission("admin.billing"), async (c) => {
+    const a = auth(c);
+    const r = await repairProjectsMigration();
+    await audit(a.realUser.id, "billing.cleanup_projects", null, { imported: r.imported, renamed: r.renamed, kindChanged: r.kindChanged, saleMoved: r.saleMoved, errors: r.errors.length });
+    return c.json(r);
   })
   // recurring-contract lines still to approve or approved (not invoiced) are set aside: excluded, never brought back by an import
   .post("/cleanup/contracts", requirePermission("admin.billing"), async (c) => {

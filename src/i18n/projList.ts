@@ -1,5 +1,23 @@
 /** Texts of the projects shown in the Tickets list (src/pages/proj/ProjRows.tsx): keys under `projList`. */
 export const fr = {
+  projMig: {
+    title: "Projets de l'archive : travail à facturer (temporaire)",
+    text: "Vérifie que le temps des jalons à approuver et le prix vendu des anciens projets sont bien dans les nouveaux projets et dans Approbation, et corrige ce qui ne l'est pas. Rien n'est supprimé.",
+    check: "Vérifier",
+    repair: "Corriger et copier dans Approbation",
+    ok: "Tout est en ordre.",
+    notOk: "À corriger :",
+    notImported: "Projets de l'archive pas encore importés : {{count}}",
+    toRename: "Lignes à rattacher au nouveau projet : {{count}}",
+    wrongKind: "Lignes de l'ancien onglet Jalons : {{count}}",
+    missing: "Heures facturables sans ligne dans Approbation : {{count}}",
+    sale: "Prix vendus à rattacher : {{count}}",
+    stillArchive: "Lignes d'un projet encore dans l'archive (valides) : {{count}}",
+    inNew: "Dans Approbation (nouveaux projets) — à approuver : {{p}} ({{pa}}) · approuvées : {{a}} ({{aa}}) · facturées : {{f}}",
+    done: "Corrigé : {{imported}} projet(s) importé(s), {{renamed}} ligne(s) rattachée(s), {{kind}} changée(s) d'onglet, {{sale}} prix déplacé(s).",
+    errors: "Erreurs : {{list}}",
+    failed: "L'opération a échoué.",
+  },
   projList: {
     kind: {
       label: "Afficher",
@@ -33,6 +51,24 @@ export const fr = {
 };
 
 export const en = {
+  projMig: {
+    title: "Archive projects: work to bill (temporary)",
+    text: "Checks that the time of milestones waiting for approval and the price sold of the old projects are in the new projects and in Approbation, and fixes what is not. Nothing is deleted.",
+    check: "Check",
+    repair: "Fix and copy into Approbation",
+    ok: "Everything is in order.",
+    notOk: "To fix:",
+    notImported: "Archive projects not imported yet: {{count}}",
+    toRename: "Lines to attach to the new project: {{count}}",
+    wrongKind: "Lines of the old Milestones tab: {{count}}",
+    missing: "Billable hours with no line in Approbation: {{count}}",
+    sale: "Prices sold to attach: {{count}}",
+    stillArchive: "Lines of a project still in the archive (valid): {{count}}",
+    inNew: "In Approbation (new projects) — to approve: {{p}} ({{pa}}) · approved: {{a}} ({{aa}}) · invoiced: {{f}}",
+    done: "Fixed: {{imported}} project(s) imported, {{renamed}} line(s) attached, {{kind}} moved tab, {{sale}} price(s) moved.",
+    errors: "Errors: {{list}}",
+    failed: "The operation failed.",
+  },
   projList: {
     kind: {
       label: "Show",

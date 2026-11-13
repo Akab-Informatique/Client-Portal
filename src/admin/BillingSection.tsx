@@ -18,6 +18,7 @@ import { SectionHeader } from "./sections";
 import { InvoiceSheet } from "@/components/InvoiceSheet";
 import { DEFAULT_FOOTER_TEXT, DEFAULT_PAYMENT_TEXT } from "@shared/invoiceDefaults";
 import { CleanupCard } from "./CleanupCard";
+import { ProjectsMigrationCard } from "./ProjectsMigrationCard";
 import { BillingMailTab } from "./BillingMailTab";
 
 type Settings = {
@@ -100,6 +101,7 @@ export function BillingSection() {
       </Tabs>
       <div className="mt-8">
         <CleanupCard />
+        <ProjectsMigrationCard />
       </div>
     </div>
   );

@@ -12882,6 +12882,34 @@ describe("new-format projects (proj)", () => {
   });
 });
 
+describe("temporary check: archive projects' work to bill", () => {
+  it("shows what did not come over and puts it right (nothing deleted)", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Migration inc.", autotaskId: 9_100_977, portalEnabled: true }).returning();
+    const [old] = await db().insert(schema.projects).values({ number: "P-1877", name: "A migrer", clientId: client.id, status: "active", leadId: techUser.id, billingMode: "hourly" }).returning();
+    const [m1] = await db().insert(schema.projectMilestones).values({ projectId: old.id, name: "Jalon", position: 0 }).returning();
+    const [type] = await db().select().from(schema.timesheetTypes).limit(1);
+    const [entry] = await db().insert(schema.timesheetEntries).values({ userId: techUser.id, date: "2026-02-03", typeId: type.id, hoursX100: 200, projectId: old.id, milestoneId: m1.id, source: "project", billableX100: 200, ticketNumber: old.number, ticketTitle: old.name }).returning();
+    await db().insert(schema.billingItems).values({ clientId: client.id, kind: "milestone", source: "autotask", sourceId: `prtime:${entry.id}`, date: "2026-02-03", description: "jalon a facturer", quantityX100: 200, unitPriceCents: 10000, amountCents: 20000, status: "pending" });
+
+    // administrators of the billing only
+    expect((await tech.get("/api/billing/cleanup/projects")).status).toBe(403);
+    const before = (await admin.get("/api/billing/cleanup/projects")).json;
+    expect(before.ok).toBe(false);
+    expect(before.notImported.map((x: any) => x.number)).toContain("P-1877");
+    expect(before.wrongKind).toBeGreaterThan(0);
+
+    const fixed = (await admin.post("/api/billing/cleanup/projects", {})).json;
+    expect(fixed.imported).toBeGreaterThan(0);
+    expect(fixed.after.notImported.map((x: any) => x.number)).not.toContain("P-1877");
+    expect(fixed.after.wrongKind).toBe(0);
+    const [line] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `projtime:${entry.id}`));
+    expect(line).toMatchObject({ kind: "project", status: "pending" });
+  });
+});
+
 describe("new-format projects: the start-up pop-up", () => {
   it("sets the lead and team, writes one internal note and tells the lead", async () => {
     const admin = await signIn("admin@akab.local");
