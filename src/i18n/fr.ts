@@ -5932,6 +5932,7 @@ const fr = {
     deviceAdded: "Un téléphone a été ajouté pour approuver vos connexions",
     pipelineAssigned: "{{by}} vous a assigné une tâche",
     pipelineNotice: "{{by}} vous signale une tâche",
+    projKickoff: "{{by}} vous a confié la direction d'un projet",
     projectNote: "{{by}} vous signale une note de projet",
     projectReminder: "Rappel de projet",
     projectFollowup: "C'est le temps de faire le suivi du projet",

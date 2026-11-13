@@ -12882,6 +12882,32 @@ describe("new-format projects (proj)", () => {
   });
 });
 
+describe("new-format projects: the start-up pop-up", () => {
+  it("sets the lead and team, writes one internal note and tells the lead", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [adminUser] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
+    const made = await tech.post("/api/proj", { name: "Kickoff test" });
+    const id = made.json.id as string;
+    const r = await tech.post(`/api/proj/${id}/kickoff`, { leadId: adminUser.id, memberIds: [techUser.id], description: "Courte description", notes: "Premiers pas" });
+    expect(r.status).toBe(200);
+    const view = (await tech.get(`/api/proj/${id}`)).json;
+    expect(view.lead.id).toBe(adminUser.id);
+    expect(view.description).toBe("Courte description");
+    expect(view.members.map((m: any) => m.id).sort()).toEqual([adminUser.id, techUser.id].sort());
+    const notes = await db().select().from(schema.projNotes).where(eq(schema.projNotes.projectId, id));
+    expect(notes).toHaveLength(1);
+    expect(notes[0].internal).toBe(true);
+    expect(notes[0].text).toContain("Premiers pas");
+    const bell = await db().select().from(schema.notifications).where(eq(schema.notifications.userId, adminUser.id));
+    expect(bell.some((n: any) => n.type === "proj.kickoff")).toBe(true);
+    // a bad person is refused; nothing for oneself
+    expect((await tech.post(`/api/proj/${id}/kickoff`, { leadId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("person_invalid");
+    void admin;
+  });
+});
+
 describe("new-format projects: billing, files, the archive brought over, made from a ticket or a quote", () => {
   const userOf = async (email: string) => (await db().select().from(schema.users).where(eq(schema.users.email, email)))[0];
   const localBilling = async () => {

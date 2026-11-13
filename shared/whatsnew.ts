@@ -8,6 +8,20 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-13.4",
+    date: "2026-11-13",
+    sections: [
+      {
+        fr: "Projets et billets mélangés; démarrage d'un projet",
+        en: "Mixed projects and tickets; starting a project",
+        items: [
+          { fr: "Les projets et les billets sont mélangés et triés par échéance dans la liste des billets et dans Ma journée. Boutons Tout / Billets / Projets et Regrouper pour les séparer.", en: "Projects and tickets are mixed and sorted by due date in the tickets list and in Ma journée. Use All / Tickets / Projects and Group to keep them apart." },
+          { fr: "Un nouveau projet (à la main, depuis une soumission ou un billet) ouvre une fenêtre : responsable, équipe, courte description et notes. Le tout va dans les notes du projet et le responsable est avisé par courriel et par la cloche.", en: "A new project (by hand, from a quote or from a ticket) opens a pop-up: lead, team, short description and notes. They go in the project's notes and the lead is told by email and by the bell." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-13.3",
     date: "2026-11-13",
     sections: [

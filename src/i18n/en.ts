@@ -5934,6 +5934,7 @@ const en: Dict = {
     deviceAdded: "A phone was added to approve your sign-ins",
     pipelineAssigned: "{{by}} assigned you a task",
     pipelineNotice: "{{by}} flagged a task for you",
+    projKickoff: "{{by}} made you the lead of a project",
     projectNote: "{{by}} flagged a project note for you",
     projectReminder: "Project reminder",
     projectFollowup: "Time for the project follow-up",

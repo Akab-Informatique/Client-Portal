@@ -6,6 +6,8 @@ import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { notify } from "../lib/notify.ts";
+import { escapeHtml, sendMail } from "../lib/mail.ts";
+import { config } from "../config.ts";
 import { rateLimit } from "../lib/http.ts";
 import { refreshAccrual } from "../lib/hr.ts";
 import { addDays, editable, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
@@ -414,6 +416,48 @@ export const projRoutes = new Hono<AppEnv>()
       }
     }
     return c.json({ ...(await viewFor(await loadProj(row.id), a)), billed }, 201);
+  })
+
+  /**
+   * The start-up pop-up of a new project (made by hand, from a quote or from a ticket): sets the leader, the team and a short
+   * description, and writes the notes as the project's first internal note. The leader (when it is not the person who
+   * writes) gets the bell and an email.
+   */
+  .post("/:id/kickoff", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    const cur = await loadProj(c.req.param("id"));
+    const k = await body(c, z.object({ leadId: zUuid.nullable().optional(), memberIds: z.array(zUuid).max(30).optional(), description: z.string().trim().max(2000).optional(), notes: z.string().trim().max(8000).optional() }));
+    const leadId = k.leadId !== undefined ? k.leadId : cur.leadId;
+    if (leadId) await activeStaff([leadId]);
+    const set: Partial<typeof schema.projProjects.$inferInsert> = { updatedAt: new Date(), leadId };
+    if (k.description) set.description = k.description;
+    await db().update(schema.projProjects).set(set).where(eq(schema.projProjects.id, cur.id));
+    if (k.memberIds !== undefined || (leadId && leadId !== cur.leadId)) {
+      const current = (await db().select({ userId: schema.projMembers.userId }).from(schema.projMembers).where(eq(schema.projMembers.projectId, cur.id))).map((m) => m.userId);
+      const team = [...new Set([...(k.memberIds ?? current), ...(leadId ? [leadId] : [])])];
+      await activeStaff(team);
+      await db().delete(schema.projMembers).where(eq(schema.projMembers.projectId, cur.id));
+      if (team.length) await db().insert(schema.projMembers).values(team.map((userId) => ({ projectId: cur.id, userId })));
+    }
+    // the description and the notes become one internal note
+    const text = [k.description ? `Description\n${k.description}` : "", k.notes ? `Notes\n${k.notes}` : ""].filter(Boolean).join("\n\n");
+    if (text) await db().insert(schema.projNotes).values({ projectId: cur.id, authorId: a.user.id, text, internal: true, emailedTo: [] });
+    // the leader is told, by the bell and by email (never when they wrote it themselves)
+    let told = false;
+    if (leadId && leadId !== a.user.id) {
+      const link = `/pipeline?section=tickets&pj=${cur.id}`;
+      await notify([leadId], { type: "proj.kickoff", data: { number: cur.number, name: cur.name, by: a.realUser.name, message: (k.description || k.notes || "").slice(0, 300) }, link });
+      const [lead] = await db().select({ name: schema.users.name, email: schema.users.email }).from(schema.users).where(eq(schema.users.id, leadId));
+      if (lead?.email) {
+        const url = config.publicUrl ? `${config.publicUrl.replace(/\/+$/, "")}${link}` : null;
+        const head = `${a.realUser.name} vous a confié la direction du projet ${cur.number} — ${cur.name}.`;
+        const plain = [`Bonjour ${lead.name},`, "", head, ...(text ? ["", text] : []), ...(url ? ["", url] : []), "", "—", "AKAB Informatique"].join("\n");
+        const html = `<p>Bonjour ${escapeHtml(lead.name)},</p><p>${escapeHtml(head)}</p>${text ? `<p style="white-space:pre-wrap;border-left:3px solid #8b5cf6;padding-left:10px">${escapeHtml(text)}</p>` : ""}${url ? `<p><a href="${escapeHtml(url)}">Ouvrir le projet</a></p>` : ""}<p>—<br>AKAB Informatique</p>`;
+        told = await sendMail({ to: lead.email, subject: `[${cur.number}] Vous dirigez le projet ${cur.name}`.slice(0, 250), text: plain, html }).catch(() => false);
+      }
+    }
+    await audit(a.user.id, "proj.kickoff", cur.id, { number: cur.number, lead: leadId, notified: told });
+    return c.json({ ok: true, emailed: told });
   })
 
   /** Opening the project, or the reset button: the count of quiet days starts again */

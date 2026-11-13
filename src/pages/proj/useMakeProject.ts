@@ -26,7 +26,7 @@ export function useMakeProject(after?: () => void) {
       toast.success(t(p.path.includes("from-ticket") ? "projBill.fromTicket.done" : "projBill.fromQuote.done", { number: r.number }));
       if (r.billed) toast.success(t("projBill.fromQuote.billed"));
       after?.();
-      navigate(`/pipeline?section=tickets&pj=${r.id}`);
+      navigate(`/pipeline?section=tickets&pj=${r.id}&kickoff=1`);
     },
     onError: (e) => toast.error(projError(t, e)),
   });

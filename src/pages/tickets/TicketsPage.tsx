@@ -83,6 +83,7 @@ import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
 import { useProjectRows } from "@/pages/proj/shared";
+import { KickoffDialog } from "@/pages/proj/KickoffDialog";
 import { GroupToggle, KindLegend, KindSwitch, ProjRow, filterProjectRows, slotProjects, type ProjKind } from "@/pages/proj/ProjRows";
 import { ProjView } from "@/pages/proj/ProjView";
 import { NewProjDialog } from "@/pages/proj/NewProjDialog";
@@ -502,7 +503,8 @@ export function TicketsPage() {
       {data && accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(null)} tk={accepting} statuses={data.facets.statuses} />}
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
       {/* a project opens with ?pj=<id> in the address (kept with the other filters), closing removes it */}
-      {canProj && pj && <ProjView id={pj} onClose={() => set({ pj: null })} />}
+      {canProj && pj && <ProjView id={pj} onClose={() => set({ pj: null, kickoff: null })} />}
+      {canProj && pj && params.get("kickoff") === "1" && <KickoffDialog id={pj} onClose={() => set({ kickoff: null })} />}
       {canProj && importingArchive && (
         <ArchiveImportDialog
           onClose={() => setImportingArchive(false)}
@@ -517,7 +519,7 @@ export function TicketsPage() {
           onClose={() => setCreatingProj(false)}
           onCreated={(id) => {
             setCreatingProj(false);
-            set({ pj: id });
+            set({ pj: id, kickoff: "1" });
           }}
         />
       )}

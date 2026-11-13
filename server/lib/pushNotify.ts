@@ -26,6 +26,7 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "project.reminder": { fr: "Rappel de projet", en: "Project reminder" },
   "note.reminder": { fr: "Rappel", en: "Reminder" },
   "project.note": { fr: "Note de projet pour vous", en: "A project note for you" },
+  "proj.kickoff": { fr: "Vous dirigez un projet", en: "You lead a project" },
   "proj.assigned": { fr: "Tâche de projet pour vous", en: "Project task for you" },
   "pipeline.day_added": { fr: "Ajouté à votre journée", en: "Added to your day" },
   "security.alert": { fr: "Alerte de sécurité", en: "Security alert" },
