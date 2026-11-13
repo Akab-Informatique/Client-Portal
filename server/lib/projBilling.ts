@@ -375,3 +375,23 @@ export async function projectFromTicket(ticketId: number, actorId: string) {
   await d.delete(schema.ticketTimers).where(eq(schema.ticketTimers.ticketId, t.id));
   return { project: row, ticketNumber: t.number };
 }
+
+/**
+ * At server start: every archive project not yet in the new format is brought over (once each, `legacy_id`), so the projects show
+ * in the Tickets list without anyone clicking. A project that fails is logged and left for the next start; never throws.
+ */
+export async function importArchiveAtStart(): Promise<void> {
+  try {
+    const todo = (await archiveProjects()).filter((p) => !p.imported);
+    for (const p of todo) {
+      try {
+        await importArchiveProject(p.id, "00000000-0000-0000-0000-000000000000");
+        console.log(`[projects] archive ${p.number} brought into the new format`);
+      } catch (e) {
+        console.warn(`[projects] archive ${p.number} not imported:`, e instanceof Error ? e.message : e);
+      }
+    }
+  } catch (e) {
+    console.warn("[projects] archive import:", e instanceof Error ? e.message : e);
+  }
+}

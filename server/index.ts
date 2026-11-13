@@ -24,6 +24,8 @@ import { reportsTick } from "./lib/reports.ts";
 
 await initDb();
 await seed();
+// the archive projects become projects of the new format (once each), so they show in the Tickets list
+await (await import("./lib/projBilling.ts")).importArchiveAtStart();
 // every contact with an email has a client account (dormant until its company's portal is switched on)
 
 const app = createApp();

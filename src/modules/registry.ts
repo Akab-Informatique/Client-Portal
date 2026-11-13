@@ -63,7 +63,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "hr", path: "/hr", labelKey: "nav.hr", icon: HeartHandshake, section: "accounting", permission: "hr.manage" },
   { key: "newsletter", path: "/newsletter", labelKey: "nav.newsletter", icon: Newspaper, section: "management", permission: "newsletter.view" },
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
-  { key: "projects", path: "/projects", labelKey: "nav.projectsArchive", icon: Archive, section: "command", permission: "projects.view" },
+  { key: "projects", path: "/projects", labelKey: "nav.projectsArchive", icon: Archive, section: "command", permission: "projects.view", hideInNav: true },
   { key: "passbolt", path: "/security/passbolt", labelKey: "nav.passbolt", icon: KeyRound, section: "command", group: "security", permission: "passbolt.use", rule: "passbolt" },
   { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", permission: "reports.view" },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },

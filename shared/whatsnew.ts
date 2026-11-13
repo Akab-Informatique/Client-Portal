@@ -8,6 +8,20 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-13.3",
+    date: "2026-11-13",
+    sections: [
+      {
+        fr: "Projets de l'archive",
+        en: "Archive projects",
+        items: [
+          { fr: "Les anciens projets sont maintenant des projets du nouveau format : ils apparaissent dans la liste des billets (P-###), avec leurs tâches, notes, fichiers, temps et facturation.", en: "The old projects are now projects of the new format: they show in the tickets list (P-###), with their tasks, notes, files, time and billing." },
+          { fr: "« Archive projets » n'est plus dans le menu.", en: ""Archive projets" is no longer in the menu." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-13.2",
     date: "2026-11-13",
     sections: [
