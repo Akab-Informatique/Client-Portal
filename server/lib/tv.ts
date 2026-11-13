@@ -279,16 +279,34 @@ export async function christmasOf(now: Date = new Date(), override?: number | nu
   return { day, shirt: day >= 8, aubaine: aubaines[String(day)] ?? null };
 }
 
+// Easter egg: an in-memory event (never stored) that both feeds carry for 15 s; the id lets a screen play each event once
+export const EASTER_NAMES = ["camille"] as const;
+const EASTER_MS = 15_000;
+let easter: { name: string; id: number; until: number } | null = null;
+let easterSeq = 0;
+export function triggerEaster(name: string, now = Date.now()) {
+  easter = { name, id: ++easterSeq, until: now + EASTER_MS };
+  return easter;
+}
+export function activeEaster(now = Date.now()) {
+  if (easter && easter.until <= now) easter = null;
+  return easter;
+}
+export function resetEaster() {
+  easter = null;
+}
+
 /** The public body: names and approved labels only, never a key. `xmas` (staff preview only) forces a day of the Christmas scene. */
 export async function publicState(opts: { now?: Date; xmas?: number | null } = {}) {
   const now = Date.now();
+  const egg = activeEaster(now);
   const unassigned = await unassignedCount();
   const list = (await rows()).map(({ bot, status }) => {
     const e = statusOf(status, now);
     return { id: bot.id, name: bot.name, state: e.state, label: e.label, since: e.since.toISOString() };
   });
   const christmas = await christmasOf(opts.now ?? new Date(now), opts.xmas);
-  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, unassigned, christmas, bots: list };
+  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, unassigned, christmas, easter: egg ? egg.name : null, easterId: egg ? egg.id : null, bots: list };
 }
 
 /** For the managers: same as the public list, plus each bot's secret report key and its position. */

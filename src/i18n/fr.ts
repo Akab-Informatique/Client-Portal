@@ -5661,6 +5661,7 @@ const fr = {
       rotateText: "Les anciens liens de rapport de ce robot cesseront de fonctionner : il faudra les remplacer là où ils sont utilisés.",
     },
     links: { title: "Liens de rapport", label: "Tâche affichée" },
+    console: { unknown: "commande inconnue", ok: "ok", denied: "refusé" },
     xmas: {
       title: "Noël — Octet",
       hint: "Du 1er au 25 décembre, le bureau de la télé est décoré et Octet, le lutin d'AKAB, brise les prix. Écris l'aubaine de chaque jour (80 caractères au plus).",

@@ -198,6 +198,8 @@ export function TvManage({ xmasDay, onXmasDay }: { xmasDay: number; onXmasDay: (
 
       <XmasCard day={xmasDay} onDay={onXmasDay} />
 
+      <HiddenConsole />
+
       <NameDialog
         open={adding}
         title={t("tv.bots.add")}
@@ -342,6 +344,45 @@ function NameDialog({ open, title, initial, onClose, onSave }: { open: boolean; 
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** A tiny terminal line at the very bottom: no label, no help. */
+function HiddenConsole() {
+  const { t } = useTranslation();
+  const [line, setLine] = useState("");
+  const [out, setOut] = useState("");
+  const run = async () => {
+    const cmd = line.trim().toLowerCase();
+    setLine("");
+    const m = /^([a-z]{1,40})\.exe$/.exec(cmd);
+    if (!m || m[1] !== "camille") {
+      setOut(t("tv.console.unknown"));
+      return;
+    }
+    try {
+      await api.post("/tv/easter", { name: m[1] });
+      setOut(t("tv.console.ok"));
+    } catch {
+      setOut(t("tv.console.denied"));
+    }
+  };
+  return (
+    <div className="pt-6 font-mono text-xs">
+      <input
+        value={line}
+        onChange={(e) => setLine(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") void run();
+        }}
+        placeholder="> _"
+        spellCheck={false}
+        autoComplete="off"
+        aria-label=">"
+        className="w-full bg-transparent text-muted-foreground outline-none placeholder:text-muted-foreground/40"
+      />
+      {out && <div className="text-muted-foreground/70">{out}</div>}
+    </div>
   );
 }
 

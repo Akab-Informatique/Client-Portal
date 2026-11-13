@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -6,6 +8,8 @@ import { audit } from "../lib/audit.ts";
 import { clientIp, rateLimit, rateLimitFull } from "../lib/http.ts";
 import { body } from "../lib/validate.ts";
 import {
+  EASTER_NAMES,
+  triggerEaster,
   LABELS,
   TV_STATES,
   addBot,
@@ -44,7 +48,17 @@ const zName = z.object({ name: z.string().max(60) });
 const zPatch = z.object({ name: z.string().max(60).optional(), sort: z.number().int().min(0).max(1000).optional() });
 const zStatus = z.object({ state: z.enum(TV_STATES), label: z.union([z.string().max(200), z.number().int()]).nullish() });
 
-const zAubaines = z.object({ aubaines: z.record(z.string().regex(/^[0-9]{1,2}$/), z.string().max(2000)) });
+const zEaster = z.object({ name: z.string().max(40).transform((s) => s.trim().toLowerCase()).pipe(z.enum(EASTER_NAMES)) });
+// The picture lives in server/assets (never public/, never in dist): only these routes serve it
+const PHOTO = path.join(import.meta.dirname, "..", "assets", "tv-easter-camille.jpg");
+function photo(c: Context) {
+  c.header("Cache-Control", "no-store");
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("Content-Type", "image/jpeg");
+  return c.body(new Uint8Array(readFileSync(PHOTO)));
+}
+
+const zAubaines =z.object({ aubaines: z.record(z.string().regex(/^[0-9]{1,2}$/), z.string().max(2000)) });
 
 export const tvRoutes = new Hono<AppEnv>()
   // ── Public: the lobby screen (display key in the URL) ──
@@ -60,6 +74,21 @@ export const tvRoutes = new Hono<AppEnv>()
       return bad.ok ? notFound(c) : tooMany(c, bad.retryAfter);
     }
     return c.json(await publicState());
+  })
+
+  // ── Public: the easter egg picture, behind the same key and limits as the feed ──
+  .get("/display/easter/camille.jpg", async (c) => {
+    hidden(c);
+    const ip = clientIp(c);
+    const all = rateLimit(`tv:display:${ip}`, 120, MINUTE);
+    if (!all.ok) return tooMany(c, all.retryAfter);
+    if (rateLimitFull(`tv:display:bad:${ip}`, 10)) return tooMany(c, 60);
+    const key = c.req.query("key");
+    if (!key || key.length > 200 || !(await displayKeyMatches(key))) {
+      const bad = rateLimit(`tv:display:bad:${ip}`, 10, MINUTE);
+      return bad.ok ? notFound(c) : tooMany(c, bad.retryAfter);
+    }
+    return photo(c);
   })
 
   // ── Public: a bot reports its status by opening a link (GET) or posting to it ──
@@ -88,7 +117,21 @@ export const tvRoutes = new Hono<AppEnv>()
     return c.json(await publicState({ xmas }));
   })
 
+  .get("/easter/camille.jpg", requireStaff, requirePermission("tv.view"), (c) => {
+    hidden(c);
+    return photo(c);
+  })
+
   // ── Managers ──
+  .post("/easter", requireStaff, requirePermission("tv.manage"), async (c) => {
+    const a = auth(c);
+    const lim = rateLimit(`tv:easter:${a.user.id}`, 6, MINUTE);
+    if (!lim.ok) return tooMany(c, lim.retryAfter);
+    const p = await body(c, zEaster);
+    const e = triggerEaster(p.name.toLowerCase());
+    await audit(a.user.id, "tv.easter", undefined, { name: e.name });
+    return c.json({ ok: true, easter: e.name });
+  })
   .get("/aubaines", requireStaff, requirePermission("tv.manage"), async (c) => c.json({ aubaines: await getAubaines() }))
   .put("/aubaines", requireStaff, requirePermission("tv.manage"), async (c) => {
     const a = auth(c);

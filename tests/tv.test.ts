@@ -542,3 +542,47 @@ describe("Dashboard TV: Christmas, Octet", () => {
     expect((await call("GET", `/api/tv/display/state?key=${encodeURIComponent(k)}`)).status).toBe(200);
   });
 });
+
+describe("Dashboard TV: easter egg", () => {
+  it("needs tv.manage, shows in both feeds, then expires", async () => {
+    resetLimits();
+    tv.resetEaster();
+    expect((await call("POST", "/api/tv/easter", { cookie: tech, body: { name: "camille" } })).status).toBe(403);
+    expect((await call("POST", "/api/tv/easter", { body: { name: "camille" } })).status).toBe(401);
+    expect((await call("POST", "/api/tv/easter", { cookie: admin, body: { name: "nobody" } })).status).toBe(400);
+    const key = (await manage()).displayKey;
+    expect((await call("GET", `/api/tv/display/state?key=${key}`)).json.easter).toBeNull();
+    const r = await call("POST", "/api/tv/easter", { cookie: admin, body: { name: "Camille" } });
+    expect(r.status).toBe(200);
+    const kiosk = await call("GET", `/api/tv/display/state?key=${key}`);
+    const staff = await call("GET", "/api/tv/state", { cookie: tech });
+    expect(kiosk.json.easter).toBe("camille");
+    expect(staff.json.easter).toBe("camille");
+    expect(typeof kiosk.json.easterId).toBe("number");
+    const t0 = Date.now();
+    expect(tv.activeEaster(t0 + 14_000)?.name).toBe("camille");
+    expect(tv.activeEaster(t0 + 16_000)).toBeNull();
+    expect((await call("GET", `/api/tv/display/state?key=${key}`)).json.easter).toBeNull();
+  });
+
+  it("serves the picture only with the key or a signed-in viewer, never as a public file", async () => {
+    resetLimits();
+    const key = (await manage()).displayKey;
+    const bad = await call("GET", "/api/tv/display/easter/camille.jpg?key=wrong");
+    expect(bad.status).toBe(404);
+    expect((await call("GET", "/api/tv/display/easter/camille.jpg")).status).toBe(404);
+    const ok = await app.request(`/api/tv/display/easter/camille.jpg?key=${encodeURIComponent(key)}`, { headers: { host: "localhost" } });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("content-type")).toBe("image/jpeg");
+    expect(ok.headers.get("cache-control")).toBe("no-store");
+    expect(ok.headers.get("x-content-type-options")).toBe("nosniff");
+    expect((await ok.arrayBuffer()).byteLength).toBeGreaterThan(10_000);
+    expect((await call("GET", "/api/tv/easter/camille.jpg")).status).toBe(401);
+    const staff = await app.request("/api/tv/easter/camille.jpg", { headers: { host: "localhost", cookie: tech } });
+    expect(staff.status).toBe(200);
+    const fs = await import("node:fs");
+    expect(fs.existsSync("server/assets/tv-easter-camille.jpg")).toBe(true);
+    expect(fs.existsSync("public/tv/assets/tv-easter-camille.jpg")).toBe(false);
+    expect(fs.readdirSync("public", { recursive: true }).some((f) => /easter|camille/i.test(String(f)))).toBe(false);
+  });
+});

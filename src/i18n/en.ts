@@ -5663,6 +5663,7 @@ const en: Dict = {
       rotateText: "This bot's old report links will stop working: replace them wherever they are used.",
     },
     links: { title: "Report links", label: "Task shown" },
+    console: { unknown: "unknown command", ok: "ok", denied: "denied" },
     xmas: {
       title: "Christmas — Octet",
       hint: "From December 1 to 25 the TV office is decorated and Octet, AKAB's elf, is breaking prices. Write each day's aubaine (80 characters at most).",

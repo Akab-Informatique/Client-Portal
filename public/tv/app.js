@@ -6,7 +6,9 @@
   // Fixed staff config (not part of the bot feed). Add more entries later (2 desks are laid out for now).
   var PEOPLE = [
     { name: 'Jonathan', role: '', look: { skin: '#e8b088', hair: '#3b2412', beard: '#33200f', beardFull: true, quiff: true, glasses: false, top: 'polo' } },
-    { name: 'Alexandre', role: '', queueDesk: true, look: { skin: '#e8b088', hair: '#6a4426', beard: '#8a4f25', beardFull: false, quiff: false, glasses: true, top: 'blazer' } }
+    { name: 'Alexandre', role: '', queueDesk: true, look: { skin: '#e8b088', hair: '#6a4426', beard: '#8a4f25', beardFull: false, quiff: false, glasses: false, top: 'blazer' } },
+    // Camille, accounting: seated at her own desk (never walks, no coffee trips). Long ombre hair, bangs, big hexagonal tortoise-shell glasses, navy blazer over a mustard top.
+    { name: 'Camille', role: 'COMPTABILITÉ', seated: true, look: { skin: '#f3cfb5', hair: '#3a2216', hairEnds: '#c5622a', longHair: true, bangs: true, lips: '#d8667a', glasses: true, glassesStyle: 'big', top: 'blazer', inner: '#d9a21b', shirt: '#14172a' } }
   ];
   var PEOPLE_ON = !/(?:^|[?&])people=0(?:&|$)/.test(location.search);
   // Ambiance mode (default): bots whose feed state is idle are DRAWN as busy, at the owner's request. ?mode=live shows the true status.
@@ -100,7 +102,7 @@
     for (var u = 0; u < 5; u++) { R(9, 61 + u * 11, 28, 9, '#0b0f1e'); for (var v = 0; v < 6; v++) R(22 + v * 2, 63 + u * 11, 1, 5, '#2a3558'); }
     R(8, 116, 30, 3, '#0b0f1e');
     // glass wall along the direction corner
-    if (PEOPLE_ON) { s.globalAlpha = 0.14; R(398, 118, 4, 122, '#7df9ff'); s.globalAlpha = 1; R(400, 118, 1, 122, '#FFF200'); }
+    if (PEOPLE_ON) { s.globalAlpha = 0.14; R(398, 118, 4, 80, '#7df9ff'); s.globalAlpha = 1; R(400, 118, 1, 80, '#FFF200'); }
     // wall-mounted digital clock panel (top right)
     if (CLOCK) {
       s.globalAlpha = 0.18; R(383, 9, 86, 34, '#F7941D'); s.globalAlpha = 0.3; R(384, 10, 84, 32, '#FFF200'); s.globalAlpha = 1;
@@ -132,7 +134,8 @@
     // plants
     plant(12, 150); plant(12, 196); plant(12, 240); plant(48, 118);
     if (PEOPLE_ON) {
-      RO(402, 118, 76, 122, '#111833'); R(404, 120, 72, 1, '#4a4818'); R(404, 236, 72, 1, '#4a3418');
+      RO(402, 118, 76, 80, '#111833'); R(404, 120, 72, 1, '#4a4818'); R(404, 194, 72, 1, '#4a3418');
+      RO(402, 206, 76, 58, '#101a30'); R(404, 208, 72, 1, '#18503e'); R(404, 260, 72, 1, '#18503e');
       RO(412, 62, 66, 18, '#05070f'); R(412, 62, 66, 1, '#FFF200'); R(412, 79, 66, 1, '#F7941D');
       T('DIRECTION', 445, 68, '#FFF200', 1, null, 'center');
     }
@@ -438,12 +441,40 @@
   function initHumans() {
     humans = [];
     if (!PEOPLE_ON) return;
-    PEOPLE.slice(0, 2).forEach(function (p, i) {
-      var cx = 436, dy = [116, 158][i];
-      humans.push({ p: p, i: i, cx: cx, dy: dy, seatX: cx + 8, seatY: dy + 9, standX: cx + 8, standY: [162, 206][i],
+    PEOPLE.slice(0, 3).forEach(function (p, i) {
+      var cx = 436, dy = [116, 158, 226][i];
+      humans.push({ p: p, i: i, cx: cx, dy: dy, seatX: cx + 8, seatY: dy + 9, standX: cx + 8, standY: [162, 188, 226][i],
         x: cx + 8, y: dy + 9, path: [], mode: 'sit', facing: 0, task: null, home: false, anim: 'type', animT: 0, animDur: 0,
         animNext: rnd(3, 8), coffeeT: coffeeGap() + i * 25, nodT: rnd(3, 6), nod: 0, bubT: 6, bub: null, stT: 0 });
     });
+  }
+  // Easter egg (the portal's hidden console): Camille stands, is shocked, points at Jonathan and a photo of her shows in a bubble for ~12 s
+  var EGG_DUR = 12, eggImg = null, lastEggId = null;
+  function startEgg(id) {
+    if (id === lastEggId) return;
+    lastEggId = id;
+    var h = humans.filter(function (x) { return x.p.name === 'Camille'; })[0];
+    if (!h || h.egg) return;
+    h.egg = { t: 0 }; h.mode = 'egg'; h.path = []; h.x = h.standX; h.y = h.standY; h.facing = 0; h.bub = null;
+    if (!eggImg) {
+      var q = new URLSearchParams(location.search), key = q.get('key');
+      eggImg = new Image();
+      eggImg.src = (key && /^[A-Za-z0-9_-]{8,128}$/.test(key)) ? '/api/tv/display/easter/camille.jpg?key=' + encodeURIComponent(key) : '/api/tv/easter/camille.jpg';
+    }
+  }
+  function drawEgg(t) {
+    var h = humans.filter(function (x) { return x.egg; })[0];
+    if (!h) return;
+    var e = h.egg.t, al = Math.max(0, Math.min(1, e / 0.4, (EGG_DUR - e) / 0.4));
+    if (e < 2.5) iconBubble(h.x + 12, h.y - 44, '_!', t);
+    if (e >= 1.5 && eggImg && eggImg.complete && eggImg.naturalWidth) {
+      var bw = 47, bh = 70, bx = 352, by = 186, a2 = Math.min(al, Math.max(0, (e - 1.5) / 0.4));
+      g.globalAlpha = a2;
+      R(bx - 1, by - 1, bw + 2, bh + 2, DARK); R(bx, by, bw, bh, '#fff');
+      g.imageSmoothingEnabled = true; g.drawImage(eggImg, bx + 2, by + 2, bw - 4, bh - 4); g.imageSmoothingEnabled = false;
+      R(bx + bw, by + bh - 16, 4, 3, DARK); R(bx + bw, by + bh - 15, 3, 1, '#fff'); R(bx + bw + 4, by + bh - 14, 8, 2, DARK);
+      g.globalAlpha = 1;
+    }
   }
   function humanRoute(p, Tg) {
     var pts = [], Rr = lay.corrR;
@@ -470,6 +501,11 @@
     if (staff.fast > 0) staff.fast -= dt;
     humans.forEach(function (h) {
       if (h.bub) { h.bub.t -= dt; if (h.bub.t <= 0) h.bub = null; }
+      if (h.egg) {
+        h.egg.t += dt;
+        if (h.egg.t < EGG_DUR) return;
+        h.egg = null; h.mode = 'sit'; h.x = h.seatX; h.y = h.seatY; h.facing = 0; h.anim = 'type'; h.animT = 0; h.animNext = rnd(3, 8);
+      }
       if (h.path.length) {
         var p = h.path[0], dx = p.x - h.x, dy = p.y - h.y, dist = Math.sqrt(dx * dx + dy * dy), st = SPEEDH * dt;
         if (Math.abs(dx) > 0.1) h.facing = dx > 0 ? 1 : -1;
@@ -498,6 +534,7 @@
         }
         if (h.p.queueDesk && staff.thumb > 0 && (!h.bub || h.bub.k !== 'thumb')) h.bub = { k: 'thumb', t: staff.thumb };
         h.coffeeT -= dt;
+        if (h.coffeeT <= 0 && h.p.seated) h.coffeeT = 60;
         if (h.coffeeT <= 0) {
           if (!anyAway && !occupied(null, 'coffee')) { humanGo(h, { x: lay.corrR, y: lay.coffee.y }, { type: 'coffee' }); anyAway = true; }
           else h.coffeeT = rnd(8, 15);
@@ -511,12 +548,14 @@
     var L = h.p.look, sk = L.skin, sh = shade(sk, -0.18), walk = pose === 'walk', sit = pose === 'sit';
     var fr = walk ? (Math.floor(t * 7) & 3) : 0, bob = (walk && (fr & 1)) ? -1 : 0;
     var hb = bob + (h.nod > 0 ? 1 : 0);
-    var shirt = L.top === 'polo' ? '#1c1c26' : '#17171f', pants = '#2b3350', shoe = '#12121a';
+    var shirt = L.shirt || (L.top === 'polo' ? '#1c1c26' : '#17171f'), pants = '#2b3350', shoe = '#12121a';
     var an = sit ? h.anim : '', P = [], D = [], la = walk ? (fr === 1 ? -1 : (fr === 3 ? 1 : 0)) : 0, i;
     if (!sit) P.push([-5, -12, 4, 10, pants], [1, -12, 4, 10, pants], [-6, -2 - ((walk && fr === 1) ? 1 : 0), 5, 2, shoe], [1, -2 - ((walk && fr === 3) ? 1 : 0), 5, 2, shoe]);
     P.push([-7, -26 + bob, 14, 14, shirt]);
     var al = sit ? 16 : 12;
-    if (an === 'stretch') { P.push([-10, -44, 3, 18, shirt], [7, -44, 3, 18, shirt]); D.push([-10, -47, 3, 3, sk], [7, -47, 3, 3, sk]); }
+    if (h.egg) an = h.egg.t < 2.5 ? 'stretch' : 'point';
+    if (an === 'point') { P.push([-10, -25 + bob, 3, al, shirt], [7, -46, 3, 20, shirt]); D.push([7, -49, 3, 3, sk]); }
+    else if (an === 'stretch') { P.push([-10, -44, 3, 18, shirt], [7, -44, 3, 18, shirt]); D.push([-10, -47, 3, 3, sk], [7, -47, 3, 3, sk]); }
     else {
       P.push([-10, -25 + bob + la, 3, al, shirt]);
       if (an === 'sip') { P.push([7, -33, 3, 9, shirt]); D.push([6, -36, 3, 3, sk], [8, -39, 4, 4, '#fff'], [12, -38, 1, 2, '#fff']); }
@@ -526,15 +565,39 @@
     if (pose === 'coffee') D.push([8, -16, 4, 4, '#fff'], [12, -15, 1, 2, '#fff']);
     P.push([-2, -28 + hb, 4, 2, sh], [-5, -38 + hb, 10, 10, sk], [-6, -41 + hb, 12, 4, L.hair], [-6, -38 + hb, 1, 3, L.hair], [5, -38 + hb, 1, 3, L.hair]);
     if (L.quiff) P.push([-2, -43 + hb, 6, 2, L.hair], [0, -44 + hb, 3, 1, L.hair]);
+    if (L.longHair) {
+      P.push([-6, -38 + hb, 2, 18, L.hair], [4, -38 + hb, 2, 18, L.hair]);
+      D.push([-6, -29 + hb, 2, 3, '#7a4220'], [4, -29 + hb, 2, 3, '#7a4220'], [-6, -26 + hb, 2, 6, L.hairEnds], [4, -26 + hb, 2, 6, L.hairEnds]);
+    }
+    if (L.bangs) D.push([-5, -38 + hb, 10, 2, L.hair]);
     for (i = 0; i < P.length; i++) R(x + P[i][0] - 1, y + P[i][1] - 1, P[i][2] + 2, P[i][3] + 2, DARK);
     for (i = 0; i < P.length; i++) R(x + P[i][0], y + P[i][1], P[i][2], P[i][3], P[i][4]);
     for (i = 0; i < D.length; i++) R(x + D[i][0], y + D[i][1], D[i][2], D[i][3], D[i][4]);
     var fx = Math.max(-1, Math.min(1, h.facing)), blink = (Math.floor(t * 0.8 + h.i * 3) % 5) === 0 && ((t * 5) % 1) < 0.3, ey = -36 + hb;
-    var ew = L.glasses ? 1 : 2; R(x - (L.glasses ? 2 : 3) + fx, y + ey, ew, blink ? 1 : 2, '#1a1018'); R(x + 1 + fx, y + ey, ew, blink ? 1 : 2, '#1a1018');
+    var big = L.glassesStyle === 'big';
+    if (big) { R(x - 3 + fx, y + ey + 1, 1, blink ? 1 : 2, '#1a1018'); R(x + 2 + fx, y + ey + 1, 1, blink ? 1 : 2, '#1a1018'); }
+    else { var ew = L.glasses ? 1 : 2; R(x - (L.glasses ? 2 : 3) + fx, y + ey, ew, blink ? 1 : 2, '#1a1018'); R(x + 1 + fx, y + ey, ew, blink ? 1 : 2, '#1a1018'); }
+    if (L.lips) R(x - 1, y - 31 + hb, 3, 1, L.lips);
+    if (big) {
+      var G = '#5a3416', A = '#b8742a', TL = '#2d8f8a', gy = y - 38 + hb;
+      R(x - 4, gy, 3, 1, G); R(x + 2, gy, 3, 1, G); R(x - 5, gy + 1, 1, 3, A); R(x - 1, gy + 1, 1, 3, A); R(x + 1, gy + 1, 1, 3, A); R(x + 5, gy + 1, 1, 3, A);
+      R(x - 4, gy + 4, 3, 1, TL); R(x + 2, gy + 4, 3, 1, TL); R(x, gy + 2, 1, 1, G);
+    }
+    if (h.egg && big) {
+      var wy = y - 37 + hb;
+      R(x - 4, wy, 3, 3, '#fff'); R(x + 2, wy, 3, 3, '#fff'); R(x - 3, wy + 1, 1, 1, '#1a1018'); R(x + 3, wy + 1, 1, 1, '#1a1018');
+      R(x - 1, y - 31 + hb, 3, h.egg.t < 2.5 ? 2 : 1, '#6a1a2a');
+    }
     if (L.beardFull) { R(x - 5, y - 34 + hb, 2, 5, L.beard); R(x + 3, y - 34 + hb, 2, 5, L.beard); R(x - 5, y - 31 + hb, 10, 3, L.beard); R(x - 3, y - 33 + hb, 6, 1, L.beard); R(x - 2, y - 32 + hb, 4, 1, '#fff'); }
     else { R(x - 5, y - 33 + hb, 1, 3, L.beard); R(x + 4, y - 33 + hb, 1, 3, L.beard); R(x - 4, y - 30 + hb, 8, 2, L.beard); R(x - 2, y - 32 + hb, 4, 1, '#8a3a30'); R(x - 3, y - 33 + hb, 1, 1, '#8a3a30'); R(x + 2, y - 33 + hb, 1, 1, '#8a3a30'); }
     if (L.glasses) { var F = '#0a0a10'; R(x - 4, y - 37 + hb, 8, 1, F); R(x - 4, y - 34 + hb, 8, 1, F); R(x - 4, y - 37 + hb, 1, 4, F); R(x - 1, y - 37 + hb, 2, 4, F); R(x + 3, y - 37 + hb, 1, 4, F); }
     if (L.top === 'polo') { R(x - 3, y - 26 + bob, 6, 2, '#2a2a34'); R(x + 3, y - 22 + bob, 2, 2, '#FFF200'); R(x + 3, y - 20 + bob, 1, 1, '#F7941D'); }
+    else if (L.inner) {
+      var IN = L.inner, by = y - 26 + bob;
+      R(x - 3, by, 6, 2, IN); R(x - 2, by + 2, 4, 3, IN); R(x - 1, by + 5, 2, 3, IN);
+      R(x - 4, by, 1, 8, '#0c0c12'); R(x + 3, by, 1, 8, '#0c0c12'); R(x - 3, by + 2, 1, 5, '#0c0c12'); R(x + 2, by + 2, 1, 5, '#0c0c12');
+      R(x - 2, by + 1, 1, 1, '#1a1a22'); R(x + 1, by + 3, 1, 1, '#1a1a22'); R(x - 1, by + 5, 1, 1, '#1a1a22'); R(x + 1, by + 6, 1, 1, '#1a1a22');
+    }
     else { R(x - 2, y - 26 + bob, 4, 11, '#3b3e48'); R(x - 3, y - 26 + bob, 1, 11, '#0c0c12'); R(x + 2, y - 26 + bob, 1, 11, '#0c0c12'); }
   }
   function drawHChair(h) { RO(h.seatX - 9, h.dy - 16, 18, 16, '#2a2a38'); R(h.seatX - 7, h.dy - 15, 14, 2, '#454560'); }
@@ -1004,6 +1067,7 @@
         if (b.fx && b.fx.t < 2.5) iconBubble(b.x, b.y - 36 + gagJy(b), 'heart', t);
       } catch (e) { /* ignore */ }
     });
+    try { drawEgg(t); } catch (e) { /* ignore */ }
     humans.forEach(function (h) { try { if (h.bub) iconBubble(h.x - 24, h.y - 26, h.bub.k, t); } catch (e) { /* ignore */ } });
     try { gagOverlay(t); } catch (e) { /* ignore */ }
     if (xmas) { try { xmasOverlay(t); drawGarland(t); order.forEach(function (b) { if (isHostage(b) && !b.leaving) drawHostageSign(lay.desks[b.desk], t); }); } catch (e) { /* ignore */ } }
@@ -1096,6 +1160,7 @@
       var nu = Math.max(0, Math.floor(Number(d.unassigned) || 0));
       if (prevUnassigned !== null && nu > prevUnassigned) chime();
       prevUnassigned = nu; unassigned = nu;
+      if (d.easter === 'camille' && d.easterId != null) { try { startEgg(d.easterId); } catch (e) { /* ignore */ } }
       setXmas(d.christmas); applyData(d); st.lastOk = Date.now(); st.stale = !!d.stale; fails = 0;
       setTimeout(poll, 2000);
     }).catch(function () {
