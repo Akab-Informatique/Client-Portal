@@ -16,7 +16,7 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         en: "Archive projects",
         items: [
           { fr: "Les anciens projets sont maintenant des projets du nouveau format : ils apparaissent dans la liste des billets (P-###), avec leurs tâches, notes, fichiers, temps et facturation.", en: "The old projects are now projects of the new format: they show in the tickets list (P-###), with their tasks, notes, files, time and billing." },
-          { fr: "« Archive projets » n'est plus dans le menu.", en: ""Archive projets" is no longer in the menu." },
+          { fr: "« Archive projets » n'est plus dans le menu.", en: "\"Archive projets\" is no longer in the menu." },
         ],
       },
     ],
