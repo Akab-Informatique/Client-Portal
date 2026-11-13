@@ -201,14 +201,43 @@ async function rows() {
 const statusOf = (s: { state: string; label: string | null; since: Date; updatedAt: Date } | null, now: number) =>
   effectiveStatus(s ?? { state: "idle", label: null, since: new Date(now), updatedAt: new Date(now) }, now);
 
+let unassignedCache: { at: number; n: number } | null = null;
+
+/**
+ * Open tickets in status kind "new" with no technician, leaving out monitoring alerts, the queues the weekly meeting
+ * does not count and tickets hidden from staff (self-managed clients: the staff-scoped source never lists them).
+ * Only the number is ever public. Kept 30 s; 0 when anything fails.
+ */
+export async function unassignedCount(): Promise<number> {
+  const now = Date.now();
+  if (unassignedCache && now - unassignedCache.at < 30_000) return unassignedCache.n;
+  let n = 0;
+  try {
+    const { ticketSource } = await import("./ticketSource.ts");
+    const { isAlert, lookup } = await import("../routes/tickets.ts");
+    const { gaugeQueues } = await import("./meetingsData.ts");
+    const src = await ticketSource();
+    const [all, o] = await Promise.all([src.list(), src.options()]);
+    const L = lookup(o);
+    const queues = await gaugeQueues(o.queues);
+    const alert = isAlert(L);
+    n = all.filter((t) => queues.counted.includes(t.queue) && !alert(t) && !t.assignee && L.statusKind(t.status) === "new").length;
+  } catch {
+    n = 0;
+  }
+  unassignedCache = { at: now, n };
+  return n;
+}
+
 /** The public body: names and approved labels only, never a key. */
 export async function publicState() {
   const now = Date.now();
+  const unassigned = await unassignedCount();
   const list = (await rows()).map(({ bot, status }) => {
     const e = statusOf(status, now);
     return { id: bot.id, name: bot.name, state: e.state, label: e.label, since: e.since.toISOString() };
   });
-  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, bots: list };
+  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, unassigned, bots: list };
 }
 
 /** For the managers: same as the public list, plus each bot's secret report key and its position. */

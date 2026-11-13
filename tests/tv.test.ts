@@ -65,6 +65,20 @@ beforeAll(async () => {
   tech = await signIn("tech@akab.local");
 });
 
+describe("Dashboard TV: unassigned tickets", () => {
+  it("both feeds carry the number of unassigned new tickets, and nothing else about them", async () => {
+    resetLimits();
+    const key = (await manage()).displayKey;
+    const display = await call("GET", `/api/tv/display/state?key=${encodeURIComponent(key)}`);
+    expect(display.status).toBe(200);
+    expect(typeof display.json.unassigned).toBe("number");
+    expect(display.json.unassigned).toBeGreaterThanOrEqual(0);
+    const signed = await call("GET", "/api/tv/state", { cookie: tech });
+    expect(typeof signed.json.unassigned).toBe("number");
+    expect(display.text).not.toMatch(/"(title|number|company)"/);
+  });
+});
+
 describe("Dashboard TV: rights", () => {
   it("has tv.view and tv.manage, given to administrators; technicians only view", () => {
     const keys = MODULES.find((m) => m.key === "tv")!.permissions.map((p) => p.key);

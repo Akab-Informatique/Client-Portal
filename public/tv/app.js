@@ -768,6 +768,27 @@
     }
     g.restore();
     R(x + w - 14, y + 4, 2, 2, '#62ff7a'); R(x + w - 10, y + 4, 2, 2, '#FFF200'); R(x + w - 6, y + 4, 2, 2, '#7df9ff');
+    if (unassigned > 0) drawUnassigned(t, x, y, w, h);
+  }
+  // New tickets nobody has taken: the wall screen turns into an alarm with the count (steady when reduced motion is asked for)
+  var unassigned = 0;
+  var REDUCED = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  function drawUnassigned(t, x, y, w, h) {
+    var on = REDUCED ? true : (Math.floor(t * 2.5) & 1) === 0;
+    var pulse = REDUCED ? 0.35 : 0.25 + 0.2 * Math.sin(t * 6);
+    // glow around the screen
+    g.globalAlpha = pulse; R(x - 6, y - 6, w + 12, h + 12, '#ff3b30'); g.globalAlpha = Math.min(1, pulse + 0.2); R(x - 3, y - 3, w + 6, h + 6, '#ff3b30'); g.globalAlpha = 1;
+    // the screen itself: dark red, flashing frame
+    R(x - 2, y - 2, w + 4, h + 4, on ? '#ffffff' : '#ff3b30');
+    R(x, y, w, h, on ? '#c1121f' : '#6e0b12');
+    R(x + 2, y + 2, w - 4, h - 4, on ? '#2a0508' : '#3a0709');
+    var label = unassigned > 999 ? '999+' : String(unassigned);
+    T(label, x + Math.floor(w / 2), y + 5, on ? '#FFF200' : '#ffffff', 3, DARK, 'center');
+    T('NON ASSIGNÉS', x + Math.floor(w / 2), y + 29, '#ffffff', 1, null, 'center');
+    // beacon on top of the screen
+    var bx = x + Math.floor(w / 2) - 3;
+    R(bx - 1, y - 9, 8, 6, DARK); R(bx, y - 8, 6, 4, on ? '#ff3b30' : '#7a1510');
+    if (on) { R(bx - 4, y - 7, 2, 1, '#ff3b30'); R(bx + 8, y - 7, 2, 1, '#ff3b30'); R(bx + 2, y - 12, 2, 2, '#ff3b30'); }
   }
   function drawLeds(t, anyCoffee) {
     var red = rackRed;
@@ -1014,10 +1035,57 @@
       return r.json();
     }).then(function (d) { clearTimeout(tm); return d; }, function (e) { clearTimeout(tm); throw e; });
   }
+  // Chime when a new unassigned ticket comes in. Kiosk only (?key=): the portal preview (?feed=) stays silent, ?sound=0 turns it off.
+  var prevUnassigned = null, actx = null, hint = null;
+  var SOUND = (function () {
+    var q = new URLSearchParams(location.search);
+    return q.get('sound') !== '0' && !!q.get('key') && !!(window.AudioContext || window.webkitAudioContext);
+  })();
+  function soundReady() { return !!actx && actx.state === 'running'; }
+  function updateHint() {
+    if (!SOUND) return;
+    if (soundReady()) { if (hint) { hint.remove(); hint = null; } return; }
+    if (!hint) {
+      hint = document.createElement('div');
+      hint.textContent = 'Cliquer pour activer le son';
+      hint.style.cssText = 'position:fixed;right:8px;bottom:6px;font:12px sans-serif;color:#fff;background:rgba(0,0,0,.55);padding:3px 8px;border-radius:4px;opacity:.7;pointer-events:none;z-index:10';
+      document.body.appendChild(hint);
+    }
+  }
+  function unlockSound() {
+    if (!SOUND) return;
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      if (actx.state !== 'running') actx.resume().then(updateHint, function () {});
+    } catch (e) { /* no sound */ }
+    updateHint();
+  }
+  if (SOUND) {
+    ['click', 'keydown', 'touchstart', 'pointerdown'].forEach(function (ev) { window.addEventListener(ev, unlockSound, { passive: true }); });
+    updateHint();
+  }
+  function chime() {
+    if (!SOUND || !soundReady()) return;
+    try {
+      var t0 = actx.currentTime + 0.02;
+      [[659.25, 0], [830.61, 0.16], [987.77, 0.32]].forEach(function (n) {
+        var o = actx.createOscillator(), gn = actx.createGain();
+        o.type = 'sine'; o.frequency.value = n[0];
+        gn.gain.setValueAtTime(0.0001, t0 + n[1]);
+        gn.gain.exponentialRampToValueAtTime(0.25, t0 + n[1] + 0.02);
+        gn.gain.exponentialRampToValueAtTime(0.0001, t0 + n[1] + 0.5);
+        o.connect(gn); gn.connect(actx.destination);
+        o.start(t0 + n[1]); o.stop(t0 + n[1] + 0.55);
+      });
+    } catch (e) { /* no sound */ }
+  }
   function poll() {
     var p = DEMO ? Promise.resolve(demoFeed()) : fetchState();
     p.then(function (d) {
       if (!d || !Array.isArray(d.bots)) throw new Error('bad payload');
+      var nu = Math.max(0, Math.floor(Number(d.unassigned) || 0));
+      if (prevUnassigned !== null && nu > prevUnassigned) chime();
+      prevUnassigned = nu; unassigned = nu;
       applyData(d); st.lastOk = Date.now(); st.stale = !!d.stale; fails = 0;
       setTimeout(poll, 2000);
     }).catch(function () {
