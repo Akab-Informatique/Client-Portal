@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
+import { filterProjectRows } from "@/pages/proj/ProjRows";
+import { useProjectRows } from "@/pages/proj/shared";
 import { Pager } from "@/components/Pager";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, Columns3, Eye, Rows3, Search, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, X, type LucideIcon } from "lucide-react";
@@ -30,6 +33,7 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
   const own = who === userId && mine;
   // the view (compact list or kanban boards) and a search of the tickets shown
   const can = useCan();
+  const navigate = useNavigate();
   const [view, setView] = useState<"compact" | "kanban">(() => {
     try {
       return localStorage.getItem("akab.pipeline.ticketsView") === "kanban" ? "kanban" : "compact";
@@ -72,6 +76,12 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
     ...(data?.buttons ?? []).map((b) => ({ key: `b:${b.id}`, icon: Eye, tone: "text-muted-foreground", label: b.name, count: b.count as number | undefined, query: b.query })),
   ];
   const all = (data?.items ?? []).filter((x) => x.statusKind !== "complete");
+  // projects of the new format, with the tickets (the person's own, or the one picked)
+  const canProj = can("proj.view");
+  const projRows = useProjectRows(canProj);
+  const projects = canProj
+    ? filterProjectRows(projRows.data ?? [], { q: search, view: who === "all" ? "all" : "mine", meId: who === "all" ? me.id : who, assignee: [], company: [], companyNames: new Map() })
+    : [];
   // not stretched over the page: 10 at first, the others on the next pages
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
@@ -133,7 +143,7 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
         </Select>
         <span className="font-mono normal-case opacity-70">{all.length}</span>
       </h3>
-      {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : view === "kanban" ? <KanbanBoard items={all} canEdit={can("tickets.edit")} onOpen={onOpen} facets={data?.facets} /> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} />}
+      {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 && projects.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : view === "kanban" ? <KanbanBoard items={all} canEdit={can("tickets.edit")} onOpen={onOpen} facets={data?.facets} /> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} projects={page === 1 ? projects : []} onOpenProject={(id) => navigate(`/pipeline?section=tickets&pj=${id}`)} />}
       {view === "compact" && all.length > size && <Pager total={all.length} page={page} size={size} onPage={setPage} onSize={(n) => (setSize(n), setPage(1))} />}
     </section>
   );

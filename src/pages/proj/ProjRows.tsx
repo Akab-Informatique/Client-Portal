@@ -159,15 +159,13 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
           <span className="min-w-0 text-xs xl:[order:var(--o-company)]">
             {p.client ? <span className="block break-words leading-snug">{p.client.name}</span> : <span className="text-muted-foreground/60">—</span>}
           </span>
-          <span className="min-w-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 xl:[order:var(--o-start)]">—</span>
-          <span className="min-w-0 text-muted-foreground/60 xl:[order:var(--o-milestone)]">—</span>
           <span className={cn("min-w-0 whitespace-nowrap font-mono text-[11px] tabular-nums xl:[order:var(--o-due)]", late ? "font-semibold text-red-300" : "text-muted-foreground/70")}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
           <span className="min-w-0 text-muted-foreground/60 xl:[order:var(--o-priority)]">—</span>
           <span className="min-w-0 xl:[order:var(--o-assignee)]">
             {p.lead ? (
               <span className="flex min-w-0 items-center gap-2 pr-1 text-xs">
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-full border border-violet-400/40 bg-violet-500/15 text-[10px] font-semibold text-violet-200">{initials(p.lead.name)}</span>
-                <span className="min-w-0 break-words leading-snug">{p.lead.name}</span>
+                <span className="min-w-0 truncate leading-snug" title={p.lead.name}>{p.lead.name}</span>
               </span>
             ) : (
               <span className="pl-1 text-xs italic text-muted-foreground">{t("projList.noLead")}</span>
@@ -176,7 +174,6 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
           <span className="flex min-w-0 items-center text-xs text-muted-foreground xl:[order:var(--o-secondary)]" title={t("projList.membersHint")}>
             {others > 0 ? t("projList.members", { count: others }) : "—"}
           </span>
-          <span className="xl:[order:99]" />
         </span>
       </div>
     </li>
@@ -200,6 +197,8 @@ export function ProjCompactRow({ p, order, gridStyle, onOpen }: { p: ProjectRow;
     company: <span className="truncate text-xs text-muted-foreground">{p.client?.name ?? "—"}</span>,
     priority: dash,
     milestone: dash,
+    assignee: <span className="truncate text-xs text-muted-foreground">{p.lead?.name ?? "—"}</span>,
+    secondary: dash,
     due: <span className={cn("whitespace-nowrap font-mono text-[11px] tabular-nums", late ? "font-semibold text-red-300" : "text-muted-foreground/70")}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>,
     status: <span className={cn("inline-flex max-w-full items-center truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_TONE[p.status])}>{t(`projList.status.${p.status}`)}</span>,
   };
