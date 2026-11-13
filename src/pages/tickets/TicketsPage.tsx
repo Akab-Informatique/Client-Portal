@@ -83,7 +83,7 @@ import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
 import { useProjectRows } from "@/pages/proj/shared";
-import { KindLegend, KindSwitch, ProjRow, filterProjectRows, type ProjKind } from "@/pages/proj/ProjRows";
+import { GroupToggle, KindLegend, KindSwitch, ProjRow, filterProjectRows, slotProjects, type ProjKind } from "@/pages/proj/ProjRows";
 import { ProjView } from "@/pages/proj/ProjView";
 import { NewProjDialog } from "@/pages/proj/NewProjDialog";
 import { ArchiveImportDialog } from "@/pages/proj/ArchiveImportDialog";
@@ -233,6 +233,8 @@ export function TicketsPage() {
         })
       : [];
   const openProject = (id: string) => set({ pj: id });
+  // projects mixed with the tickets by due date, unless the person asked to group them (group=1)
+  const grouped = params.get("group") === "1";
   const pj = params.get("pj");
 
   // Shortcuts: "/" search, "n" new ticket (not while typing)
@@ -319,6 +321,7 @@ export function TicketsPage() {
           {canProj && (
             <div className="flex flex-wrap items-center gap-2">
               <KindSwitch value={kind} onChange={(k) => set({ kind: k === "all" ? null : k })} />
+              {kind === "all" && <GroupToggle value={grouped} onChange={(v) => set({ group: v ? "1" : null })} />}
               <KindLegend />
             </div>
           )}
@@ -442,15 +445,16 @@ export function TicketsPage() {
             onOpen={(id) => ws.open(id)}
             projects={projects}
             onOpenProject={openProject}
+            grouped={grouped}
             ticketTint
           />
         ) : (
           <ul className="divide-y divide-[color:var(--glass-border)]">
-            {/* projects first (violet), then the tickets (amber tint) */}
-            {projects.map((p) => (
-              <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />
-            ))}
+            {/* projects (violet) mixed with the tickets (amber tint) by due date, or grouped on top */}
+            {grouped && projects.map((p) => <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
             {data.items.map((tk, i) => (
+              <Fragment key={tk.id}>
+              {!grouped && slotProjects(data.items, projects).before.get(tk.id)?.map((p) => <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
               <TicketRow
                 key={tk.id}
                 tk={tk}
@@ -481,7 +485,9 @@ export function TicketsPage() {
                 }
                 onHover={() => void qc.prefetchQuery({ queryKey: ["tickets", "detail", tk.id], queryFn: () => api.get(`/tickets/${tk.id}`), staleTime: 15_000 })}
               />
+              </Fragment>
             ))}
+            {!grouped && slotProjects(data.items, projects).tail.map((p) => <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
           </ul>
         )}
         {data && (data.items.length > 0 || projects.length > 0) && (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { DayEdge } from "@/pages/pipeline/DayEdge";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -17,7 +17,7 @@ import { useCan, useMe } from "@/lib/session";
 import { STALE_ROW } from "@/components/WatchReminder";
 import { PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 import { HiddenBadge, ManagedBadge } from "./managed";
-import { ProjCompactRow } from "@/pages/proj/ProjRows";
+import { ProjCompactRow, slotProjects } from "@/pages/proj/ProjRows";
 import type { ProjectRow } from "@/pages/proj/shared";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
@@ -248,6 +248,8 @@ export function CompactList({
   facets,
   projects,
   onOpenProject,
+  grouped = false,
+  range,
   ticketTint = false,
 }: {
   items: CompactTicket[];
@@ -257,6 +259,10 @@ export function CompactList({
   /** Projects (new format) shown in a group at the top; only the Tickets page passes them */
   projects?: ProjectRow[];
   onOpenProject?: (id: string) => void;
+  /** Projects kept in a group on top; otherwise mixed with the tickets by due date */
+  grouped?: boolean;
+  /** A page of the list: only the projects due in [lo, hi) */
+  range?: { lo: string | null; hi: string | null };
   /** The Tickets page: a faint amber tint and an amber number pill on each ticket line */
   ticketTint?: boolean;
 }) {
@@ -276,10 +282,12 @@ export function CompactList({
       <div style={{ minWidth: cols.minWidth }}>
         <ColumnHeader cols={cols} labels={labels} style={gridStyle} />
         <ul className="divide-y divide-[color:var(--glass-border)]">
-          {projects?.map((p) => (
+          {(grouped ? projects : [])?.map((p) => (
             <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />
           ))}
           {items.map((tk) => {
+            const mixed = !grouped && projects ? slotProjects(items, projects, range?.lo, range?.hi) : null;
+            const lead = mixed?.before.get(tk.id)?.map((p) => <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />);
             const title = (
               <span className="flex min-w-0 items-baseline gap-2">
                 <span className={cn("shrink-0 font-mono text-[11px]", ticketTint ? "rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-semibold text-primary" : "text-muted-foreground")}>{tk.number}</span>
@@ -335,7 +343,9 @@ export function CompactList({
                 ),
               };
               return (
-                <li key={tk.id} style={gridStyle} className={rowClass}>
+                <Fragment key={tk.id}>
+                {lead}
+                <li style={gridStyle} className={rowClass}>
                   <DayEdge kind="ticket" id={String(tk.id)} number={tk.number} title={tk.title} urgent={tk.priorityKind === "critical"} onOpen={() => onOpen(tk.id)} className="absolute left-0 top-0 z-10 h-full" />
                   {cols.order.map((c) => (
                     <div key={c} className="min-w-0">
@@ -343,6 +353,7 @@ export function CompactList({
                     </div>
                   ))}
                 </li>
+                </Fragment>
               );
             }
             const cells: Record<CompactCol, ReactNode> = {
@@ -363,7 +374,9 @@ export function CompactList({
               ),
             };
             return (
-              <li key={tk.id} className="relative">
+              <Fragment key={tk.id}>
+              {lead}
+              <li className="relative">
                 <DayEdge kind="ticket" id={String(tk.id)} number={tk.number} title={tk.title} urgent={tk.priorityKind === "critical"} onOpen={() => onOpen(tk.id)} className="absolute left-0 top-0 z-10 h-full" />
                 <button type="button" onClick={() => onOpen(tk.id)} style={gridStyle} className={rowClass}>
                   {cols.order.map((c) => (
@@ -373,8 +386,10 @@ export function CompactList({
                   ))}
                 </button>
               </li>
+              </Fragment>
             );
           })}
+          {!grouped && projects ? slotProjects(items, projects, range?.lo, range?.hi).tail.map((p) => <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />) : null}
         </ul>
       </div>
     </div>

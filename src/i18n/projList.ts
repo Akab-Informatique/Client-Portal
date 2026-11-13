@@ -6,6 +6,8 @@ export const fr = {
       all: "Tout",
       tickets: "Billets",
       projects: "Projets",
+      group: "Regrouper",
+      groupHint: "Séparer les projets des billets (sinon tout est mélangé, trié par échéance)",
     },
     legend: {
       ticket: "Billet",
@@ -37,6 +39,8 @@ export const en = {
       all: "All",
       tickets: "Tickets",
       projects: "Projects",
+      group: "Group",
+      groupHint: "Keep projects apart from tickets (otherwise mixed, sorted by due date)",
     },
     legend: {
       ticket: "Ticket",

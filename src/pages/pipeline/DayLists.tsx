@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
-import { filterProjectRows } from "@/pages/proj/ProjRows";
+import { GroupToggle, KindSwitch, filterProjectRows, type ProjKind } from "@/pages/proj/ProjRows";
 import { useProjectRows } from "@/pages/proj/shared";
 import { Pager } from "@/components/Pager";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -49,6 +49,39 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
       /* not kept */
     }
   };
+  // what to show (all / tickets / projects) and whether projects are grouped apart; mixed by due date by default
+  const [kind, setKind] = useState<ProjKind>(() => {
+    try {
+      const k = localStorage.getItem("akab.pipeline.kind");
+      return k === "tickets" || k === "projects" ? k : "all";
+    } catch {
+      return "all";
+    }
+  });
+  const [grouped, setGrouped] = useState(() => {
+    try {
+      return localStorage.getItem("akab.pipeline.grouped") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const pickKind = (k: ProjKind) => {
+    setKind(k);
+    setPage(1);
+    try {
+      localStorage.setItem("akab.pipeline.kind", k);
+    } catch {
+      /* not kept */
+    }
+  };
+  const pickGrouped = (v: boolean) => {
+    setGrouped(v);
+    try {
+      localStorage.setItem("akab.pipeline.grouped", v ? "1" : "0");
+    } catch {
+      /* not kept */
+    }
+  };
   const [text, setText] = useState("");
   const [search, setSearch] = useState("");
   useEffect(() => {
@@ -75,23 +108,34 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
     { key: "attention", icon: Siren, tone: "text-red-400", label: t("tickets.metrics.attention"), count: m?.attention, query: "view=all&attention=1" },
     ...(data?.buttons ?? []).map((b) => ({ key: `b:${b.id}`, icon: Eye, tone: "text-muted-foreground", label: b.name, count: b.count as number | undefined, query: b.query })),
   ];
-  const all = (data?.items ?? []).filter((x) => x.statusKind !== "complete");
+  const all = kind === "projects" ? [] : (data?.items ?? []).filter((x) => x.statusKind !== "complete");
   // projects of the new format, with the tickets (the person's own, or the one picked)
   const canProj = can("proj.view");
   const projRows = useProjectRows(canProj);
-  const projects = canProj
+  const projects = canProj && kind !== "tickets"
     ? filterProjectRows(projRows.data ?? [], { q: search, view: who === "all" ? "all" : "mine", meId: who === "all" ? me.id : who, assignee: [], company: [], companyNames: new Map() })
     : [];
   // not stretched over the page: 10 at first, the others on the next pages
   const [page, setPage] = useState(1);
   const [size, setSize] = useState(10);
-  const items = all.slice((Math.min(page, Math.max(1, Math.ceil(all.length / size))) - 1) * size, Math.min(page, Math.max(1, Math.ceil(all.length / size))) * size);
+  const pages = Math.max(1, Math.ceil(all.length / size));
+  const cur = Math.min(page, pages);
+  const items = all.slice((cur - 1) * size, cur * size);
+  // mixed with the tickets by due date: each page takes the projects due between its first ticket and the next page's first
+  const dayOf = (i: number) => all[i]?.dueAt.slice(0, 10) ?? null;
+  const range = { lo: cur === 1 ? null : dayOf((cur - 1) * size), hi: cur >= pages ? null : dayOf(cur * size) };
   const tools = (
     <div className="ml-auto flex shrink-0 items-center gap-1.5">
       <div className="relative">
         <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
         <input value={text} onChange={(e) => (setText(e.target.value), setPage(1))} placeholder={t("pipeline.day.searchTickets")} aria-label={t("pipeline.day.searchTickets")} className="h-7 w-36 rounded-lg border border-[color:var(--glass-border)] bg-background/40 pl-7 pr-2 text-xs outline-none focus:border-[color:var(--gold)]/50" />
       </div>
+      {canProj && (
+        <div className="flex items-center gap-1.5">
+          <KindSwitch value={kind} onChange={pickKind} />
+          {kind === "all" && <GroupToggle value={grouped} onChange={pickGrouped} />}
+        </div>
+      )}
       <div className="flex items-center rounded-lg border border-[color:var(--glass-border)] p-0.5" role="group" aria-label={t("tickets.layout.title")}>
         {([["compact", Rows3], ["kanban", Columns3]] as const).map(([v, Icon]) => (
           <button key={v} type="button" aria-pressed={view === v} title={t(`tickets.layout.${v}Hint`)} onClick={() => pickView(v)} className={cn("flex h-6 items-center gap-1 rounded-md px-1.5 text-xs", view === v ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
@@ -143,7 +187,7 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
         </Select>
         <span className="font-mono normal-case opacity-70">{all.length}</span>
       </h3>
-      {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 && projects.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : view === "kanban" ? <KanbanBoard items={all} canEdit={can("tickets.edit")} onOpen={onOpen} facets={data?.facets} /> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} projects={page === 1 ? projects : []} onOpenProject={(id) => navigate(`/pipeline?section=tickets&pj=${id}`)} />}
+      {isLoading ? <Skeleton className="m-4 h-20" /> : all.length === 0 && projects.length === 0 ? <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noTickets")}</p> : view === "kanban" ? <KanbanBoard items={all} canEdit={can("tickets.edit")} onOpen={onOpen} facets={data?.facets} /> : <CompactList items={items} activeIds={new Set()} onOpen={onOpen} facets={data?.facets} projects={grouped ? (cur === 1 ? projects : []) : projects} grouped={grouped} range={range} onOpenProject={(id) => navigate(`/pipeline?section=tickets&pj=${id}`)} />}
       {view === "compact" && all.length > size && <Pager total={all.length} page={page} size={size} onPage={setPage} onSize={(n) => (setSize(n), setPage(1))} />}
     </section>
   );

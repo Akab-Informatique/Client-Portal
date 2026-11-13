@@ -214,3 +214,38 @@ export function ProjCompactRow({ p, order, gridStyle, onOpen }: { p: ProjectRow;
     </li>
   );
 }
+
+/** Toggle: keep the projects grouped apart from the tickets (off = mixed, sorted by due date). */
+export function GroupToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      aria-pressed={value}
+      title={t("projList.kind.groupHint")}
+      onClick={() => onChange(!value)}
+      className={cn("h-7 rounded-lg border px-2.5 text-xs font-medium transition-colors", value ? "border-violet-400/50 bg-violet-500/20 text-violet-200" : "text-muted-foreground hover:text-foreground")}
+    >
+      {t("projList.kind.group")}
+    </button>
+  );
+}
+
+/**
+ * Where each project goes among tickets sorted by due date: `before` maps a ticket id to the projects that come right before it,
+ * `tail` is what goes after the last ticket. `lo` / `hi` (YYYY-MM-DD) keep only the projects due in [lo, hi) — for a page of a list.
+ */
+export function slotProjects(items: { id: number; dueAt: string }[], projects: ProjectRow[], lo?: string | null, hi?: string | null) {
+  const sorted = [...projects]
+    .filter((p) => (lo == null || (p.dueDate ?? "9999") >= lo) && (hi == null || (p.dueDate ?? "9999") < hi))
+    .sort((a, b) => (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"));
+  const before = new Map<number, ProjectRow[]>();
+  const tail: ProjectRow[] = [];
+  for (const p of sorted) {
+    const day = p.dueDate ?? "9999";
+    const at = items.find((tk) => tk.dueAt.slice(0, 10) > day);
+    if (!at) tail.push(p);
+    else before.set(at.id, [...(before.get(at.id) ?? []), p]);
+  }
+  return { before, tail };
+}
