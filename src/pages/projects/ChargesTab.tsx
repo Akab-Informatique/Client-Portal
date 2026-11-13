@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowRightLeft, Boxes, Loader2, Plus, Search, Trash2, X } from "lucide-react";
+import { ArrowRightLeft, Boxes, Loader2, Plus, Search, Tag, Trash2, X } from "lucide-react";
+import { ChargeLabelDialog } from "@/pages/tickets/ChargeLabel";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { MoveChargeDialog } from "@/components/MoveChargeDialog";
 import { SupplySelect } from "@/components/SupplySelect";
@@ -49,6 +50,7 @@ export function ChargesTab({ p, edit }: { p: ProjectDetail; edit: boolean }) {
   const confirm = useConfirm();
   const [adding, setAdding] = useState(false);
   const [moving, setMoving] = useState<{ id: string; name: string } | null>(null);
+  const [label, setLabel] = useState<ProjectCharge | null>(null);
   const key = [...KEY, "charges", p.id];
   const { data: charges = [], isLoading } = useQuery({ queryKey: key, queryFn: () => api.get<ProjectCharge[]>(`/projects/${p.id}/charges`) });
   const remove = useMutation({
@@ -96,6 +98,9 @@ export function ChargesTab({ p, edit }: { p: ProjectDetail; edit: boolean }) {
                   {c.rebate > 0 && <span className="ml-1 text-emerald-300">−{c.rebate} %</span>}
                 </span>
                 <span className="w-24 text-right font-mono">{c.billable ? money(lineTotal(c)) : <span className="text-muted-foreground">{t("projects.charges.notBilled")}</span>}</span>
+                <button type="button" onClick={() => setLabel(c)} title={t("tickets.charges.label.button")} aria-label={t("tickets.charges.label.button")} className="rounded p-1 text-muted-foreground hover:text-primary">
+                  <Tag className="size-3.5" />
+                </button>
                 <SupplySelect value={c.supply} disabled={!edit || setSupply.isPending} onChange={(v) => setSupply.mutate({ id: c.id, supply: v })} />
                 {c.billable && c.billing && <span className={cn("rounded-full border px-2 py-0.5 text-[10px]", BILLING_STYLE[c.billing] ?? "text-muted-foreground")}>{t(`projects.charges.billing.${c.billing}`)}</span>}
                 {edit && c.movable ? (
@@ -121,6 +126,14 @@ export function ChargesTab({ p, edit }: { p: ProjectDetail; edit: boolean }) {
           </ul>
         )}
       </Card>
+      {label && (
+        <ChargeLabelDialog
+          charge={{ ...label, unitPrice: label.unitPrice === null ? null : afterRebate(label.unitPrice, label.rebate) }}
+          context={{ number: p.number, title: p.name, client: p.client?.name ?? "" }}
+          sizeText={t("projects.charges.labelSize")}
+          onClose={() => setLabel(null)}
+        />
+      )}
       {adding && <AddCharge p={p} onClose={() => setAdding(false)} onAdded={(next) => qc.setQueryData(key, next)} />}
       {moving && <MoveChargeDialog name={moving.name} path={`/projects/${p.id}/charges/${moving.id}/move`} exclude={{ projectId: p.id }} onClose={() => setMoving(null)} onMoved={() => void qc.invalidateQueries({ queryKey: key })} />}
     </div>

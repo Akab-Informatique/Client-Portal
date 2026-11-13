@@ -485,6 +485,13 @@ function Settings({ p, edit, save, onDelete }: { p: ProjectDetail; edit: boolean
               <Text value={p.fixedPrice == null ? "" : String(p.fixedPrice)} onSave={(v) => money(v, "fixedPrice")} aria-label={t("projects.fixedPrice")} className={cn(!edit && "pointer-events-none")} />
             </div>
           )}
+          {p.billingMode === "bank" && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">{t("projects.bankExpires")}</Label>
+              <Input type="date" disabled={!edit} value={p.bankExpiresOn ?? ""} onChange={(e) => save({ bankExpiresOn: e.target.value || null })} className={cn("h-9", p.bankExpiresOn && p.bankExpiresOn < today() && "border-red-500/60 text-red-400")} />
+              {p.bankExpiresOn && p.bankExpiresOn < today() && <p className="text-xs text-red-400">{t("projects.bankExpired")}</p>}
+            </div>
+          )}
           {onDelete && (
             <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-destructive" onClick={onDelete}>
               <Trash2 className="size-3.5" /> {t("projects.delete")}

@@ -107,6 +107,8 @@ export type Project = {
   /** Dollars */
   hourlyRate: number | null;
   fixedPrice: number | null;
+  /** Bank of hours: the day it expires (YYYY-MM-DD) */
+  bankExpiresOn: string | null;
   /** The contract the time is billed under, with what an hour costs under it (null: the hours are included) */
   contract: { id: string; name: string; hourlyRate: number | null } | null;
   /** Follow up every N days; the next follow-up day and the last one done */

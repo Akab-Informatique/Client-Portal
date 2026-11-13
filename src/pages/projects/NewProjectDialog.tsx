@@ -29,13 +29,15 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
   const { data: people = [] } = useProjectPeople();
   const { data: clients = [] } = useCrmClients();
   const { data: defaults } = useQuery({ queryKey: ["projects", "defaults"], queryFn: () => api.get<{ hourlyRate: number }>("/projects/defaults"), staleTime: 60_000 });
-  const [f, setF] = useState({ name: "", typeId: "", clientId: "", leadId: me.id, startDate: "", dueDate: "", budget: "", every: "", checkpointDate: "", description: "", mode: "hourly" as BillingMode, contractId: "", rate: "", special: "", price: "" });
+  const [f, setF] = useState({ name: "", typeId: "", clientId: "", leadId: me.id, startDate: "", dueDate: "", budget: "", every: "", checkpointDate: "", description: "", mode: "hourly" as BillingMode, contractId: "", rate: "", special: "", price: "", bankRate: "", bankExpires: "" });
   const [team, setTeam] = useState<string[]>([]);
   const { data: contracts = [] } = useQuery({ queryKey: ["projects", "client-contracts", f.clientId], queryFn: () => api.get<{ id: string; name: string; hourlyRate: number | null }[]>(`/projects/client-contracts/${f.clientId}`), enabled: Boolean(f.clientId), staleTime: 30_000 });
   const num = (v: string) => (v.trim() ? Number(v.replace(",", ".")) : null);
   const budget = num(f.budget);
   const every = num(f.every);
   const rate = f.mode === "special" ? num(f.special) : num(f.rate);
+  const bankRate = num(f.bankRate);
+  const bankTotal = budget != null && bankRate != null && Number.isFinite(budget) && Number.isFinite(bankRate) ? Math.round(budget * bankRate * 100) / 100 : null;
   const create = useMutation({
     mutationFn: () =>
       api.post<Project>("/projects", {
@@ -52,7 +54,9 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
         billingMode: f.mode,
         contractId: f.mode === "contract" ? f.contractId : null,
         hourlyRate: f.mode === "contract" || f.mode === "fixed" || f.mode === "bank" ? null : f.mode === "special" ? rate : (rate ?? defaults?.hourlyRate ?? null),
-        fixedPrice: f.mode === "fixed" || f.mode === "bank" ? num(f.price) : undefined,
+        fixedPrice: f.mode === "fixed" ? num(f.price) : undefined,
+        bankRate: f.mode === "bank" ? bankRate : undefined,
+        bankExpiresOn: f.mode === "bank" ? f.bankExpires || null : undefined,
         description: f.description.trim(),
       }),
     onSuccess: (p) => {
@@ -61,7 +65,7 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
     },
     onError: (e) => toast.error(apiMessage(e instanceof ApiError ? e.code : undefined, t)),
   });
-  const billingOk = f.mode === "fixed" ? (num(f.price) ?? 0) > 0 : f.mode === "bank" ? (budget ?? 0) > 0 : f.mode === "contract" ? Boolean(f.clientId && f.contractId) : f.mode === "special" ? rate != null && rate > 0 : rate === null || rate >= 0;
+  const billingOk = f.mode === "fixed" ? (num(f.price) ?? 0) > 0 : f.mode === "bank" ? Boolean(f.clientId) && (budget ?? 0) > 0 && (bankRate ?? 0) > 0 && Boolean(f.bankExpires) : f.mode === "contract" ? Boolean(f.clientId && f.contractId) : f.mode === "special" ? rate != null && rate > 0 : rate === null || rate >= 0;
   const valid = f.name.trim().length > 0 && (budget === null || (Number.isFinite(budget) && budget >= 0)) && (every === null || (Number.isInteger(every) && every >= 1 && every <= 365)) && !(f.startDate && f.dueDate && f.dueDate < f.startDate) && billingOk;
   const set = (k: keyof typeof f) => (v: string) => setF((s) => ({ ...s, [k]: v }));
   const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? "";
@@ -220,12 +224,27 @@ export function NewProjectDialog({ onClose, onCreated }: { onClose: () => void; 
                 <Input inputMode="decimal" value={f.rate} onChange={(e) => set("rate")(e.target.value)} placeholder={defaults ? `${defaults.hourlyRate}` : ""} className="h-9 w-28" aria-label={t("projects.hourlyRate")} /> {t("projects.hourlyRate")}
               </div>
             )}
-            {(f.mode === "fixed" || f.mode === "bank") && (
-              <div className="space-y-1.5 text-sm">
-                <div className="flex items-center gap-2">
-                  <Input inputMode="decimal" value={f.price} onChange={(e) => set("price")(e.target.value)} className="h-9 w-32" aria-label={t("projects.fixedPrice")} /> {t(f.mode === "bank" ? "projects.bankPrice" : "projects.fixedPrice")}
+            {f.mode === "fixed" && (
+              <div className="flex items-center gap-2 text-sm">
+                <Input inputMode="decimal" value={f.price} onChange={(e) => set("price")(e.target.value)} className="h-9 w-32" aria-label={t("projects.fixedPrice")} /> {t("projects.fixedPrice")}
+              </div>
+            )}
+            {f.mode === "bank" && (
+              <div className="space-y-2 text-sm">
+                {!f.clientId && <p className="text-xs text-amber-300">{t("projects.errors.bank_needs_client")}</p>}
+                {!(budget && budget > 0) && <p className="text-xs text-amber-300">{t("projects.bankNeedsHours")}</p>}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pj-bank-rate">{t("projects.bankRate")}</Label>
+                    <Input id="pj-bank-rate" inputMode="decimal" value={f.bankRate} onChange={(e) => set("bankRate")(e.target.value)} className="h-9" placeholder="95" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="pj-bank-exp">{t("projects.bankExpires")}</Label>
+                    <Input id="pj-bank-exp" type="date" required value={f.bankExpires} min={f.startDate || undefined} onChange={(e) => set("bankExpires")(e.target.value)} className="h-9" />
+                  </div>
                 </div>
-                {f.mode === "bank" && <p className="text-xs text-amber-300">{t("projects.bankNeedsHours")}</p>}
+                <p className="font-medium">{t("projects.bankTotal", { total: bankTotal == null ? "—" : `${bankTotal.toLocaleString("fr-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $` })}</p>
+                <p className="text-xs text-muted-foreground">{t("projects.bankInvoiceNote")}</p>
               </div>
             )}
             {f.mode === "special" && (

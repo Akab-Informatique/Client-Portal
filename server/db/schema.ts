@@ -2915,6 +2915,8 @@ export const projects = pgTable(
     hourlyRateCents: integer("hourly_rate_cents"),
     /** The agreed price of a fixed-price project */
     fixedPriceCents: integer("fixed_price_cents"),
+    /** The day a bank of hours project expires (YYYY-MM-DD) */
+    bankExpiresOn: text("bank_expires_on"),
     /** The kind of project (Admin-free list: `project_types`) */
     typeId: uuid("type_id").references((): AnyPgColumn => projectTypes.id, { onDelete: "set null" }),
     /** The quote it was made from (Vente › Soumissions) */

@@ -7324,6 +7324,26 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((mine.json as any[]).some((x) => x.id === proj.id)).toBe(true);
   });
 
+  it("a bank of hours project made by hand asks hours, rate and expiry, and is billed at once", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [client] = (await admin.get("/api/quotes/clients")).json;
+    const base = { name: "Banque 10 h", billingMode: "bank", clientId: client.id, budgetHours: 10, bankRate: 95, bankExpiresOn: "2099-12-31" };
+    expect((await admin.post("/api/projects", { ...base, clientId: null })).json.error).toBe("bank_needs_client");
+    expect((await admin.post("/api/projects", { ...base, budgetHours: null })).json.error).toBe("bank_hours_required");
+    expect((await admin.post("/api/projects", { ...base, bankRate: null })).json.error).toBe("bank_rate_required");
+    expect((await admin.post("/api/projects", { ...base, bankExpiresOn: null })).json.error).toBe("bank_expiry_required");
+    expect((await admin.post("/api/projects", { ...base, bankExpiresOn: "2000-01-01" })).json.error).toBe("bank_expiry_required");
+    const made = await admin.post("/api/projects", base);
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ billed: true, billingMode: "bank", budgetHours: 10, hourlyRate: 95, fixedPrice: 950, bankExpiresOn: "2099-12-31" });
+    const [line] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `project:${made.json.id}`));
+    expect(line).toMatchObject({ status: "pending", amountCents: 95000 });
+    expect((await admin.post(`/api/projects/${made.json.id}/bill`, {})).json.error).toBe("project_billed");
+    const moved = await admin.patch(`/api/projects/${made.json.id}`, { bankExpiresOn: "2100-01-31" });
+    expect(moved.json.bankExpiresOn).toBe("2100-01-31");
+  });
+
   it("a quote is sold fixed, as a bank of hours or hourly: the deposit and the project follow", async () => {
     resetRateLimit("login:ip:unknown");
     const admin = await signIn("admin@akab.local");
@@ -7364,7 +7384,7 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await admin.get(`/api/projects/${fp.projectId}`)).json).toMatchObject({ billingMode: "fixed", fixedPrice: 1000, budgetHours: 10 });
     // a project made by hand: a fixed price needs its price, a bank its hours
     expect((await admin.post("/api/projects", { name: "x", billingMode: "fixed" })).json.error).toBe("price_required");
-    expect((await admin.post("/api/projects", { name: "x", billingMode: "bank" })).json.error).toBe("bank_hours_required");
+    expect((await admin.post("/api/projects", { name: "x", billingMode: "bank" })).json.error).toBe("bank_needs_client");
     // time on a bank project is deducted from the bank and never billed by itself
     const ms = bank.milestones?.[0]?.id ?? (await admin.post(`/api/projects/${bp.projectId}/milestones`, { name: "Phase" })).json.id;
     const task = (await admin.post(`/api/projects/${bp.projectId}/milestones/${ms}/tasks`, { title: "Installer" })).json;

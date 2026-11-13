@@ -1,0 +1,1 @@
+ALTER TABLE "projects" ADD COLUMN "bank_expires_on" text;

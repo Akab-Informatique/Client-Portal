@@ -11,7 +11,7 @@ import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
-import { hoursText, type ProjectDetail } from "./shared";
+import { hoursText, today, type ProjectDetail } from "./shared";
 import { Card } from "./ui";
 
 const PALETTE = ["bg-sky-400/80", "bg-violet-400/80", "bg-emerald-400/80", "bg-amber-300/80", "bg-pink-400/80", "bg-teal-300/80", "bg-orange-400/80", "bg-indigo-400/80"];
@@ -66,6 +66,11 @@ export function SoldPanel({ p, onChanged }: { p: ProjectDetail; onChanged: () =>
       }
     >
       <div className="space-y-4 text-sm">
+        {p.billingMode === "bank" && p.bankExpiresOn && (
+          <p className={cn("text-xs", p.bankExpiresOn < today() ? "font-medium text-red-400" : "text-muted-foreground")}>
+            {p.bankExpiresOn < today() ? t("projects.bankExpired") : t("projects.bankExpiresOn", { date: p.bankExpiresOn })}
+          </p>
+        )}
         {/* the figures */}
         <div className="grid gap-3 sm:grid-cols-3">
           <Figure label={t("projects.sold.sold")} big={s.hours != null ? hoursText(s.hours) : "—"} sub={s.priceCents != null ? `${m(s.priceCents)}${s.rateCents ? ` · ${m(s.rateCents)}/h` : ""}` : ""} />

@@ -205,6 +205,7 @@ async function cards(rows: Project[], me: string, withTasks = false) {
       checkpointDate: p.checkpointDate,
       lastFollowupOn: p.lastFollowupOn,
       fixedPrice: p.fixedPriceCents == null ? null : p.fixedPriceCents / 100,
+      bankExpiresOn: p.bankExpiresOn,
       hours: totalHours / 100,
       following: followers.some((f) => f.projectId === p.id),
       mine: memberIds.includes(me),
@@ -277,6 +278,9 @@ const zProject = z.object({
   /** Dollars */
   hourlyRate: zMoney.nullable().optional(),
   fixedPrice: zMoney.nullable().optional(),
+  /** Bank of hours: price per hour (dollars) and the day the bank expires */
+  bankRate: zMoney.nullable().optional(),
+  bankExpiresOn: zDay.nullable().optional(),
   /** Milestones made with the project, in order */
   milestones: z.array(z.object({ name: zName, dueDate: zDay.nullable().optional() })).max(40).optional(),
 });
@@ -503,7 +507,13 @@ export const projectsRoutes = new Hono<AppEnv>()
     }
     if (mode === "special" && (p.hourlyRate == null || p.hourlyRate <= 0)) throw new HTTPException(400, { message: "rate_required" });
     if (mode === "fixed" && (p.fixedPrice == null || p.fixedPrice <= 0)) throw new HTTPException(400, { message: "price_required" });
-    if (mode === "bank" && (p.budgetHours == null || p.budgetHours <= 0)) throw new HTTPException(400, { message: "bank_hours_required" });
+    if (mode === "bank") {
+      if (!p.clientId) throw new HTTPException(400, { message: "bank_needs_client" });
+      if (p.budgetHours == null || p.budgetHours <= 0) throw new HTTPException(400, { message: "bank_hours_required" });
+      if (p.bankRate == null || p.bankRate <= 0) throw new HTTPException(400, { message: "bank_rate_required" });
+      if (!p.bankExpiresOn || p.bankExpiresOn < todayQc() || (p.startDate && p.bankExpiresOn < p.startDate)) throw new HTTPException(400, { message: "bank_expiry_required" });
+    }
+    const bankCents = mode === "bank" ? Math.round(p.budgetHours! * Math.round(p.bankRate! * 100)) : null;
     // the number and the usual rate are read before the transaction (one connection: nothing else may run inside it)
     const number = await nextNumber();
     const defaultRate = (await billingSettings()).rates.hourly;
@@ -525,8 +535,9 @@ export const projectsRoutes = new Hono<AppEnv>()
           contractId: mode === "contract" ? p.contractId! : null,
           checkpointEveryDays: p.checkpointEveryDays ?? null,
           checkpointDate: p.checkpointEveryDays ? (p.checkpointDate ?? nextCheckpoint(p.checkpointEveryDays, p.startDate ?? null)) : (p.checkpointDate ?? null),
-          hourlyRateCents: mode === "contract" ? null : mode === "fixed" || mode === "bank" ? cents(p.hourlyRate ?? null) : cents(p.hourlyRate === undefined ? defaultRate : p.hourlyRate),
-          fixedPriceCents: cents(p.fixedPrice),
+          hourlyRateCents: mode === "contract" ? null : mode === "bank" ? cents(p.bankRate!) : mode === "fixed" ? cents(p.hourlyRate ?? null) : cents(p.hourlyRate === undefined ? defaultRate : p.hourlyRate),
+          fixedPriceCents: mode === "bank" ? bankCents : cents(p.fixedPrice),
+          bankExpiresOn: mode === "bank" ? p.bankExpiresOn! : null,
           createdBy: a.user.id,
         })
         .returning();
@@ -535,7 +546,17 @@ export const projectsRoutes = new Hono<AppEnv>()
     });
     await setMembers(row.id, leadId, p.memberIds ?? []);
     await audit(a.user.id, "project.created", row.id, { number: row.number, name: row.name });
-    return c.json((await cards([row], a.user.id, true))[0], 201);
+    // a bank of hours is invoiced at once: the line waits in Approbation (never fails the creation)
+    let billed = false;
+    if (mode === "bank") {
+      try {
+        await billProject(a.user.id, row.id);
+        billed = true;
+      } catch (e) {
+        console.error("[projects] bank invoice line not made:", (e as Error).message);
+      }
+    }
+    return c.json({ ...(await cards([row], a.user.id, true))[0], billed }, 201);
   })
 
   /** One project, whole: milestones with their tasks, the team, the notes and the time */
@@ -715,6 +736,7 @@ export const projectsRoutes = new Hono<AppEnv>()
         ...(p.checkpointDate !== undefined ? { checkpointDate: p.checkpointDate } : {}),
         ...(p.hourlyRate !== undefined ? { hourlyRateCents: cents(p.hourlyRate) } : {}),
         ...(p.fixedPrice !== undefined ? { fixedPriceCents: cents(p.fixedPrice) } : {}),
+        ...(p.bankExpiresOn !== undefined ? { bankExpiresOn: p.bankExpiresOn } : {}),
         updatedAt: new Date(),
       })
       .where(eq(schema.projects.id, cur.id))

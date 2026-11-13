@@ -216,7 +216,7 @@ function ChargesList({ list, tk, editable }: { list: Charge[]; tk: TicketDetail;
         <span className="font-mono font-semibold text-primary">{money(billableTotal(list))}</span>
       </p>
       {moving && <MoveChargeDialog name={moving.name} path={`/tickets/${tk.id}/charges/${moving.id}/move`} exclude={{ ticketId: tk.id }} onClose={() => setMoving(null)} onMoved={() => void qc.invalidateQueries({ queryKey: ["tickets", "charges", tk.id] })} />}
-      {label && <ChargeLabelDialog charge={label} ticket={tk} onClose={() => setLabel(null)} />}
+      {label && <ChargeLabelDialog charge={label} context={{ number: tk.number, title: tk.title, client: tk.company.name }} onClose={() => setLabel(null)} />}
     </div>
   );
 }

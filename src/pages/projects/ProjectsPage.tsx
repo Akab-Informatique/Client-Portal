@@ -284,14 +284,15 @@ export function ProjectsPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           </span>
-          <span className="hidden w-28 md:block">{t("projects.col.status")}</span>
-          <span className="hidden w-40 lg:block">{t("projects.col.client")}</span>
-          <span className="hidden w-36 xl:block">{t("projectType.col")}</span>
-          <span className="hidden w-32 md:block">{t("projects.col.progress")}</span>
-          <span className="hidden w-24 text-right lg:block">{t("projects.col.hours")}</span>
-          <span className="hidden w-20 text-right md:block">{t("projects.col.due")}</span>
-          <span className="hidden w-32 xl:block">{t("projects.col.lead")}</span>
-          <span className="w-8" />
+          <span className="hidden w-28 shrink-0 md:block">{t("projects.col.status")}</span>
+          <span className="hidden w-40 shrink-0 lg:block">{t("projects.col.client")}</span>
+          <span className="hidden w-36 shrink-0 xl:block">{t("projectType.col")}</span>
+          <span className="hidden w-32 shrink-0 md:block">{t("projects.col.progress")}</span>
+          <span className="hidden w-24 shrink-0 text-right lg:block">{t("projects.col.hours")}</span>
+          <span className="hidden w-24 shrink-0 text-right lg:block">{t("projects.col.checkpoint")}</span>
+          <span className="hidden w-20 shrink-0 text-right md:block">{t("projects.col.due")}</span>
+          <span className="hidden w-32 shrink-0 xl:block">{t("projects.col.lead")}</span>
+          <span className="w-16" />
         </div>
         {isLoading && <Loader2 className="mx-auto my-10 size-6 animate-spin text-muted-foreground" />}
         {!isLoading && !list?.length && <p className="py-14 text-center text-sm text-muted-foreground">{filtered || view !== "all" ? t("projects.noneFiltered") : t("projects.none")}</p>}
@@ -353,12 +354,12 @@ export function ProjectsPage() {
                       </span>
                     </span>
                   </button>
-                  <span className="hidden w-28 md:block">
+                  <span className="hidden w-28 shrink-0 md:block">
                     <span className={cn("inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[p.status])}>{t(`projects.status.${p.status}`)}</span>
                   </span>
-                  <span className="hidden w-40 truncate text-sm text-muted-foreground lg:block">{p.client?.name ?? "—"}</span>
-                  <span className="hidden w-36 xl:block">{canEdit ? <ProjectTypeSelect compact value={p.type?.id ?? null} onChange={(typeId) => setType.mutate({ id: p.id, typeId })} /> : <span className="block truncate text-sm text-muted-foreground">{p.type?.name ?? "—"}</span>}</span>
-                  <span className="hidden w-32 md:block">
+                  <span className="hidden w-40 shrink-0 truncate text-sm text-muted-foreground lg:block">{p.client?.name ?? "—"}</span>
+                  <span className="hidden w-36 shrink-0 xl:block">{canEdit ? <ProjectTypeSelect compact value={p.type?.id ?? null} onChange={(typeId) => setType.mutate({ id: p.id, typeId })} /> : <span className="block truncate text-sm text-muted-foreground">{p.type?.name ?? "—"}</span>}</span>
+                  <span className="hidden w-32 shrink-0 md:block">
                     <span className="flex items-center gap-2">
                       <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-foreground/10">
                         <span className="block h-full rounded-full bg-grad-gold" style={{ width: `${pct}%` }} />
@@ -368,13 +369,14 @@ export function ProjectsPage() {
                       </span>
                     </span>
                   </span>
-                  <span className={cn("hidden w-24 text-right font-mono text-xs tabular-nums lg:block", p.attention.includes("over_budget") && "text-red-400")}>
+                  <span className={cn("hidden w-24 shrink-0 text-right font-mono text-xs tabular-nums lg:block", p.attention.includes("over_budget") && "text-red-400")}>
                     {hoursText(p.hours)}
                     {p.budgetHours != null && <span className="text-muted-foreground"> / {hoursText(p.budgetHours)}</span>}
                   </span>
-                  <span className="hidden w-24 text-right text-xs text-muted-foreground lg:block" title={t("projects.nextCheckpoint")}>{p.nextCheckpoint ? `${shortDate(p.nextCheckpoint.slice(0, 10))} ${p.nextCheckpoint.slice(11)}` : "—"}</span>
-                  <span className={cn("hidden w-20 text-right text-xs md:block", TONE_TEXT[tone])}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
-                  <span className="hidden w-32 truncate text-sm xl:block">{p.lead?.name ?? "—"}</span>
+                  <span className="hidden w-24 shrink-0 text-right text-xs text-muted-foreground lg:block" title={t("projects.nextCheckpoint")}>{p.nextCheckpoint ? `${shortDate(p.nextCheckpoint.slice(0, 10))} ${p.nextCheckpoint.slice(11)}` : "—"}</span>
+                  <span className={cn("hidden w-20 shrink-0 text-right text-xs md:block", TONE_TEXT[tone])}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
+                  <span className="hidden w-32 shrink-0 truncate text-sm xl:block">{p.lead?.name ?? "—"}</span>
+                  <span className="flex w-16 shrink-0 items-center justify-end">
                   {can("pipeline.edit") && (
                     <button type="button" aria-label={t("tickets.rowMenu.addToDay")} title={t("tickets.rowMenu.addToDay")} onClick={() => setDayFor(p.id)} className="rounded-md p-1.5 text-muted-foreground/60 transition-colors hover:bg-foreground/[0.06] hover:text-primary">
                       <CalendarPlus className="size-4" />
@@ -389,6 +391,7 @@ export function ProjectsPage() {
                   >
                     <Star className={cn("size-4", p.following && "fill-current")} />
                   </button>
+                  </span>
                 </div>
 
                 {/* the milestones, folded in */}
@@ -412,7 +415,7 @@ export function ProjectsPage() {
                                 </span>
                               )}
                             </button>
-                            <span className="hidden w-24 text-right font-mono text-[11px] text-muted-foreground sm:block">
+                            <span className="hidden w-24 shrink-0 text-right font-mono text-[11px] text-muted-foreground sm:block">
                               {hoursText(m.hours)}
                               {m.budgetHours != null && ` / ${hoursText(m.budgetHours)}`}
                             </span>
