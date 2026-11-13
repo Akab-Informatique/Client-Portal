@@ -188,8 +188,8 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             </option>
           ))}
         </select>
-        <button type="button" onClick={() => setManage(true)} className="h-9 rounded-xl border px-3 text-xs font-medium text-muted-foreground hover:text-foreground">
-          {t("pipeline.lists.manage")}
+        <button type="button" onClick={() => setManage(true)} className="flex h-9 items-center gap-1.5 rounded-xl border border-[color:var(--gold)]/40 px-3 text-xs font-semibold text-primary hover:bg-[color:var(--gold)]/10">
+          <Plus className="size-3.5" /> {t("pipeline.lists.new")}
         </button>
         <button type="button" onClick={() => setDone(!done)} className={cn("flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium", done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "text-muted-foreground hover:text-foreground")}>
           <CheckCircle2 className="size-3.5" /> {t("pipeline.team.doneToggle")}

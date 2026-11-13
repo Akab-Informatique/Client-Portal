@@ -23,6 +23,7 @@ import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { CommandPalette } from "@/components/CommandPalette";
 import { AssistantButton } from "@/components/assistant/AssistantButton";
+import { TodoBar } from "@/pages/pipeline/TodoBar";
 import { ViewClientPicker, ViewMenuItems } from "@/components/ViewSwitcher";
 import { NotificationBell } from "@/components/NotificationBell";
 import { QuickAdd } from "@/components/QuickAdd";
@@ -138,6 +139,7 @@ export function StaffLayout() {
 
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onMenu={() => setMobileOpen(true)} />
+        <TodoBar />
         <main className="relative flex-1">
           <div className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-grid opacity-60 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
           {/* The new page appears right away (no exit animation to wait for) */}

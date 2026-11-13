@@ -18,7 +18,7 @@ import { taskError } from "./TaskDialog";
  * it, it is never assigned to anyone else and it has no timer (shared tasks, with a timer, are in the Tasks tab).
  * Opens on the loose to-dos and the personal lists; a list opens with a small arrow to come back.
  */
-export function TodoTab({ onOpenTask }: { onOpenTask: (id: string) => void }) {
+export function TodoTab({ onOpenTask, view = "all", compact }: { onOpenTask: (id: string) => void; /** only the to-dos, only the personal lists, or both */ view?: "all" | "todos" | "lists"; compact?: boolean }) {
   const { t } = useTranslation();
   const can = useCan();
   const qc = useQueryClient();
@@ -75,7 +75,7 @@ export function TodoTab({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         )}
       </div>
 
-      {editable && <TaskQuickAdd space="todo" listId={current?.id ?? (undefined as string | undefined)} />}
+      {editable && !(view === "lists" && !current) && <TaskQuickAdd space="todo" listId={current?.id ?? (undefined as string | undefined)} className={compact ? "border-0 bg-transparent p-0" : ""} />}
 
       {isLoading ? (
         <div className="space-y-2">
@@ -85,7 +85,7 @@ export function TodoTab({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         </div>
       ) : (
         <>
-          {!current && mine.length > 0 && (
+          {!current && mine.length > 0 && view !== "todos" && (
             <ul className="glass divide-y divide-[color:var(--glass-border)] overflow-hidden rounded-2xl border">
               {mine.map((l) => (
                 <li key={l.id}>
@@ -100,7 +100,7 @@ export function TodoTab({ onOpenTask }: { onOpenTask: (id: string) => void }) {
               ))}
             </ul>
           )}
-          {shown.length === 0 ? (
+          {!current && view === "lists" ? null : shown.length === 0 ? (
             <div className={cn("glass flex flex-col items-center gap-2 rounded-2xl border px-6 py-10 text-center text-sm text-muted-foreground", !current && mine.length > 0 && "py-6")}>
               <Workflow className="size-7 opacity-50" />
               {t("pipeline.todo.none")}

@@ -1,13 +1,14 @@
 /** Texts of the to-do lists (shared / personal) and of the Tasks section: their own file, keys under `pipeline.lists` and `pipeline.tasksSection`. */
 export const fr = {
   pipeline: {
-    tabs: { tasks: "Tâches", todo: "À faire" },
-    quick: { task: "Ajouter une tâche…", todo: "Ajouter une chose à faire…", list: "Liste", who: "Assignée à", due: "Échéance" },
+    tabs: { tasks: "Tâches", todo: "To do" },
+    quick: { task: "Ajouter une tâche…", todo: "Ajouter un to do…", list: "Liste", who: "Assignée à", due: "Échéance" },
     todo: {
-      title: "À faire",
+      title: "To do",
+      myLists: "Mes listes",
       private: "Privé : vous seul le voyez, sans minuterie",
-      back: "Retour à mes choses à faire",
-      none: "Rien à faire ici. Ajoutez une chose à faire ci-dessus.",
+      back: "Retour à mes to do",
+      none: "Rien dans ce to do. Ajoutez-en un ci-dessus.",
       loose: "Sans liste",
     },
     lists: {
@@ -68,6 +69,7 @@ export const en = {
     quick: { task: "Add a task…", todo: "Add something to do…", list: "List", who: "Assigned to", due: "Due" },
     todo: {
       title: "To do",
+      myLists: "My lists",
       private: "Private: only you see it, no timer",
       back: "Back to my to-dos",
       none: "Nothing to do here. Add something above.",

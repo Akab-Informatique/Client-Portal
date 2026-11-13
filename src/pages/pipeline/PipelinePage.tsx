@@ -1,20 +1,19 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { CalendarCheck, FolderKanban, ListChecks, ListTodo, Loader2, Ticket, Workflow } from "lucide-react";
+import { CalendarCheck, FolderKanban, ListChecks, Loader2, Ticket, Workflow } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { cn } from "@/lib/utils";
 import { MyDay } from "./MyDay";
 import { TaskDialog } from "./TaskDialog";
 import { TeamList } from "./TeamList";
-import { TodoTab } from "./TodoTab";
 
 // the Tickets and Projects pages, shown here as tabs too (their own pages and links keep working)
 const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage").then((m) => ({ default: m.TicketsPage })));
 const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 
-type Tab = "day" | "tickets" | "projects" | "tasks" | "todo";
-const TABS: Tab[] = ["day", "tickets", "projects", "tasks", "todo"];
+type Tab = "day" | "tickets" | "projects" | "tasks";
+const TABS: Tab[] = ["day", "tickets", "projects", "tasks"];
 
 /**
  * Mon travail (was "Pipeline"): everything a technician works on, in one place. "Ma journée" is the dashboard (the AI's
@@ -61,7 +60,6 @@ export function PipelinePage() {
             ["tickets", Ticket, t("pipeline.tabs.tickets")],
             ["projects", FolderKanban, t("pipeline.tabs.projects")],
             ["tasks", ListChecks, t("pipeline.tabs.tasks")],
-            ["todo", ListTodo, t("pipeline.tabs.todo")],
           ] as const
         ).map(([k, Icon, label]) => (
           <button key={k} type="button" onClick={() => setTab(k)} className={cn("flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-sm font-medium transition-colors", tab === k ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
@@ -72,7 +70,6 @@ export function PipelinePage() {
 
       {tab === "day" && <MyDay onOpenTask={(id) => setOpen(id)} />}
       {tab === "tasks" && <TeamList onOpenTask={(id) => setOpen(id)} />}
-      {tab === "todo" && <TodoTab onOpenTask={(id) => setOpen(id)} />}
       {(tab === "tickets" || tab === "projects") && (
         <Suspense fallback={<Loader2 className="mx-auto mt-12 size-6 animate-spin text-muted-foreground" />}>{tab === "tickets" ? <TicketsPage /> : <ProjectsPage />}</Suspense>
       )}
