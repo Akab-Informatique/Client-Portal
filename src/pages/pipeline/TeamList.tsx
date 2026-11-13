@@ -51,6 +51,23 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     }
   });
   const [manage, setManage] = useState(false);
+  // which lists the page of lists shows
+  const [kind, setKind] = useState<"all" | "mine" | "team">(() => {
+    try {
+      const k = sessionStorage.getItem("akab.pipeline.todoKind");
+      return k === "mine" || k === "team" ? k : "all";
+    } catch {
+      return "all";
+    }
+  });
+  const pickKind = (k: "all" | "mine" | "team") => {
+    setKind(k);
+    try {
+      sessionStorage.setItem("akab.pipeline.todoKind", k);
+    } catch {
+      /* kept for this page only */
+    }
+  };
   const [view, setView] = useState<"list" | "board">(() => (localStorage.getItem("akab.pipeline.view") === "board" ? "board" : "list"));
   const params = new URLSearchParams({ status: done ? "done" : "open" });
   if (scope === "mine") params.set("scope", "mine");
@@ -78,9 +95,11 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     }
   };
   const byStatus = useMemo(() => Object.fromEntries(STATUSES.map((s) => [s, (data ?? []).filter((x) => x.status === s)])) as Record<TaskStatus, TaskCard[]>, [data]);
-  const rows = (data ?? []).filter((x) => !x.parentId || (data ?? []).every((p) => p.id !== x.parentId) || done);
+  const everyTask = list === ALL_LISTS;
+  const byDue = (a: TaskCard, b: TaskCard) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || (a.dueTime ?? "").localeCompare(b.dueTime ?? "") || a.title.localeCompare(b.title);
+  const rows = (data ?? []).filter((x) => !x.parentId || (data ?? []).every((p) => p.id !== x.parentId) || done).sort(everyTask ? byDue : () => 0);
 
-  const Row = ({ task, child }: { task: TaskCard; child?: boolean }) => <TaskRow task={task} child={child} editable={editable} onOpen={() => onOpenTask(task.id)} onPatch={(p) => patch.mutate({ id: task.id, patch: p })} people={people.data ?? []} />;
+  const Row = ({ task, child }: { task: TaskCard; child?: boolean }) => <TaskRow task={task} child={child} wide={everyTask} editable={editable} onOpen={() => onOpenTask(task.id)} onPatch={(p) => patch.mutate({ id: task.id, patch: p })} people={people.data ?? []} />;
 
   const pick = (id: string) => {
     setList(id);
@@ -102,46 +121,62 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     onError: (e) => toast.error(listError(t, e) === t("common.error") ? taskError(t, e) : listError(t, e)),
   });
   const current = lists.data?.find((l) => l.id === list);
-  // nothing picked yet: the folders, one per list
+  // nothing picked yet: every list, one per line, with a filter (all lists / mine / the team's) and the page of every task
   if (!list || (list !== ALL_LISTS && lists.data && !current)) {
-    const folder = (key: string, name: string, sub: string, count: number | null, tone: string, Icon: typeof Folder, onClick: () => void) => (
-      <button key={key} type="button" onClick={onClick} className="glass group flex items-center gap-3 rounded-2xl border p-4 text-left transition-colors hover:border-[color:var(--gold)]/50">
-        <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-xl border", tone)}>
-          <Icon className="size-5" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate font-semibold">{name}</span>
-          <span className="block truncate text-xs text-muted-foreground">{sub}</span>
-        </span>
-        {count !== null && <span className="shrink-0 rounded-full bg-foreground/10 px-2 py-0.5 font-mono text-xs">{count}</span>}
-      </button>
-    );
+    const shown = (lists.data ?? []).filter((l) => (kind === "mine" ? !l.shared : kind === "team" ? l.shared : true));
     return (
       <div className="space-y-3">
         {manage && <ManageLists onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex items-center gap-2 text-lg font-semibold">
-            <Folder className="size-5 text-primary" /> {t("pipeline.lists.title")}
-          </h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-0.5 rounded-xl border bg-background/40 p-0.5">
+            {(
+              [
+                ["all", t("pipeline.lists.filterAll")],
+                ["mine", t("pipeline.lists.filterMine")],
+                ["team", t("pipeline.lists.filterTeam")],
+              ] as const
+            ).map(([k, label]) => (
+              <button key={k} type="button" onClick={() => pickKind(k)} className={cn("rounded-lg px-3 py-1.5 text-xs font-medium transition-colors", kind === k ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
+                {label}
+              </button>
+            ))}
+            <button type="button" onClick={() => pick(ALL_LISTS)} className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+              <ListChecks className="size-3.5" /> {t("pipeline.lists.everyTask")}
+              <span className="font-mono opacity-70">{(lists.data ?? []).reduce((n, l) => n + l.open, 0)}</span>
+            </button>
+          </div>
           {editable && (
-            <button type="button" onClick={() => setManage(true)} className="flex h-9 items-center gap-1.5 rounded-xl bg-grad-gold px-4 text-sm font-semibold text-[#1a1204]">
+            <button type="button" onClick={() => setManage(true)} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl bg-grad-gold px-4 text-sm font-semibold text-[#1a1204]">
               <Plus className="size-4" /> {t("pipeline.lists.new")}
             </button>
           )}
         </div>
         {lists.isLoading ? (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <div className="space-y-2">
             {[0, 1, 2].map((i) => (
-              <Skeleton key={i} className="h-20 rounded-2xl" />
+              <Skeleton key={i} className="h-14 rounded-xl" />
             ))}
           </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {folder(ALL_LISTS, t("pipeline.lists.everyTask"), t("pipeline.lists.everyTaskHint"), (lists.data ?? []).reduce((n, l) => n + l.open, 0), "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary", ListChecks, () => pick(ALL_LISTS))}
-            {(lists.data ?? []).map((l) =>
-              folder(l.id, l.name, l.shared ? t("pipeline.lists.shared") : l.owner && !l.mine ? t("pipeline.lists.personalOf", { name: l.owner }) : t("pipeline.lists.personal"), l.open, l.shared ? "border-sky-400/40 bg-sky-500/10 text-sky-300" : "border-violet-400/40 bg-violet-500/10 text-violet-300", l.shared ? Folder : Lock, () => pick(l.id)),
-            )}
+        ) : shown.length === 0 ? (
+          <div className="glass flex flex-col items-center gap-2 rounded-2xl border px-6 py-12 text-center text-sm text-muted-foreground">
+            <Folder className="size-8 opacity-50" />
+            {t("pipeline.lists.none")}
           </div>
+        ) : (
+          <ul className="glass divide-y divide-[color:var(--glass-border)] overflow-hidden rounded-2xl border">
+            {shown.map((l) => (
+              <li key={l.id}>
+                <button type="button" onClick={() => pick(l.id)} className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.06),transparent_60%)]">
+                  <span className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg border", l.shared ? "border-sky-400/40 bg-sky-500/10 text-sky-300" : "border-violet-400/40 bg-violet-500/10 text-violet-300")}>{l.shared ? <Folder className="size-4.5" /> : <Lock className="size-4" />}</span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{l.name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{l.shared ? t("pipeline.lists.shared") : l.owner && !l.mine ? t("pipeline.lists.personalOf", { name: l.owner }) : t("pipeline.lists.personal")}</span>
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{t("pipeline.lists.open", { count: l.open })}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
     );
@@ -281,13 +316,13 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   );
 }
 
-function Meta({ task }: { task: TaskCard }) {
+function Meta({ task, plain }: { task: TaskCard; /** the list and the due day are columns of their own */ plain?: boolean }) {
   const { t } = useTranslation();
   const late = task.dueDate && task.dueDate < todayYmd() && task.status !== "done";
   return (
     <span className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
-      <ListBadge name={task.listShared === false && task.listOwner ? t("pipeline.lists.personalOf", { name: task.listOwner }) : task.listName} shared={task.listShared} />
-      {task.dueDate && (
+      {!plain && <ListBadge name={task.listShared === false && task.listOwner ? t("pipeline.lists.personalOf", { name: task.listOwner }) : task.listName} shared={task.listShared} />}
+      {!plain && task.dueDate && (
         <span className={cn("flex items-center gap-1", late && "text-red-300")}>
           <CalendarClock className="size-3" /> {dayLabel(task.dueDate)}
           {task.dueTime ? ` ${task.dueTime}` : ""}
@@ -340,7 +375,7 @@ function Meta({ task }: { task: TaskCard }) {
   );
 }
 
-function TaskRow({ task, child, editable, onOpen, onPatch, people }: { task: TaskCard; child?: boolean; editable: boolean; onOpen: () => void; onPatch: (p: Record<string, unknown>) => void; people: { id: string; name: string }[] }) {
+function TaskRow({ task, child, wide, editable, onOpen, onPatch, people }: { task: TaskCard; child?: boolean; wide?: boolean; editable: boolean; onOpen: () => void; onPatch: (p: Record<string, unknown>) => void; people: { id: string; name: string }[] }) {
   const { t } = useTranslation();
   return (
     <div className={cn("group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.06),transparent_60%)]", child && "py-2")}>
@@ -348,8 +383,18 @@ function TaskRow({ task, child, editable, onOpen, onPatch, people }: { task: Tas
       <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[task.priority].dot)} title={t(`pipeline.priority.${task.priority}`)} />
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 space-y-0.5 text-left">
         <span className={cn("block truncate text-sm font-medium", task.status === "done" && "text-muted-foreground line-through")}>{task.title}</span>
-        <Meta task={task} />
+        <Meta task={task} plain={wide} />
       </button>
+      {wide && (
+        <>
+          <span className="hidden w-44 shrink-0 md:block">
+            <ListBadge name={task.listShared === false && task.listOwner ? t("pipeline.lists.personalOf", { name: task.listOwner }) : task.listName} shared={task.listShared} />
+          </span>
+          <span className={cn("hidden w-28 shrink-0 font-mono text-xs sm:block", task.dueDate && task.dueDate < todayYmd() && task.status !== "done" ? "text-red-300" : "text-muted-foreground")}>
+            {task.dueDate ? `${dayLabel(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ""}` : "—"}
+          </span>
+        </>
+      )}
       <span className={cn("hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium sm:inline", STATUS_STYLE[task.status])}>{t(`pipeline.status.${task.status}`)}</span>
       <DropdownMenu>
         <DropdownMenuTrigger asChild disabled={!editable}>
