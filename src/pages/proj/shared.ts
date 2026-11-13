@@ -6,6 +6,8 @@ export type ProjStatus = "planning" | "active" | "done" | "cancelled";
 export type ProjPriority = "low" | "medium" | "high" | "urgent";
 export type ProjTaskStatus = "todo" | "doing" | "done";
 export type PersonRef = { id: string; name: string };
+export type ProjBillingMode = "hourly" | "contract" | "special" | "fixed" | "bank";
+export type ProjFile = { id: string; name: string; size: number; contentType: string };
 
 export type ProjectRow = {
   id: string;
@@ -17,6 +19,7 @@ export type ProjectRow = {
   startDate: string | null;
   dueDate: string | null;
   soldHours: number | null;
+  billingMode: ProjBillingMode;
   workedHours: number;
   taskTotal: number;
   taskDone: number;
@@ -44,6 +47,7 @@ export type ProjNote = {
   createdAt: string;
   emailedTo: string[];
   tasks: { id: string; title: string }[];
+  files: ProjFile[];
 };
 
 export type ProjTimer = { startedAt: string; baseSeconds: number; paused: boolean; seconds: number };
@@ -64,6 +68,7 @@ export type ProjDetail = ProjectRow & {
   members: PersonRef[];
   quote: QuoteSnapshot | null;
   quoteId: string | null;
+  billing: { mode: ProjBillingMode; contractId: string | null; hourlyRate: number | null; fixedPrice: number | null; bankExpiresOn: string | null; billedAt: string | null };
   tasks: ProjTask[];
   notes: ProjNote[];
   worked: { hours: number; byPerson: { userId: string; name: string; hours: number }[] };

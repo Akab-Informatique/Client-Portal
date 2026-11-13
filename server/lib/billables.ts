@@ -107,20 +107,26 @@ export function syncBillables(): Promise<BillablesState> {
       // under a monthly / per ticket / included contract the hours are not billed (left out, never billed by the hour)
       const named = it.contractSourceId ? contractsById.get(contractIds.get(it.contractSourceId) ?? "") : undefined;
       // under no contract of its own, the work takes the client's default support contract (if it has one)
-      const contract = named ?? (it.kind === "labour" ? (defaultSupport(client, contractRows) ?? undefined) : undefined);
+      // project time (Projets) is hours like labour: same contract, same rate rules
+      const hours = it.kind === "labour" || it.id.startsWith("projtime:") || it.id.startsWith("prtime:");
+      const contract = named ?? (hours ? (defaultSupport(client, contractRows) ?? undefined) : undefined);
       // a parent company's shared contract, or a child's contract its parent pays: the parent is invoiced, the child's name stays on the line
       const payerClientId = payerOf(client.id, contract, (id) => parentOf.get(id));
       // the contract's own rate bills the hours (above 0); a rate of 0 means they are included, never billed
       const contractRate = contract ? hourlyRateOf(contract, s.rates.hourly) : null;
       const overage = it.overageRateCents != null;
-      const notBilled = !overage && it.kind === "labour" && contract != null && contractRate == null;
+      // a project's own price for the hour (typed rate, contract rate) is never replaced by the client's default contract
+      const explicit = (it.id.startsWith("projtime:") || it.id.startsWith("prtime:")) && it.unitPriceCents != null;
+      const notBilled = !overage && !explicit && hours && contract != null && contractRate == null;
       const rate = overage
         ? it.overageRateCents!
-        : notBilled
+        : explicit
+          ? it.unitPriceCents!
+          : notBilled
           ? 0
-          : it.kind === "labour" && contractRate != null
+          : hours && contractRate != null
           ? contractRate
-          : (it.unitPriceCents ?? (it.kind === "labour" ? (client.invoice?.hourlyRate != null ? Math.round(client.invoice.hourlyRate * 100) : NO_CONTRACT_HOURLY_CENTS) : 0));
+          : (it.unitPriceCents ?? (hours ? (client.invoice?.hourlyRate != null ? Math.round(client.invoice.hourlyRate * 100) : NO_CONTRACT_HOURLY_CENTS) : 0));
       const quantityX100 = Math.round(it.quantity * 100);
       const values = {
         clientId: client.id,
@@ -150,7 +156,7 @@ export function syncBillables(): Promise<BillablesState> {
     // gone from the source: untouched ones go too — only for kinds read without error. On its own the portal drops the lines
     // of its own tickets and contracts that are no longer due, and the unapproved contract lines imported long ago (not made by the portal)
     const gone = [...existing.values()]
-      .filter((x) => !seen.has(x.sourceId!) && (!alone || /^(p(r?time|charge|travel):|contract:)/.test(x.sourceId!) || (x.kind === "contract" && !x.sourceId!.startsWith("contract:"))) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
+      .filter((x) => !seen.has(x.sourceId!) && (!alone || /^(p(r?time|charge|travel):|prtime:|projtime:|contract:)/.test(x.sourceId!) || (x.kind === "contract" && !x.sourceId!.startsWith("contract:"))) && (x.status === "pending" || (x.status === "approved" && !x.approvedBy)) && !x.edited && !data.errors[x.kind as BillableKind])
       .map((x) => x.id);
     if (gone.length) await d.delete(schema.billingItems).where(inArray(schema.billingItems.id, gone));
     await contractAutopay(null);

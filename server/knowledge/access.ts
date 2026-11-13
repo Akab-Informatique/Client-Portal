@@ -73,6 +73,7 @@ export const SECTION_ACCESS: Record<string, string[]> = {
   "Deposit on some lines only (latest)": ["quotes.view", "accounting.view"],
   "Moving a charge, and whose project time it is (latest)": ["tickets.edit", "projects.view"],
   "A ticket turned into a project (latest)": ["tickets.edit", "projects.view"],
+  "Projects, new format: billing, files, archive import, made from a ticket or a quote (latest)": ["proj.view"],
   "Ma journée: time given to each item, in quarter hours (latest)": ["pipeline.view"],
   "Project tasks: contract, waiting, order; each technician's own sort (latest)": ["projects.view"],
   "Ma journée on days off, project windows in the drawer, tasks by hand (latest)": ["pipeline.view"],

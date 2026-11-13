@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -10,6 +10,12 @@ import { rateLimit } from "../lib/http.ts";
 import { refreshAccrual } from "../lib/hr.ts";
 import { addDays, editable, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { listQuotes } from "../lib/quotes.ts";
+import { archiveProjects, billProj, importArchiveProject, MAX_FILE_BYTES, pendingFiles, ProjBillError, projBilling, projectFromQuote, projectFromTicket, takeFiles } from "../lib/projBilling.ts";
+import { ticketSource } from "../lib/ticketSource.ts";
+import { ticketScopeOf } from "../lib/selfManaged.ts";
+import { syncBillablesNow } from "../lib/billables.ts";
+import { billingSettings } from "../lib/billing.ts";
+import { hourlyRateOf } from "../lib/contracts.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import {
   activeStaff,
@@ -52,7 +58,19 @@ const zPriority = z.enum(["low", "medium", "high", "urgent"]);
 const zTaskStatus = z.enum(["todo", "doing", "done"]);
 const zStatus = z.enum(["planning", "active", "done", "cancelled"]);
 
+const zMoney = z.number().min(0).max(10_000_000);
+const zBilling = {
+  billingMode: z.enum(["hourly", "fixed", "bank", "contract", "special"]).optional(),
+  /** billingMode contract: one of the client's active contracts */
+  contractId: zUuid.nullable().optional(),
+  /** special: the rate typed; bank: the price of an hour of the bank (dollars) */
+  hourlyRate: zMoney.nullable().optional(),
+  fixedPrice: zMoney.nullable().optional(),
+  bankExpiresOn: zDay.nullable().optional(),
+};
+
 const zProjectCreate = z.object({
+  ...zBilling,
   name: z.string().trim().min(1).max(200),
   clientId: zUuid.nullable().optional(),
   /** default: me */
@@ -67,6 +85,7 @@ const zProjectCreate = z.object({
 });
 
 const zProjectPatch = z.object({
+  ...zBilling,
   name: z.string().trim().min(1).max(200).optional(),
   clientId: zUuid.nullable().optional(),
   leadId: zUuid.nullable().optional(),
@@ -107,6 +126,8 @@ const zNote = z.object({
   /** with internal false: a reply emailed to `to` */
   email: z.boolean().optional(),
   to: z.array(zEmail).max(10).optional(),
+  /** files uploaded first (POST /:id/files), sent with this note */
+  attachmentIds: zIds(10).optional(),
 });
 
 const zTimeFields = {
@@ -168,6 +189,41 @@ async function requireTimer(projectId: string, userId: string) {
   const t = await timerOf(projectId, userId);
   if (!t) throw new HTTPException(404, { message: "timer_not_found" });
   return t;
+}
+
+const cents = (x: number | null | undefined) => (x == null ? null : Math.round(x * 100));
+
+/**
+ * The billing columns of a project from what was typed, checked: fixed needs its price, a bank of hours its hours, the price of an
+ * hour and the day it expires (and a client), a contract an active contract of the client, special a rate.
+ */
+async function billingColumns(o: { mode: string; contractId: string | null | undefined; hourlyRate: number | null | undefined; fixedPrice: number | null | undefined; bankExpiresOn: string | null | undefined; soldHours: number | null | undefined; clientId: string | null; startDate: string | null }) {
+  const none = { contractId: null as string | null, hourlyRateCents: null as number | null, fixedPriceCents: null as number | null, bankExpiresOn: null as string | null };
+  if (o.mode === "hourly") return { billingMode: "hourly" as const, ...none };
+  if (o.mode === "special") {
+    if (!o.hourlyRate || o.hourlyRate <= 0) throw new HTTPException(400, { message: "rate_required" });
+    return { billingMode: "special" as const, ...none, hourlyRateCents: cents(o.hourlyRate) };
+  }
+  if (o.mode === "fixed") {
+    if (!o.fixedPrice || o.fixedPrice <= 0) throw new HTTPException(400, { message: "price_required" });
+    return { billingMode: "fixed" as const, ...none, fixedPriceCents: cents(o.fixedPrice), hourlyRateCents: cents(o.hourlyRate) };
+  }
+  if (o.mode === "bank") {
+    if (!o.clientId) throw new HTTPException(400, { message: "bank_needs_client" });
+    if (!o.soldHours || o.soldHours <= 0) throw new HTTPException(400, { message: "bank_hours_required" });
+    if (!o.hourlyRate || o.hourlyRate <= 0) throw new HTTPException(400, { message: "bank_rate_required" });
+    if (!o.bankExpiresOn || o.bankExpiresOn < todayQc() || (o.startDate && o.bankExpiresOn < o.startDate)) throw new HTTPException(400, { message: "bank_expiry_required" });
+    return { billingMode: "bank" as const, ...none, hourlyRateCents: cents(o.hourlyRate), fixedPriceCents: Math.round(o.soldHours * (cents(o.hourlyRate) ?? 0)), bankExpiresOn: o.bankExpiresOn };
+  }
+  // contract
+  if (!o.clientId) throw new HTTPException(400, { message: "contract_needs_client" });
+  if (!o.contractId) throw new HTTPException(400, { message: "contract_required" });
+  const [k] = await db()
+    .select({ id: schema.clientContracts.id })
+    .from(schema.clientContracts)
+    .where(and(eq(schema.clientContracts.id, o.contractId), eq(schema.clientContracts.clientId, o.clientId), eq(schema.clientContracts.active, true)));
+  if (!k) throw new HTTPException(400, { message: "contract_invalid" });
+  return { billingMode: "contract" as const, ...none, contractId: k.id as string | null };
 }
 
 /** Tells the person a task was given to them (never to oneself) */
@@ -242,6 +298,67 @@ export const projRoutes = new Hono<AppEnv>()
     return c.json(rows.map((r) => ({ projectId: r.p.id, number: r.p.number, name: r.p.name, seconds: timerSeconds(r.t), paused: r.t.pausedAt !== null })));
   })
 
+  /** The client's active contracts a project can be billed under, with what an hour costs under each */
+  .get("/client-contracts/:clientId", requirePermission("proj.view"), async (c) => {
+    const clientId = zUuid.safeParse(c.req.param("clientId"));
+    if (!clientId.success) throw new HTTPException(404, { message: "not_found" });
+    const usual = (await billingSettings()).rates.hourly;
+    const rows = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.clientId, clientId.data), eq(schema.clientContracts.active, true))).orderBy(asc(schema.clientContracts.name));
+    return c.json(rows.map((k) => ({ id: k.id, name: k.name, hourlyRate: ((r) => (r == null ? null : r / 100))(hourlyRateOf(k, usual)) })));
+  })
+
+  /** The archive projects and whether each is already brought into this format (administrators) */
+  .get("/archive", requirePermission("proj.manage"), async (c) => c.json(await archiveProjects()))
+
+  /** Brings one archive project over (once): see importArchiveProject */
+  .post("/archive/:id/import", requirePermission("proj.manage"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.safeParse(c.req.param("id"));
+    if (!id.success) throw new HTTPException(404, { message: "not_found" });
+    const row = await importArchiveProject(id.data, a.user.id);
+    await audit(a.user.id, "proj.archive_imported", row.id, { number: row.number, name: row.name });
+    return c.json({ id: row.id, number: row.number }, 201);
+  })
+
+  /** A project made from an accepted or sent quote: hours and price of its hour lines, billed the way it was sold */
+  .post("/from-quote/:quoteId", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("quotes.view")) throw new HTTPException(403, { message: "quote_forbidden" });
+    const id = zUuid.safeParse(c.req.param("quoteId"));
+    if (!id.success) throw new HTTPException(404, { message: "not_found" });
+    const r = await projectFromQuote(id.data, a.user.id);
+    await audit(a.user.id, "proj.from_quote", r.project.id, { number: r.project.number, quote: id.data });
+    let billed = false;
+    // a bank of hours is paid when sold
+    if (r.project.billingMode === "bank") {
+      try {
+        await billProj(r.project.id);
+        billed = true;
+        await syncBillablesNow();
+      } catch {
+        billed = false;
+      }
+    }
+    return c.json({ id: r.project.id, number: r.project.number, sale: r.sale, billed }, 201);
+  })
+
+  /** A project made from a ticket: its notes, files and checklist come along; the ticket is closed as transformed */
+  .post("/from-ticket/:ticketId", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("tickets.edit")) throw new HTTPException(403, { message: "forbidden" });
+    const tid = Number(c.req.param("ticketId"));
+    if (!Number.isSafeInteger(tid) || tid <= 0) throw new HTTPException(404, { message: "not_found" });
+    // a ticket the caller cannot see answers like a missing one
+    try {
+      await (await ticketSource(ticketScopeOf(c))).get(tid);
+    } catch {
+      throw new HTTPException(404, { message: "not_found" });
+    }
+    const r = await projectFromTicket(tid, a.user.id);
+    await audit(a.user.id, "proj.from_ticket", r.project.id, { number: r.project.number, ticket: r.ticketNumber });
+    return c.json({ id: r.project.id, number: r.project.number }, 201);
+  })
+
   /** A new project: the next number, the team (the lead always in it), the quote it is sold from (a snapshot) */
   .post("/", requirePermission("proj.edit"), async (c) => {
     const a = auth(c);
@@ -264,7 +381,9 @@ export const projRoutes = new Hono<AppEnv>()
     const startDate = p.startDate ?? null;
     const dueDate = p.dueDate ?? null;
     if (startDate && dueDate && dueDate < startDate) throw new HTTPException(400, { message: "dates" });
+    const billing = await billingColumns({ mode: p.billingMode ?? "hourly", contractId: p.contractId, hourlyRate: p.hourlyRate, fixedPrice: p.fixedPrice, bankExpiresOn: p.bankExpiresOn, soldHours: p.soldHours, clientId, startDate });
     const row = await insertProject({
+      ...billing,
       name: p.name,
       clientId,
       leadId,
@@ -280,8 +399,19 @@ export const projRoutes = new Hono<AppEnv>()
       createdBy: a.user.id,
     });
     if (memberIds.length) await db().insert(schema.projMembers).values(memberIds.map((userId) => ({ projectId: row.id, userId })));
-    await audit(a.user.id, "proj.created", row.id, { number: row.number, name: row.name, quote: p.quoteId ?? null });
-    return c.json(await viewFor(row, a), 201);
+    await audit(a.user.id, "proj.created", row.id, { number: row.number, name: row.name, quote: p.quoteId ?? null, billing: row.billingMode });
+    // a bank of hours is paid when sold: its price goes to Approbation at once (never fails the creation)
+    let billed = false;
+    if (row.billingMode === "bank") {
+      try {
+        await billProj(row.id);
+        billed = true;
+        await syncBillablesNow();
+      } catch {
+        billed = false;
+      }
+    }
+    return c.json({ ...(await viewFor(await loadProj(row.id), a)), billed }, 201);
   })
 
   /** The opened project */
@@ -321,6 +451,22 @@ export const projRoutes = new Hono<AppEnv>()
     if (p.soldHours !== undefined) set.soldHoursX100 = x100Of(p.soldHours);
     if (p.description !== undefined) set.description = p.description;
     if (p.salesNotes !== undefined) set.salesNotes = p.salesNotes;
+    const touchesBilling = p.billingMode !== undefined || p.contractId !== undefined || p.hourlyRate !== undefined || p.fixedPrice !== undefined || p.bankExpiresOn !== undefined || p.soldHours !== undefined || clientId !== cur.clientId;
+    if (touchesBilling) {
+      // the price sold already in Approbation is not moved from here
+      if (cur.invoicedAt && (p.billingMode !== undefined || p.fixedPrice !== undefined || p.soldHours !== undefined)) throw new HTTPException(409, { message: "project_billed" });
+      const next = {
+        mode: p.billingMode ?? cur.billingMode,
+        contractId: p.contractId !== undefined ? p.contractId : cur.contractId,
+        hourlyRate: p.hourlyRate !== undefined ? p.hourlyRate : cur.hourlyRateCents == null ? null : cur.hourlyRateCents / 100,
+        fixedPrice: p.fixedPrice !== undefined ? p.fixedPrice : cur.fixedPriceCents == null ? null : cur.fixedPriceCents / 100,
+        bankExpiresOn: p.bankExpiresOn !== undefined ? p.bankExpiresOn : cur.bankExpiresOn,
+        soldHours: p.soldHours !== undefined ? p.soldHours : cur.soldHoursX100 == null ? null : cur.soldHoursX100 / 100,
+        clientId,
+        startDate,
+      };
+      Object.assign(set, await billingColumns(next));
+    }
     await db().update(schema.projProjects).set(set).where(eq(schema.projProjects.id, cur.id));
     // the team: the lead is always in it
     if (p.memberIds !== undefined) {
@@ -471,6 +617,82 @@ export const projRoutes = new Hono<AppEnv>()
     return c.json({ ok: true });
   })
 
+  // ── files (kept like a ticket's: sent with a note or a reply) ──────────
+
+  /** A file added to the project, base64, 5 MB at most; it waits to go with the next note */
+  .post("/:id/files", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProj(c.req.param("id"));
+    const f = await body(c, z.object({ name: z.string().trim().min(1).max(200), contentType: z.string().max(100).optional(), data: z.string().min(1).max(Math.ceil((MAX_FILE_BYTES * 4) / 3) + 8) }));
+    const size = Buffer.from(f.data, "base64").length;
+    if (size < 1 || size > MAX_FILE_BYTES) throw new HTTPException(413, { message: "file_too_large" });
+    const [row] = await db()
+      .insert(schema.projFiles)
+      .values({ projectId: p.id, name: f.name.replace(/[\\/\r\n]/g, "_"), contentType: f.contentType || "application/octet-stream", size, data: f.data, author: a.realUser.name })
+      .returning({ id: schema.projFiles.id, name: schema.projFiles.name, size: schema.projFiles.size, contentType: schema.projFiles.contentType });
+    await audit(a.user.id, "proj.file_added", p.id, { name: row.name, size });
+    return c.json(row, 201);
+  })
+
+  /** A file: always a download, except a picture shown in the page (?inline=1: png, jpeg, gif, webp only) */
+  .get("/:id/files/:fid", requirePermission("proj.view"), async (c) => {
+    const p = await loadProj(c.req.param("id"));
+    const fid = zUuid.safeParse(c.req.param("fid"));
+    if (!fid.success) throw new HTTPException(404, { message: "not_found" });
+    const [f] = await db().select().from(schema.projFiles).where(and(eq(schema.projFiles.id, fid.data), eq(schema.projFiles.projectId, p.id)));
+    if (!f) throw new HTTPException(404, { message: "not_found" });
+    const inline = c.req.query("inline") === "1" && /^image\/(png|jpeg|gif|webp)$/.test(f.contentType);
+    const type = inline ? f.contentType : "application/octet-stream";
+    return new Response(Buffer.from(f.data, "base64"), {
+      headers: {
+        "content-type": type,
+        "content-disposition": `${inline ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(f.name)}`,
+        "x-content-type-options": "nosniff",
+        "cache-control": "private, no-store",
+      },
+    });
+  })
+
+  /** A file removed (one not sent yet: its person; one on a note: whoever manages projects) */
+  .delete("/:id/files/:fid", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProj(c.req.param("id"));
+    const fid = zUuid.safeParse(c.req.param("fid"));
+    if (!fid.success) throw new HTTPException(404, { message: "not_found" });
+    const [f] = await db().select().from(schema.projFiles).where(and(eq(schema.projFiles.id, fid.data), eq(schema.projFiles.projectId, p.id)));
+    if (!f) throw new HTTPException(404, { message: "not_found" });
+    if (f.noteId && !isManager(a)) throw new HTTPException(403, { message: "forbidden" });
+    await db().delete(schema.projFiles).where(eq(schema.projFiles.id, f.id));
+    await audit(a.user.id, "proj.file_deleted", p.id, { name: f.name });
+    return c.json({ ok: true });
+  })
+
+  // ── billing ────────────────────────────────────────────────────────────
+
+  /** The price sold (fixed price or bank of hours) goes to Approbation, once, as a pending line */
+  .post("/:id/bill", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "forbidden" });
+    const p = await loadProj(c.req.param("id"));
+    try {
+      const r = await billProj(p.id);
+      await syncBillablesNow();
+      await audit(a.user.id, "proj.billed", p.id, { number: p.number, total: r.totalCents });
+      return c.json({ ...r, billing: await projBilling(p.id) });
+    } catch (e) {
+      if (e instanceof ProjBillError) throw new HTTPException(409, { message: e.message });
+      throw e;
+    }
+  })
+
+  /** Where the project's sale stands in Approbation / on invoices */
+  .get("/:id/billing", requirePermission("proj.view"), async (c) => {
+    const a = auth(c);
+    if (!a.permissions.includes("accounting.view")) return c.json([]);
+    const p = await loadProj(c.req.param("id"));
+    return c.json(await projBilling(p.id));
+  })
+
   // ── notes ──────────────────────────────────────────────────────────────
 
   /** A note on the project, optionally tagging tasks. Internal by default; internal false + email true = a reply emailed to `to`. */
@@ -491,8 +713,10 @@ export const projRoutes = new Hono<AppEnv>()
     }
     let sent: string[] = [];
     let failed: string[] = [];
+    const attachmentIds = [...new Set(n.attachmentIds ?? [])];
+    const files = await pendingFiles(p.id, attachmentIds);
     if (mail) {
-      const r = await sendClientReply(p, { name: a.realUser.name, email: a.realUser.email }, n.text, to);
+      const r = await sendClientReply(p, { name: a.realUser.name, email: a.realUser.email }, n.text, to, files.map((f) => ({ filename: f.name, content: Buffer.from(f.data, "base64"), contentType: f.contentType })));
       sent = r.sent;
       failed = r.failed;
       await audit(a.user.id, sent.length ? "proj.reply_emailed" : "proj.reply_email_failed", p.id, { to: sent.length ? sent : failed });
@@ -502,6 +726,7 @@ export const projRoutes = new Hono<AppEnv>()
       .values({ projectId: p.id, authorId: a.user.id, text: n.text, internal, emailedTo: sent })
       .returning();
     if (taskIds.length) await db().insert(schema.projNoteTasks).values(taskIds.map((taskId) => ({ noteId: row.id, taskId })));
+    await takeFiles(p.id, attachmentIds, row.id);
     await db().update(schema.projProjects).set({ updatedAt: new Date() }).where(eq(schema.projProjects.id, p.id));
     await audit(a.user.id, "proj.note_added", row.id, { project: p.number, internal, tasks: taskIds.length });
     const [view] = await noteViews([row]);

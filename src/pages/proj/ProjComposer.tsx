@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Clock, Pause, Play, Square, Trash2 } from "lucide-react";
+import { Clock, Paperclip, Pause, Play, Square, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { AiTextarea } from "@/components/AiPolish";
@@ -13,7 +13,7 @@ import { useCan } from "@/lib/session";
 import { useDraft } from "@/lib/useDraft";
 import { cn } from "@/lib/utils";
 import { hm, parseHm } from "@shared/duration";
-import type { ProjDetail, ProjNote, ProjTimer } from "./shared";
+import type { ProjDetail, ProjFile, ProjNote, ProjTimer } from "./shared";
 
 type TFn = (k: string, o?: Record<string, unknown>) => string;
 type ClientContact = { id: string; firstName: string; lastName: string; email: string | null };
@@ -87,6 +87,39 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
   const [taskIds, setTaskIds] = useState<string[]>([]);
   const [to, setTo] = useState<string[]>([]);
   const [mailChoice, setMailChoice] = useState<boolean | null>(null);
+  // files uploaded first, sent with the note or the reply (kept like a ticket's)
+  const [files, setFiles] = useState<ProjFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const upload = async (list: FileList | null) => {
+    if (!list?.length) return;
+    setUploading(true);
+    try {
+      for (const file of Array.from(list)) {
+        if (file.size > 5 * 1024 * 1024) {
+          toast.error(t("projBill.attach.tooBig"));
+          continue;
+        }
+        const data = await new Promise<string>((ok, bad) => {
+          const r = new FileReader();
+          r.onload = () => ok(String(r.result).split(",")[1] ?? "");
+          r.onerror = () => bad(r.error);
+          r.readAsDataURL(file);
+        });
+        try {
+          const row = await api.post<ProjFile>(`/proj/${project.id}/files`, { name: file.name, contentType: file.type || undefined, data });
+          setFiles((x) => [...x, row]);
+        } catch {
+          toast.error(t("projBill.attach.failed"));
+        }
+      }
+    } finally {
+      setUploading(false);
+    }
+  };
+  const dropFile = (id: string) => {
+    setFiles((x) => x.filter((f) => f.id !== id));
+    void api.del(`/proj/${project.id}/files/${id}`).catch(() => undefined);
+  };
 
   const contacts = useQuery({
     queryKey: ["proj", "contacts", clientId],
@@ -112,6 +145,7 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
         toast.success(t("projWork.composer.noteSaved"));
       }
       clearText();
+      setFiles([]);
       setTaskIds([]);
       setTo([]);
       void qc.invalidateQueries({ queryKey: ["proj"] });
@@ -122,16 +156,18 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
   const submitText = () => {
     const body = text.trim();
     if (!body) return;
-    if (tab === "note") return send.mutate({ text: body, internal: true, taskIds });
+    const attachmentIds = files.map((f) => f.id);
+    if (tab === "note") return send.mutate({ text: body, internal: true, taskIds, attachmentIds });
     if (mailOn && to.length === 0) return toast.error(t("projWork.composer.noRecipient"));
-    send.mutate({ text: body, internal: false, taskIds, email: mailOn, to: mailOn ? to : [] });
+    send.mutate({ text: body, internal: false, taskIds, email: mailOn, to: mailOn ? to : [], attachmentIds });
   };
 
   // ── time entry ──
   const [date, setDate] = useState(todayYmd());
   const [hours, setHours] = useState("");
   const [timeNote, setTimeNote, clearTimeNote] = useDraft(`proj:${project.id}:time`);
-  const [billable, setBillable] = useState(true);
+  // a project sold as a package (fixed price, bank of hours) starts its entries included; each entry can be switched
+  const [billable, setBillable] = useState(project.billing.mode !== "fixed" && project.billing.mode !== "bank");
   const [covered, setCovered] = useState<string[]>([]);
   const [finished, setFinished] = useState<string[]>([]);
   const [stopping, setStopping] = useState(false);
@@ -266,6 +302,21 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
             placeholder={tab === "reply" ? t("projWork.composer.replyPlaceholder") : t("projWork.composer.notePlaceholder")}
             aria-label={tab === "reply" ? t("projWork.composer.tabReply") : t("projWork.composer.tabNote")}
           />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">
+              <Paperclip className="size-3.5" aria-hidden /> {uploading ? "…" : t("projBill.attach.add")}
+              <input type="file" multiple className="sr-only" onChange={(e) => { void upload(e.target.files); e.target.value = ""; }} />
+            </label>
+            {files.map((f) => (
+              <span key={f.id} className="inline-flex items-center gap-1 rounded-full border bg-background/60 py-0.5 pl-2.5 pr-1 text-xs">
+                {f.name}
+                <button type="button" aria-label={t("projBill.attach.remove")} title={t("projBill.attach.remove")} onClick={() => dropFile(f.id)} className="grid size-4 place-items-center rounded-full hover:bg-white/10">
+                  <X className="size-3" aria-hidden />
+                </button>
+              </span>
+            ))}
+          </div>
 
           <TaskTags tasks={project.tasks} selected={taskIds} onToggle={(id) => toggle(taskIds, id, setTaskIds)} label={t("projWork.composer.tagTasks")} empty={t("projWork.composer.noTasks")} />
 

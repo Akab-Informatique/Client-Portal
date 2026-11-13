@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2, Paperclip, Trash2 } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
@@ -147,6 +147,23 @@ export function ProjNotes({ project, onOpenTask }: { project: ProjDetail; onOpen
                 </div>
                 <p className="whitespace-pre-wrap text-sm">{n.text}</p>
                 {!n.internal && n.emailedTo.length > 0 && <p className="text-xs text-muted-foreground">{t("projWork.notes.sentTo", { to: n.emailedTo.join(", ") })}</p>}
+                {n.files.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                    {n.files.map((fl) => {
+                      const href = `/api/proj/${project.id}/files/${fl.id}`;
+                      const picture = ["image/png", "image/jpeg", "image/gif", "image/webp"].includes(fl.contentType);
+                      return picture ? (
+                        <a key={fl.id} href={href} title={fl.name} className="block overflow-hidden rounded-lg border">
+                          <img src={`${href}?inline=1`} alt={fl.name} loading="lazy" className="max-h-28 max-w-40 object-cover" />
+                        </a>
+                      ) : (
+                        <a key={fl.id} href={href} className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs hover:bg-white/5" title={t("projBill.attach.download")}>
+                          <Paperclip className="size-3" aria-hidden /> {fl.name}
+                        </a>
+                      );
+                    })}
+                  </div>
+                )}
                 {n.tasks.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                     <span className="sr-only">{t("projWork.notes.tagged")}</span>

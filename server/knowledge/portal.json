@@ -1418,6 +1418,16 @@
     "proj.view"
    ],
    "restrictTo": []
+  },
+  {
+   "id": "projects-new-format-billing-files-archive-import-made-from-a-1",
+   "title": "Projects, new format: billing, files, archive import, made from a ticket or a quote (latest)",
+   "heading": "Projects, new format: billing, files, archive import, made from a ticket or a quote (latest)",
+   "text": "Migration `0185` (`proj_projects`: `billing_mode`, `contract_id`, `hourly_rate_cents`, `fixed_price_cents`, `bank_expires_on`, `invoiced_at`, `legacy_id`; table `proj_files`); `server/lib/projBilling.ts`, routes in `server/routes/proj.ts`, UI `src/pages/proj/` (`ProjBilling`, `ArchiveImportDialog`, `useMakeProject`), texts `src/i18n/projBill.ts`; tests \"new-format projects: billing, files, …\". **Replaces** the \"Not built yet\" line above.\n- **Approbation**: no more Jalons tab. The **Projets** tab (kind `project`) lists project time (new format `projtime:<entry>`, archive `prtime:`) grouped **by month, then by project (number · client)**, hours × rate. Rate: contract project = that contract's hourly rate (0 = included, no line); special / fixed / bank = the project's rate (else the usual); hourly = the client's default support contract rule (`syncBillables`, `explicit` keeps a project's own rate). Ticket time tied to a project is never emitted twice.\n- **Billing fields** (set in New project and in Info du projet; `billingColumns` checks them): `hourly`, `contract` (an active contract of the client), `special` (rate), `fixed` (price) and `bank` (hours, price of an hour, expiry day, a client). Entries of fixed / bank projects start **included**. A **bank** goes to Approbation at once when made (`billProj`, line `project:<id>`); a fixed price by **Envoyer le prix à l'approbation** (`POST /:id/bill`, `accounting.manage`), once, less the quote deposit. The price sold is not changed once billed (`project_billed`).\n- **Files like a ticket's**: `POST /:id/files` (5 MB), sent with a note or reply (`attachmentIds`, emailed as attachments on a reply), shown as chips / thumbnails on the note, `GET /:id/files/:fid` always a download (`?inline=1` for png / jpeg / gif / webp).\n- **Archive → new format** (`proj.manage`; button **Importer l'archive** in the Tickets list; `GET /api/proj/archive`, `POST /archive/:id/import`, once per project via `legacy_id`): same number, team, status (on hold → active), dates, hours sold, billing, quote; tasks without phases (blocked marked); every project, task and phase note (replies stay public, tagged to their task); files on one note; time entries (`proj_id` set, tasks covered kept) and their Approbation lines renamed to `projtime:`; the archive stays untouched.\n- **From a ticket** (button in the ticket window, `POST /api/proj/from-ticket/:id`): client, contact, people, due day, estimate, contract, description, checklist as tasks, every note and file; the ticket is closed as `transformed`; time and charges stay on it. **From a quote** (button in the quote editor, `POST /from-quote/:id`, `quotes.view`): hours and price of the hour lines, billed as the quote was sold (fixed / bank / hourly), once per quote.",
+   "requires": [
+    "proj.view"
+   ],
+   "restrictTo": []
   }
  ]
 }

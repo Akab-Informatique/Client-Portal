@@ -85,6 +85,7 @@ import { useProjectRows } from "@/pages/proj/shared";
 import { KindLegend, KindSwitch, ProjRow, filterProjectRows, type ProjKind } from "@/pages/proj/ProjRows";
 import { ProjView } from "@/pages/proj/ProjView";
 import { NewProjDialog } from "@/pages/proj/NewProjDialog";
+import { ArchiveImportDialog } from "@/pages/proj/ArchiveImportDialog";
 
 type Saved = { id: string; name: string; query: string; pinned?: boolean };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -129,6 +130,7 @@ export function TicketsPage() {
   const [creating, setCreating] = useState(false);
   // projects (new format, src/pages/proj): the new-project window
   const [creatingProj, setCreatingProj] = useState(false);
+  const [importingArchive, setImportingArchive] = useState(false);
   const me = useMe();
   // tickets ticked in the list (several at a time: the bar above the filters)
   const [picked, setPicked] = useState<Set<number>>(new Set());
@@ -276,6 +278,11 @@ export function TicketsPage() {
           {canProj && can("proj.edit") && (
             <Button size="sm" variant="outline" onClick={() => setCreatingProj(true)} className="h-9 border-violet-400/50 font-semibold text-violet-200 hover:bg-violet-500/10 hover:text-violet-100">
               <FolderPlus className="size-4" /> {t("projList.newProject")}
+            </Button>
+          )}
+          {canProj && can("proj.manage") && (
+            <Button size="sm" variant="ghost" onClick={() => setImportingArchive(true)} className="h-9 text-xs text-muted-foreground hover:text-violet-200">
+              {t("projBill.archive.button")}
             </Button>
           )}
           {can("tickets.edit") && (
@@ -495,6 +502,15 @@ export function TicketsPage() {
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
       {/* a project opens with ?pj=<id> in the address (kept with the other filters), closing removes it */}
       {canProj && pj && <ProjView id={pj} onClose={() => set({ pj: null })} />}
+      {canProj && importingArchive && (
+        <ArchiveImportDialog
+          onClose={() => setImportingArchive(false)}
+          onOpen={(id) => {
+            setImportingArchive(false);
+            set({ pj: id });
+          }}
+        />
+      )}
       {canProj && creatingProj && (
         <NewProjDialog
           onClose={() => setCreatingProj(false)}

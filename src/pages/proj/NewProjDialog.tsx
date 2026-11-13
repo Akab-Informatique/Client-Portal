@@ -12,6 +12,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { usePeople } from "@/pages/pipeline/TaskDialog";
 import { projError } from "./ProjTasks";
+import { BillingFields, billingPayload, emptyBilling, type BillingValue } from "./ProjBilling";
 import type { ProjDetail } from "./shared";
 
 type QuoteRow = { id: string; number: string; title: string; status: string; totalCents: number };
@@ -40,6 +41,7 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
   const [soldHours, setSoldHours] = useState("");
   const [description, setDescription] = useState("");
   const [quoteId, setQuoteId] = useState("");
+  const [billing, setBilling] = useState<BillingValue>(emptyBilling);
 
   const clients = useMemo(() => {
     const q = clientSearch.trim().toLowerCase();
@@ -68,6 +70,7 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
       if (Number.isFinite(hours) && hours >= 0) body.soldHours = hours;
       if (description.trim()) body.description = description.trim();
       if (quoteId) body.quoteId = quoteId;
+      Object.assign(body, billingPayload(billing));
       return api.post<ProjDetail>("/proj", body);
     },
     onSuccess: (p) => {
@@ -208,6 +211,8 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
               <span className="block text-[11px] text-muted-foreground">{t("proj.newProj.quoteHint")}</span>
             </label>
           )}
+
+          <BillingFields value={billing} onChange={setBilling} clientId={clientId} />
 
           <label className={labelCls}>
             <span className={labelText}>{t("proj.newProj.description")}</span>

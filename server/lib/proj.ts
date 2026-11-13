@@ -30,6 +30,7 @@ export type ProjectView = {
   startDate: string | null;
   dueDate: string | null;
   soldHours: number | null;
+  billingMode: string;
   workedHours: number;
   taskTotal: number;
   taskDone: number;
@@ -57,6 +58,7 @@ export type NoteView = {
   createdAt: string;
   emailedTo: string[];
   tasks: { id: string; title: string }[];
+  files: { id: string; name: string; size: number; contentType: string }[];
 };
 
 export type TimeView = {
@@ -235,6 +237,7 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
       startDate: p.startDate,
       dueDate: p.dueDate,
       soldHours: p.soldHoursX100 == null ? null : hoursOf(p.soldHoursX100),
+      billingMode: p.billingMode,
       workedHours: hoursOf(Number(worked)),
       taskTotal: mine.length,
       taskDone: mine.filter((t) => t.status === "done").length,
@@ -262,8 +265,12 @@ export async function taskViews(rows: TaskRow[]): Promise<TaskView[]> {
 /** Notes with their author and the tasks each one tags (the order of the rows is kept) */
 export async function noteViews(rows: NoteRow[]): Promise<NoteView[]> {
   if (!rows.length) return [];
-  const [names, tags] = await Promise.all([
+  const [names, files, tags] = await Promise.all([
     namesOf(rows.map((n) => n.authorId)),
+    db()
+      .select({ id: schema.projFiles.id, noteId: schema.projFiles.noteId, name: schema.projFiles.name, size: schema.projFiles.size, contentType: schema.projFiles.contentType })
+      .from(schema.projFiles)
+      .where(inArray(schema.projFiles.noteId, rows.map((n) => n.id))),
     db()
       .select({ noteId: schema.projNoteTasks.noteId, id: schema.projTasks.id, title: schema.projTasks.title })
       .from(schema.projNoteTasks)
@@ -278,6 +285,7 @@ export async function noteViews(rows: NoteRow[]): Promise<NoteView[]> {
     createdAt: n.createdAt.toISOString(),
     emailedTo: n.emailedTo ?? [],
     tasks: tags.filter((t) => t.noteId === n.id).map((t) => ({ id: t.id, title: t.title })),
+    files: files.filter((f) => f.noteId === n.id).map((f) => ({ id: f.id, name: f.name, size: f.size, contentType: f.contentType })),
   }));
 }
 
@@ -342,6 +350,14 @@ export async function detailOf(p: ProjRow, me: string, canManage: boolean) {
     members: memberIds.map((id) => ({ id, name: names.get(id) ?? "" })),
     quote: p.quoteSnapshot ?? null,
     quoteId: p.quoteId,
+    billing: {
+      mode: p.billingMode,
+      contractId: p.contractId,
+      hourlyRate: p.hourlyRateCents == null ? null : p.hourlyRateCents / 100,
+      fixedPrice: p.fixedPriceCents == null ? null : p.fixedPriceCents / 100,
+      bankExpiresOn: p.bankExpiresOn,
+      billedAt: p.invoicedAt ? p.invoicedAt.toISOString() : null,
+    },
     tasks: await taskViews(taskRows),
     notes: await noteViews(noteRows),
     worked: {
@@ -398,7 +414,8 @@ export async function addEntry(
     .from(schema.timesheetEntries)
     .where(and(eq(schema.timesheetEntries.userId, userId), eq(schema.timesheetEntries.date, o.date)));
   if (total + hoursX100 > 2400) throw new HTTPException(409, { message: "day_over_24" });
-  const billable = o.billable ?? true;
+  // a project sold as a package (fixed price, bank of hours) starts its entries included; each entry can be switched
+  const billable = o.billable ?? !(p.billingMode === "fixed" || p.billingMode === "bank");
   const [row] = await d
     .insert(schema.timesheetEntries)
     .values({
@@ -439,7 +456,13 @@ export async function markDone(taskIds: string[]): Promise<void> {
 }
 
 /** Writes the reply to the client: one message each, from the technician's address as Reply-To. Never throws. */
-export async function sendClientReply(p: ProjRow, sender: { name: string; email: string }, text: string, to: string[]): Promise<{ sent: string[]; failed: string[] }> {
+export async function sendClientReply(
+  p: ProjRow,
+  sender: { name: string; email: string },
+  text: string,
+  to: string[],
+  attachments: { filename: string; content: Buffer; contentType?: string }[] = [],
+): Promise<{ sent: string[]; failed: string[] }> {
   const subject = `[${p.number}] ${p.name}`.slice(0, 250);
   const plain = ["Bonjour,", "", text, "", "—", `${sender.name}`, "AKAB Informatique"].join("\n");
   const html = `<p>Bonjour,</p><p style="white-space:pre-wrap">${escapeHtml(text)}</p><p>—<br>${escapeHtml(sender.name)}<br>AKAB Informatique</p><p style="color:#777;font-size:12px">${escapeHtml(p.number)} · ${escapeHtml(p.name)}</p>`;
@@ -448,7 +471,7 @@ export async function sendClientReply(p: ProjRow, sender: { name: string; email:
   for (const addr of to) {
     let ok = false;
     try {
-      ok = await sendMail({ to: addr, subject, text: plain, html, replyTo: sender.email });
+      ok = await sendMail({ to: addr, subject, text: plain, html, replyTo: sender.email, ...(attachments.length ? { attachments } : {}) });
     } catch {
       ok = false;
     }

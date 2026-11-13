@@ -3740,12 +3740,42 @@ export const projProjects = pgTable(
     salesNotes: text("sales_notes").notNull().default(""),
     quoteId: uuid("quote_id").references(() => quotes.id, { onDelete: "set null" }),
     quoteSnapshot: jsonb("quote_snapshot").$type<ProjQuoteSnapshot | null>(),
+    /** How its time is billed: hourly (the client's contract rate, else the usual), contract (one contract), special (a rate typed), fixed (one price), bank (hours bought, paid up front) */
+    billingMode: text("billing_mode", { enum: ["hourly", "fixed", "bank", "contract", "special"] }).notNull().default("hourly"),
+    contractId: uuid("contract_id").references(() => clientContracts.id, { onDelete: "set null" }),
+    hourlyRateCents: integer("hourly_rate_cents"),
+    fixedPriceCents: integer("fixed_price_cents"),
+    bankExpiresOn: text("bank_expires_on"),
+    /** When the price sold went to Approbation (once) */
+    invoicedAt: timestamp("invoiced_at", { withTimezone: true }),
+    /** The archive project (projects.id) this one was brought from: a project is brought once */
+    legacyId: uuid("legacy_id").unique(),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     createdAt: created(),
     updatedAt: updated(),
     doneAt: timestamp("done_at", { withTimezone: true }),
   },
   (t) => [index("proj_projects_status_idx").on(t.status), index("proj_projects_client_idx").on(t.clientId), index("proj_projects_lead_idx").on(t.leadId)],
+);
+
+/** Files of a new-format project, kept like a ticket's: they come with a note or a reply (note_id), or wait to be sent with one (null) */
+export const projFiles = pgTable(
+  "proj_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projProjects.id, { onDelete: "cascade" }),
+    noteId: uuid("note_id").references((): AnyPgColumn => projNotes.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    contentType: text("content_type").notNull().default("application/octet-stream"),
+    size: integer("size").notNull().default(0),
+    data: text("data").notNull(),
+    /** Who added it (a name, kept when the person is gone) */
+    author: text("author").notNull().default(""),
+    createdAt: created(),
+  },
+  (t) => [index("proj_files_project_idx").on(t.projectId), index("proj_files_note_idx").on(t.noteId)],
 );
 
 /** The team of a new-format project (the lead is one of them too) */

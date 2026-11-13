@@ -83,7 +83,7 @@ export type Group = {
 type Folder = "work";
 // the technicians' timesheets and expenses are not approved here any more: they are approved when sent (Admin › Temps et dépenses);
 // only the expenses billed back to a client are work to bill, so that tab stays
-const FOLDERS: { key: Folder; icon: LucideIcon; tabs: Kind[] }[] = [{ key: "work", icon: Hammer, tabs: ["labour", "charge", "expense", "contract", "milestone", "project"] }];
+const FOLDERS: { key: Folder; icon: LucideIcon; tabs: Kind[] }[] = [{ key: "work", icon: Hammer, tabs: ["labour", "charge", "expense", "contract", "project"] }];
 export const TAB_ICON: Record<Kind | "timesheets", LucideIcon> = {
   labour: Hammer,
   charge: Package,
@@ -289,10 +289,15 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([ym, list]) => {
         const m = new Map<string, { name: string; items: Item[] }>();
-        for (const i of list) m.set(i.clientId, { name: i.clientName, items: [...(m.get(i.clientId)?.items ?? []), i] });
+        // the project time: inside the month, one folder per project (number · client), the time to approve under it
+        for (const i of list) {
+          const key = kind === "project" ? (i.ticketNumber ?? i.clientId) : i.clientId;
+          const name = kind === "project" ? [i.ticketNumber, i.clientName].filter(Boolean).join(" · ") : i.clientName;
+          m.set(key, { name, items: [...(m.get(key)?.items ?? []), i] });
+        }
         return { ym, items: list, groups: [...m.entries()] };
       });
-  }, [items]);
+  }, [items, kind]);
   // every month starts folded
   const [openMonths, setOpenMonths] = useState<Set<string>>(new Set());
   const toggleMonth = (ym: string) =>
@@ -380,7 +385,7 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
           <InlineNumber
             value={i.quantityX100 / 100}
             lang={lang}
-            label={t(i.kind === "labour" ? "approvals.hours" : "approvals.quantity")}
+            label={t(i.kind === "labour" || i.kind === "project" ? "approvals.hours" : "approvals.quantity")}
             onSave={(quantity) => edit.mutate({ id: i.id, patch: { quantity } })}
           />
         ) : (
@@ -565,8 +570,8 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                   <span className="w-4" />
                   <span>{t("approvals.col.date")}</span>
                   <span>{t("approvals.col.description")}</span>
-                  <span className="text-right">{t(kind === "labour" ? "approvals.col.hours" : "approvals.col.qty")}</span>
-                  <span className="text-right">{t(kind === "labour" ? "approvals.col.rate" : "approvals.col.unitPrice")}</span>
+                  <span className="text-right">{t(kind === "labour" || kind === "project" ? "approvals.col.hours" : "approvals.col.qty")}</span>
+                  <span className="text-right">{t(kind === "labour" || kind === "project" ? "approvals.col.rate" : "approvals.col.unitPrice")}</span>
                   <span className="text-right">{t("approvals.col.amount")}</span>
                   <span />
                 </li>

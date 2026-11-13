@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { BillingFields, billingPayload, type BillingValue } from "./ProjBilling";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -25,6 +28,34 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
 
   const [description, setDescription] = useState(project.description);
   const [salesNotes, setSalesNotes] = useState(project.salesNotes);
+  const confirm = useConfirm();
+  const b0 = project.billing;
+  const [billing, setBilling] = useState<BillingValue>({
+    mode: b0.mode,
+    contractId: b0.contractId ?? "",
+    rate: b0.hourlyRate == null ? "" : String(b0.hourlyRate),
+    price: b0.fixedPrice == null ? "" : String(b0.fixedPrice),
+    expires: b0.bankExpiresOn ?? "",
+  });
+  const clientId = project.client?.id ?? "";
+  const saveBilling = useMutation({
+    mutationFn: () => api.patch(`/proj/${project.id}`, billingPayload(billing)),
+    onSuccess: () => {
+      toast.success(t("projBill.saved"));
+      void qc.invalidateQueries({ queryKey: ["proj"] });
+    },
+    onError: (e) => toast.error(projError(t, e)),
+  });
+  const bill = useMutation({
+    mutationFn: () => api.post(`/proj/${project.id}/bill`, {}),
+    onSuccess: () => {
+      toast.success(t("projBill.billDone"));
+      void qc.invalidateQueries({ queryKey: ["proj"] });
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+    },
+    onError: (e) => toast.error(projError(t, e)),
+  });
+  const sold = project.billing.mode === "fixed" || project.billing.mode === "bank";
 
   const save = useMutation({
     mutationFn: (fields: Record<string, string>) => api.patch(`/proj/${project.id}`, fields),
@@ -81,6 +112,30 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
               />
             </div>
             {!canEdit && <p className="text-xs text-muted-foreground">{t("projWork.info.readOnly")}</p>}
+          </section>
+
+          <section className="space-y-3">
+            <BillingFields value={billing} onChange={setBilling} clientId={clientId} disabled={!canEdit || Boolean(b0.billedAt)} />
+            {b0.billedAt && <p className="text-xs text-muted-foreground">{t("projBill.locked")}</p>}
+            {canEdit && !b0.billedAt && (
+              <Button type="button" size="sm" disabled={saveBilling.isPending} onClick={() => saveBilling.mutate()}>
+                {t("projBill.save")}
+              </Button>
+            )}
+            {sold && !b0.billedAt && can("accounting.manage") && project.billing.mode === "fixed" && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={bill.isPending}
+                onClick={async () => {
+                  if (await confirm({ title: t("projBill.billConfirm") })) bill.mutate();
+                }}
+              >
+                {t("projBill.billNow")}
+              </Button>
+            )}
+            {b0.billedAt && <p className="text-xs text-emerald-300">{t("projBill.billedAt")}</p>}
           </section>
 
           <section className="space-y-3">

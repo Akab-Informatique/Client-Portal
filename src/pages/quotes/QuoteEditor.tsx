@@ -26,6 +26,7 @@ import { QuoteDocument, type DocData } from "./QuoteDocument";
 import { LineAdder } from "./LineAdder";
 import { MarginsPanel } from "./Margins";
 import { DepositDialog } from "./DepositDialog";
+import { useMakeProject } from "@/pages/proj/useMakeProject";
 import { fromCents, fromPct, fromQty, parseNum, STATUS_STYLE, toCents, toPct, toQtyX100, useQuoteClients, useQuoteStaff, type Quote, type QuoteProduct, type QuoteService } from "./shared";
 
 /** A line as it is typed: numbers stay text until saved, so "12," and "1 299" can be written. */
@@ -237,6 +238,7 @@ export function QuoteEditor() {
     onError: (e) => toast.error(errorText(t, e)),
   });
   const [deposit, setDeposit] = useState(false);
+  const makeProject = useMakeProject();
   /** A deposit can be invoiced: accepted, a CRM client, something to pay now, none made yet (or it was voided) */
   const canDeposit = (q: Quote) => can("accounting.manage") && q.status === "accepted" && q.totals.subtotalCents > 0 && (!q.depositInvoiceId || Boolean(q.depositVoided));
 
@@ -604,6 +606,11 @@ export function QuoteEditor() {
                 >
                   <Receipt className="size-4 shrink-0" /> {t("quotes.deposit.badge", { pct: (quote.depositPercentX100 ?? 0) / 100, number: quote.depositNumber, total: money(quote.depositTotalCents ?? 0, i18n.language) })}
                 </a>
+              )}
+              {quote && !isNew && (status === "accepted" || status === "sent") && quote.clientId && can("proj.edit") && can("quotes.view") && !quote.projectNumber && (
+                <Button variant="outline" className="w-full" disabled={busy || makeProject.pending} onClick={() => void makeProject.fromQuote(quote.id)}>
+                  <FolderKanban className="size-4" /> {t("projBill.fromQuote.button")}
+                </Button>
               )}
               {quote && canDeposit(quote) && (
                 <Button variant="outline" className="w-full" disabled={busy} onClick={() => setDeposit(true)}>
