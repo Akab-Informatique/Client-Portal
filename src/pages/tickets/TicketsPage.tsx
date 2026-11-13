@@ -38,7 +38,7 @@ import {
   UserX,
 
   X,
-  type LucideIcon, CalendarPlus, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle, Hand } from "lucide-react";
+  type LucideIcon, CalendarPlus, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle, Hand, FolderPlus } from "lucide-react";
 import { HiddenBadge, ManagedBadge, useManagedCompanies, useTakeOver, type ManagedCompany } from "./managed";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -81,6 +81,10 @@ import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
+import { useProjectRows } from "@/pages/proj/shared";
+import { KindLegend, KindSwitch, ProjRow, filterProjectRows, type ProjKind } from "@/pages/proj/ProjRows";
+import { ProjView } from "@/pages/proj/ProjView";
+import { NewProjDialog } from "@/pages/proj/NewProjDialog";
 
 type Saved = { id: string; name: string; query: string; pinned?: boolean };
 type SetFn = (patch: Record<string, string | null>) => void;
@@ -89,6 +93,7 @@ type SetFn = (patch: Record<string, string | null>) => void;
 function canonical(p: URLSearchParams | string) {
   const src = new URLSearchParams(p);
   src.delete("ticket");
+  src.delete("pj");
   return new URLSearchParams([...src].sort(([a], [b]) => a.localeCompare(b))).toString();
 }
 
@@ -122,6 +127,9 @@ export function TicketsPage() {
   const { data: managedCompanies = [] } = useManagedCompanies(canManaged);
   const takeOver = useTakeOver();
   const [creating, setCreating] = useState(false);
+  // projects (new format, src/pages/proj): the new-project window
+  const [creatingProj, setCreatingProj] = useState(false);
+  const me = useMe();
   // tickets ticked in the list (several at a time: the bar above the filters)
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const qc = useQueryClient();
@@ -203,6 +211,27 @@ export function TicketsPage() {
     );
   const activeFilters = FILTER_KEYS.filter((k) => k !== "sort" && k !== "q" && (k !== "selfManaged" || canManaged) && params.get(k));
 
+  // Projects (new format) beside the tickets: Tout / Billets / Projets (kind=all|tickets|projects in the address).
+  // Shown on the table and the compact view only; hidden when a ticket-only filter is on (status, priority, due…).
+  const canProj = can("proj.view");
+  const kind = (["tickets", "projects"].includes(params.get("kind") ?? "") ? params.get("kind") : "all") as ProjKind;
+  const projectsOn = canProj && kind !== "tickets" && layout !== "kanban";
+  const { data: projectRows } = useProjectRows(projectsOn);
+  const projectsFit = view !== "due" && activeFilters.every((k) => k === "assignee" || k === "company");
+  const projects =
+    projectsOn && projectsFit && projectRows
+      ? filterProjectRows(projectRows, {
+          q: params.get("q") ?? "",
+          view,
+          meId: me.id,
+          assignee: (params.get("assignee") ?? "").split(",").filter(Boolean),
+          company: (params.get("company") ?? "").split(",").filter(Boolean),
+          companyNames: new Map((data?.facets.companies ?? []).map((c) => [String(c.id), c.name])),
+        })
+      : [];
+  const openProject = (id: string) => set({ pj: id });
+  const pj = params.get("pj");
+
   // Shortcuts: "/" search, "n" new ticket (not while typing)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -244,6 +273,11 @@ export function TicketsPage() {
           <GlobalSearch demo={Boolean(data?.demo)} />
           {can("tickets.ai") && data && (data.ai ? <AiPlanButton visibleIds={data.items.map((x) => x.id)} /> : <AiSetupHint label={t("tickets.ai.plan")} />)}
           {can("tickets.edit") && data && <PendingMails facets={data.facets} onCreated={(id) => ws.open(id)} />}
+          {canProj && can("proj.edit") && (
+            <Button size="sm" variant="outline" onClick={() => setCreatingProj(true)} className="h-9 border-violet-400/50 font-semibold text-violet-200 hover:bg-violet-500/10 hover:text-violet-100">
+              <FolderPlus className="size-4" /> {t("projList.newProject")}
+            </Button>
+          )}
           {can("tickets.edit") && (
             <Button size="sm" onClick={() => setCreating(true)} className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105">
               <Plus className="size-4" /> {t("tickets.new")}
@@ -274,6 +308,12 @@ export function TicketsPage() {
           <SlidersHorizontal className="size-4 shrink-0 text-primary" />
           <span className="text-sm font-semibold">{t("tickets.filtersTitle")}</span>
           <ViewMenu view={view} counts={data?.counts} params={params} apply={apply} />
+          {canProj && (
+            <div className="flex flex-wrap items-center gap-2">
+              <KindSwitch value={kind} onChange={(k) => set({ kind: k === "all" ? null : k })} />
+              <KindLegend />
+            </div>
+          )}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <LayoutSwitch value={layout} onChange={setLayout} />
             <SortMenu value={params.get("sort") ?? "milestone"} aiPlan={data?.aiPlan ?? null} onChange={(v) => {
@@ -388,15 +428,26 @@ export function TicketsPage() {
         ) : layout === "kanban" ? (
           // boards of the team: the tickets of this list, sorted on columns (only in this view)
           <KanbanBoard items={data.items} canEdit={can("tickets.edit")} onOpen={(id) => ws.open(id)} facets={data.facets} />
-        ) : data.items.length === 0 ? (
+        ) : data.items.length === 0 && projects.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-6 py-16 text-center text-sm text-muted-foreground">
             <Inbox className="size-8 opacity-50" />
             {activeFilters.length || params.get("q") ? t("tickets.emptyFiltered") : t(`tickets.empty.${view}`)}
           </div>
         ) : layout === "compact" ? (
-          <CompactList items={data.items} activeIds={new Set([...(ws.openId ? [ws.openId] : []), ...ws.docked.map((d) => d.id)])} onOpen={(id) => ws.open(id)} />
+          <CompactList
+            items={data.items}
+            activeIds={new Set([...(ws.openId ? [ws.openId] : []), ...ws.docked.map((d) => d.id)])}
+            onOpen={(id) => ws.open(id)}
+            projects={projects}
+            onOpenProject={openProject}
+            ticketTint
+          />
         ) : (
           <ul className="divide-y divide-[color:var(--glass-border)]">
+            {/* projects first (violet), then the tickets (amber tint) */}
+            {projects.map((p) => (
+              <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />
+            ))}
             {data.items.map((tk, i) => (
               <TicketRow
                 key={tk.id}
@@ -431,9 +482,9 @@ export function TicketsPage() {
             ))}
           </ul>
         )}
-        {data && data.items.length > 0 && (
+        {data && (data.items.length > 0 || projects.length > 0) && (
           <div className="border-t border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            {t("tickets.shown", { count: data.items.length })}
+            {[projects.length > 0 ? t("projList.shownProjects", { count: projects.length }) : null, data.items.length > 0 ? t("tickets.shown", { count: data.items.length }) : null].filter(Boolean).join(" · ")}
           </div>
         )}
       </div>
@@ -442,6 +493,17 @@ export function TicketsPage() {
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(null)} tk={addingDay} />}
       {data && accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(null)} tk={accepting} statuses={data.facets.statuses} />}
       {data && <NewTicketDialog open={creating} onOpenChange={setCreating} facets={data.facets} onCreated={(id) => ws.open(id)} />}
+      {/* a project opens with ?pj=<id> in the address (kept with the other filters), closing removes it */}
+      {canProj && pj && <ProjView id={pj} onClose={() => set({ pj: null })} />}
+      {canProj && creatingProj && (
+        <NewProjDialog
+          onClose={() => setCreatingProj(false)}
+          onCreated={(id) => {
+            setCreatingProj(false);
+            set({ pj: id });
+          }}
+        />
+      )}
     </div>
     {smsInbox !== null && <SmsInboxDialog initialId={smsInbox || null} onClose={() => setSmsInbox(null)} />}
     </div>
@@ -943,6 +1005,8 @@ function TicketRow({
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
           picked && "bg-[color:var(--gold)]/[0.07]",
+          // a faint amber tint: a ticket is gold, a project violet (see ProjRow)
+          !picked && "bg-[color:var(--gold)]/[0.035]",
           // Critical pops and moves, high pops (open tickets only)
           tk.statusKind !== "complete" && tk.priorityKind === "critical" && "ticket-critical",
           tk.statusKind !== "complete" && tk.priorityKind === "high" && "ticket-high",
@@ -1037,7 +1101,7 @@ function TicketRow({
         <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind, 1, tk)} />
         <span className="min-w-0 xl:[order:var(--o-ticket)]">
           <span className="flex flex-wrap items-baseline gap-x-2">
-            <span className="shrink-0 font-mono text-[11px] text-muted-foreground group-hover:text-primary">{tk.number}</span>
+            <span className="shrink-0 rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-mono text-[11px] font-semibold text-primary">{tk.number}</span>
             <span className="min-w-0 break-words font-medium">{tk.title}</span>
             <ManagedBadge managed={tk.managed} />
             <HiddenBadge hidden={tk.hiddenFromDelegates} />

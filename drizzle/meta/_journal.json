@@ -1289,6 +1289,13 @@
       "when": 1794577751201,
       "tag": "0183_broken_mephisto",
       "breakpoints": true
+    },
+    {
+      "idx": 184,
+      "version": "7",
+      "when": 1794599286114,
+      "tag": "0184_parched_thundra",
+      "breakpoints": true
     }
   ]
 }

@@ -16,6 +16,8 @@ import { cn, initials } from "@/lib/utils";
 import { useCan, useMe } from "@/lib/session";
 import { cpState, CP_TONE, CONFLICT_CLASS, dateConflict, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 import { HiddenBadge, ManagedBadge } from "./managed";
+import { ProjCompactRow } from "@/pages/proj/ProjRows";
+import type { ProjectRow } from "@/pages/proj/shared";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
 /** standard: the table as it always was · kanban: boards the team sorts tickets on · compact: one short line per ticket */
@@ -238,7 +240,25 @@ export function ColumnHeader<C extends string>({ cols, labels, style }: { cols: 
 }
 
 /** Name, client, priority, checkpoint, due date and status — one line each. With `facets`, each of them is changed in place. */
-export function CompactList({ items, activeIds, onOpen, facets }: { items: CompactTicket[]; activeIds: Set<number>; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
+export function CompactList({
+  items,
+  activeIds,
+  onOpen,
+  facets,
+  projects,
+  onOpenProject,
+  ticketTint = false,
+}: {
+  items: CompactTicket[];
+  activeIds: Set<number>;
+  onOpen: (id: number) => void;
+  facets?: TicketList["facets"];
+  /** Projects (new format) shown in a group at the top; only the Tickets page passes them */
+  projects?: ProjectRow[];
+  onOpenProject?: (id: string) => void;
+  /** The Tickets page: a faint amber tint and an amber number pill on each ticket line */
+  ticketTint?: boolean;
+}) {
   const { t } = useTranslation();
   const txt = useChoiceText();
   const qc = useQueryClient();
@@ -260,10 +280,13 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
       <div style={{ minWidth: cols.minWidth }}>
         <ColumnHeader cols={cols} labels={labels} style={gridStyle} />
         <ul className="divide-y divide-[color:var(--glass-border)]">
+          {projects?.map((p) => (
+            <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />
+          ))}
           {items.map((tk) => {
             const title = (
               <span className="flex min-w-0 items-baseline gap-2">
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{tk.number}</span>
+                <span className={cn("shrink-0 font-mono text-[11px]", ticketTint ? "rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-semibold text-primary" : "text-muted-foreground")}>{tk.number}</span>
                 <span className="truncate font-medium" title={`${tk.title} · ${tk.company.name}`}>
                   {tk.title}
                 </span>
@@ -276,7 +299,7 @@ export function CompactList({ items, activeIds, onOpen, facets }: { items: Compa
                 {tk.company.name}
               </span>
             );
-            const rowClass = cn("relative grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
+            const rowClass = cn("relative grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", ticketTint && "bg-[color:var(--gold)]/[0.035]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
             if (edit && facets) {
               const dueDay = new Date(tk.dueAt);
               const dueValue = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, "0")}-${String(dueDay.getDate()).padStart(2, "0")}`;

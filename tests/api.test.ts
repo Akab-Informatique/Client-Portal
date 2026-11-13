@@ -12662,3 +12662,237 @@ describe("projects archive: administrators only, nothing for clients", () => {
     await db().update(schema.roles).set({ permissions: [...techRole.permissions, "projects.view", "projects.edit"] }).where(eq(schema.roles.id, techRole.id));
   });
 });
+
+describe("new-format projects (proj)", () => {
+  /** The users of the suite (lead, assignee, team) */
+  const userOf = async (email: string) => {
+    const [u] = await db().select().from(schema.users).where(eq(schema.users.email, email));
+    return u;
+  };
+
+  it("numbers continue the archive; the list filters, the lead and the team are kept", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const adminUser = await userOf("admin@akab.local");
+    const techUser = await userOf("tech@akab.local");
+    // the archive has reached P-1900: the new format continues after it
+    await db().insert(schema.projects).values({ number: "P-1900", name: "Archive" });
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj client inc.", portalEnabled: true }).returning();
+    const [contact] = await db().insert(schema.clientContacts).values({ clientId: client.id, firstName: "Ana", lastName: "Proj", email: "ana@proj.example" }).returning();
+
+    const a = await tech.post("/api/proj", { name: "Refonte réseau", clientId: client.id, memberIds: [adminUser.id], soldHours: 12.5, startDate: "2026-11-02", dueDate: "2026-12-15", contactId: contact.id });
+    expect(a.status).toBe(201);
+    expect(a.json).toMatchObject({ number: "P-1901", name: "Refonte réseau", status: "planning", client: { id: client.id, name: client.name }, lead: { id: techUser.id }, soldHours: 12.5, contact: { id: contact.id, name: "Ana Proj" } });
+    expect(a.json.members.map((m: any) => m.id).sort()).toEqual([adminUser.id, techUser.id].sort());
+    const b = await admin.post("/api/proj", { name: "Installation caméras", leadId: adminUser.id });
+    expect(b.json.number).toBe("P-1902");
+    expect(b.json.lead.id).toBe(adminUser.id);
+
+    // people and dates are checked
+    expect((await tech.post("/api/proj", { name: "X", memberIds: ["00000000-0000-4000-8000-000000000000"] })).json.error).toBe("person_invalid");
+    expect((await tech.post("/api/proj", { name: "X", startDate: "2026-12-02", dueDate: "2026-12-01" })).json.error).toBe("dates");
+    expect((await tech.post("/api/proj", { name: "X", contactId: contact.id })).json.error).toBe("contact_invalid");
+
+    // the list: open by default, due day first (none last)
+    const open = (await tech.get("/api/proj")).json;
+    expect(open.map((p: any) => p.number)).toEqual(expect.arrayContaining(["P-1901", "P-1902"]));
+    expect(open.findIndex((p: any) => p.number === "P-1901")).toBeLessThan(open.findIndex((p: any) => p.number === "P-1902"));
+    expect((await tech.get(`/api/proj?member=${adminUser.id}`)).json.map((p: any) => p.number)).toEqual(expect.arrayContaining(["P-1901", "P-1902"]));
+    expect((await tech.get("/api/proj?q=refonte%20reseau")).json.map((p: any) => p.number)).toEqual(["P-1901"]);
+    expect((await tech.get(`/api/proj?client=${client.id}`)).json.map((p: any) => p.number)).toEqual(["P-1901"]);
+    expect((await tech.get("/api/proj?status=bogus")).status).toBe(400);
+    expect((await tech.get("/api/proj/00000000-0000-4000-8000-000000000000")).status).toBe(404);
+  });
+
+  it("rights: without proj rights 403; a technician cannot delete; the administrator can", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const [techRole] = await db().select().from(schema.roles).where(and(eq(schema.roles.slug, "technician"), isNull(schema.roles.clientId)));
+    const saved = techRole.permissions;
+    await db().update(schema.roles).set({ permissions: saved.filter((p) => !p.startsWith("proj.")) }).where(eq(schema.roles.id, techRole.id));
+    try {
+      expect((await tech.get("/api/proj")).status).toBe(403);
+      expect((await tech.post("/api/proj", { name: "Refusé" })).status).toBe(403);
+    } finally {
+      await db().update(schema.roles).set({ permissions: saved }).where(eq(schema.roles.id, techRole.id));
+    }
+    expect((await tech.get("/api/proj")).status).toBe(200);
+
+    const made = (await admin.post("/api/proj", { name: "À supprimer" })).json;
+    expect((await tech.del(`/api/proj/${made.id}`)).status).toBe(403);
+    expect((await admin.del(`/api/proj/${made.id}`)).status).toBe(200);
+    expect((await admin.get(`/api/proj/${made.id}`)).status).toBe(404);
+  });
+
+  it("tasks: given with a bell, another project's task is not found, a closed project takes none", async () => {
+    const tech = await signIn("tech@akab.local");
+    const adminUser = await userOf("admin@akab.local");
+    const p = (await tech.post("/api/proj", { name: "Tâches" })).json;
+    const other = (await tech.post("/api/proj", { name: "Autre" })).json;
+    const t1 = await tech.post(`/api/proj/${p.id}/tasks`, { title: "Poser le serveur", priority: "high", assigneeId: adminUser.id, dueDate: "2026-11-20" });
+    expect(t1.status).toBe(201);
+    expect(t1.json).toMatchObject({ title: "Poser le serveur", priority: "high", status: "todo", assignee: { id: adminUser.id }, dueDate: "2026-11-20", position: 0 });
+    const bell = await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, adminUser.id), eq(schema.notifications.type, "proj.assigned")));
+    expect(bell.some((n) => n.link === `/tickets?pj=${p.id}`)).toBe(true);
+    const t2 = (await tech.post(`/api/proj/${p.id}/tasks`, { title: "Configurer le pare-feu" })).json;
+    expect(t2.position).toBe(1);
+    expect((await tech.post(`/api/proj/${p.id}/tasks`, { title: "X", assigneeId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("person_invalid");
+
+    // a task of another project is not found through this project
+    const foreign = (await tech.post(`/api/proj/${other.id}/tasks`, { title: "Ailleurs" })).json;
+    expect((await tech.get(`/api/proj/${p.id}/tasks/${foreign.id}`)).status).toBe(404);
+    expect((await tech.patch(`/api/proj/${p.id}/tasks/${foreign.id}`, { status: "doing" })).status).toBe(404);
+    expect((await tech.del(`/api/proj/${p.id}/tasks/${foreign.id}`)).status).toBe(404);
+
+    // the order: exactly this project's tasks
+    expect((await tech.post(`/api/proj/${p.id}/tasks/reorder`, { ids: [t2.id] })).json.error).toBe("task_invalid");
+    expect((await tech.post(`/api/proj/${p.id}/tasks/reorder`, { ids: [t2.id, t1.json.id] })).status).toBe(200);
+    expect((await tech.get(`/api/proj/${p.id}`)).json.tasks.map((t: any) => t.id)).toEqual([t2.id, t1.json.id]);
+
+    // the status follows: done sets the day, reopening clears it
+    const doing = await tech.patch(`/api/proj/${p.id}/tasks/${t1.json.id}`, { status: "doing", priority: "urgent" });
+    expect(doing.json).toMatchObject({ status: "doing", priority: "urgent", doneAt: null });
+    expect((await tech.patch(`/api/proj/${p.id}/tasks/${t1.json.id}`, { status: "done" })).json.doneAt).not.toBeNull();
+    expect((await tech.patch(`/api/proj/${p.id}/tasks/${t1.json.id}`, { status: "todo" })).json.doneAt).toBeNull();
+
+    // a closed project takes no new task; reopened, it does
+    expect((await tech.patch(`/api/proj/${p.id}`, { status: "done" })).json.status).toBe("done");
+    expect((await tech.post(`/api/proj/${p.id}/tasks`, { title: "Trop tard" })).json.error).toBe("project_closed");
+    expect((await tech.patch(`/api/proj/${p.id}`, { status: "active" })).json.status).toBe("active");
+    expect((await tech.post(`/api/proj/${p.id}/tasks`, { title: "Encore" })).status).toBe(201);
+  });
+
+  it("notes: tag tasks; a reply needs a client and a recipient; only the author or a manager deletes", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj notes inc.", portalEnabled: true }).returning();
+    const p = (await tech.post("/api/proj", { name: "Notes" })).json;
+    const t = (await tech.post(`/api/proj/${p.id}/tasks`, { title: "Vérifier le câble" })).json;
+    const other = (await tech.post("/api/proj", { name: "Autre notes" })).json;
+    const foreign = (await tech.post(`/api/proj/${other.id}/tasks`, { title: "Ailleurs" })).json;
+
+    const note = await tech.post(`/api/proj/${p.id}/notes`, { text: "Qui valide le plan ?", taskIds: [t.id] });
+    expect(note.status).toBe(201);
+    expect(note.json).toMatchObject({ internal: true, text: "Qui valide le plan ?", tasks: [{ id: t.id, title: "Vérifier le câble" }], emailed: [], failed: [] });
+    expect((await tech.post(`/api/proj/${p.id}/notes`, { text: "x", taskIds: [foreign.id] })).json.error).toBe("task_invalid");
+    // a reply to the client: no client yet, then no recipient, then the mail
+    expect((await tech.post(`/api/proj/${p.id}/notes`, { text: "x", internal: false, email: true, to: ["ana@proj.example"] })).json.error).toBe("project_no_client");
+    const cp = (await tech.post("/api/proj", { name: "Chez le client", clientId: client.id })).json;
+    expect((await tech.post(`/api/proj/${cp.id}/notes`, { text: "Bonjour", internal: false, email: true })).json.error).toBe("reply_needs_recipient");
+    expect((await tech.post(`/api/proj/${cp.id}/notes`, { text: "Bonjour", internal: false, email: true, to: ["pas-un-courriel"] })).status).toBe(400);
+    const reply = await tech.post(`/api/proj/${cp.id}/notes`, { text: "Le serveur est prêt.", internal: false, email: true, to: ["ana@proj.example"] });
+    expect(reply.status).toBe(201);
+    expect(reply.json.emailed.length + reply.json.failed.length).toBe(1);
+    expect(reply.json.internal).toBe(false);
+
+    // deleting: the author yes; someone else's note only with proj.manage
+    const mine = (await tech.post(`/api/proj/${p.id}/notes`, { text: "À retirer" })).json;
+    expect((await tech.del(`/api/proj/${p.id}/notes/${mine.id}`)).status).toBe(200);
+    const theirs = (await admin.post(`/api/proj/${p.id}/notes`, { text: "Note de l'administrateur" })).json;
+    expect((await tech.del(`/api/proj/${p.id}/notes/${theirs.id}`)).status).toBe(403);
+    expect((await admin.del(`/api/proj/${p.id}/notes/${theirs.id}`)).status).toBe(200);
+  });
+
+  it("time: an entry on my timesheet covers and finishes tasks, counts in the hours; ownership and closed projects are checked", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const techUser = await userOf("tech@akab.local");
+    const p = (await tech.post("/api/proj", { name: "Heures" })).json;
+    const other = (await tech.post("/api/proj", { name: "Heures autre" })).json;
+    const t1 = (await tech.post(`/api/proj/${p.id}/tasks`, { title: "Installer" })).json;
+    const t2 = (await tech.post(`/api/proj/${p.id}/tasks`, { title: "Tester" })).json;
+    const foreign = (await tech.post(`/api/proj/${other.id}/tasks`, { title: "Ailleurs" })).json;
+
+    const e = await tech.post(`/api/proj/${p.id}/time`, { hours: 1.5, note: "Installation", taskIds: [t1.id], doneTaskIds: [t1.id] });
+    expect(e.status).toBe(201);
+    const eid = e.json.id;
+    const det = (await tech.get(`/api/proj/${p.id}`)).json;
+    expect(det.worked).toMatchObject({ hours: 1.5, byPerson: [{ userId: techUser.id, name: techUser.name, hours: 1.5 }] });
+    expect((await tech.get("/api/proj")).json.find((x: any) => x.id === p.id).workedHours).toBe(1.5);
+    expect(det.tasks.find((t: any) => t.id === t1.id)).toMatchObject({ status: "done" });
+    expect(det.tasks.find((t: any) => t.id === t1.id).doneAt).not.toBeNull();
+    const times = (await tech.get(`/api/proj/${p.id}/time`)).json;
+    expect(times[0]).toMatchObject({ id: eid, hours: 1.5, billable: true, note: "Installation", taskIds: [t1.id] });
+    expect((await tech.get(`/api/proj/${p.id}/time/mine`)).json.some((x: any) => x.id === eid)).toBe(true);
+    const [row] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, eid));
+    expect(row).toMatchObject({ projId: p.id, source: "project", ticketNumber: p.number, hoursX100: 150, userId: techUser.id });
+    expect((await tech.get(`/api/proj/${p.id}/tasks/${t1.id}`)).json.time).toEqual([expect.objectContaining({ id: eid, done: true })]);
+
+    // a task finished with an entry of mine: the entry is linked and the task is done
+    const e2 = await tech.post(`/api/proj/${p.id}/time`, { hours: 0.5 });
+    const patched = await tech.patch(`/api/proj/${p.id}/tasks/${t2.id}`, { entryId: e2.json.id });
+    expect(patched.status).toBe(200);
+    expect(patched.json.status).toBe("done");
+    const link = await db().select().from(schema.projTimeTasks).where(and(eq(schema.projTimeTasks.entryId, e2.json.id), eq(schema.projTimeTasks.taskId, t2.id)));
+    expect(link[0].done).toBe(true);
+    // someone else's entry, or another project's task: not found / refused
+    const ae = await admin.post(`/api/proj/${p.id}/time`, { hours: 1 });
+    expect((await tech.patch(`/api/proj/${p.id}/tasks/${t1.id}`, { entryId: ae.json.id })).status).toBe(404);
+    expect((await tech.put(`/api/proj/${p.id}/time/${ae.json.id}/tasks`, { taskIds: [] })).status).toBe(403);
+    expect((await tech.put(`/api/proj/${p.id}/time/${eid}/tasks`, { taskIds: [t2.id], doneTaskIds: [] })).json.ok).toBe(true);
+    expect((await tech.post(`/api/proj/${p.id}/time`, { hours: 1, taskIds: [foreign.id] })).json.error).toBe("task_invalid");
+    expect((await tech.get(`/api/proj/${p.id}/time`)).json.find((x: any) => x.id === eid).taskIds).toEqual([t2.id]);
+
+    // removing: mine yes, anyone's no (for a technician)
+    expect((await tech.del(`/api/proj/${p.id}/time/${ae.json.id}`)).status).toBe(403);
+    expect((await tech.del(`/api/proj/${p.id}/time/${e2.json.id}`)).json).toEqual({ ok: true });
+
+    // a closed project takes no time
+    await tech.patch(`/api/proj/${p.id}`, { status: "cancelled" });
+    expect((await tech.post(`/api/proj/${p.id}/time`, { hours: 1 })).json.error).toBe("project_closed");
+    await tech.patch(`/api/proj/${p.id}`, { status: "active" });
+  });
+
+  it("timer: start, pause, resume and stop make the entry; discard throws it away; the list shows mine", async () => {
+    const tech = await signIn("tech@akab.local");
+    const p = (await tech.post("/api/proj", { name: "Chronomètre" })).json;
+    const s = await tech.post(`/api/proj/${p.id}/timer/start`);
+    expect(s.status).toBe(200);
+    expect(s.json).toMatchObject({ paused: false });
+    expect((await tech.post(`/api/proj/${p.id}/timer/start`)).json.startedAt).toBe(s.json.startedAt);
+    expect((await tech.get(`/api/proj/${p.id}/timer`)).json).not.toBeNull();
+    expect((await tech.get("/api/proj/timers")).json.map((x: any) => x.projectId)).toContain(p.id);
+    const paused = await tech.post(`/api/proj/${p.id}/timer/pause`);
+    expect(paused.json.paused).toBe(true);
+    const again = await tech.post(`/api/proj/${p.id}/timer/pause`);
+    expect(again.json.seconds).toBe(paused.json.seconds);
+    expect((await tech.post(`/api/proj/${p.id}/timer/resume`)).json.paused).toBe(false);
+    const stopped = await tech.post(`/api/proj/${p.id}/timer/stop`, { note: "Chronomètre" });
+    expect(stopped.status).toBe(201);
+    expect((await tech.get(`/api/proj/${p.id}/timer`)).json).toBeNull();
+    // a few seconds counted: a quarter hour, the least that is kept
+    const [row] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, stopped.json.id));
+    expect(row.hoursX100).toBe(25);
+    // discard, and stop with no timer
+    await tech.post(`/api/proj/${p.id}/timer/start`);
+    expect((await tech.post(`/api/proj/${p.id}/timer/discard`)).json).toEqual({ ok: true });
+    expect((await tech.get(`/api/proj/${p.id}/timer`)).json).toBeNull();
+    expect((await tech.post(`/api/proj/${p.id}/timer/stop`)).json.error).toBe("timer_not_found");
+  });
+
+  it("a project made from a quote keeps a snapshot; a technician without quotes.view is refused", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj quote inc.", portalEnabled: true }).returning();
+    const [other] = await db().insert(schema.clients).values({ name: "Zz Proj autre inc.", portalEnabled: true }).returning();
+    const q = await admin.post("/api/quotes", {
+      clientId: client.id,
+      prospectName: "Zz Proj quote inc.",
+      contactName: "Marie",
+      title: "Soumission serveur",
+      internalNotes: "Marge serrée",
+      notes: "Visible du client",
+      lines: [{ description: "Serveur", quantityX100: 100, unitPriceCents: 500000, recurrence: "once", taxable: true }],
+    });
+    expect(q.status).toBe(201);
+    const made = await admin.post("/api/proj", { name: "Serveur chez le client", quoteId: q.json.id });
+    expect(made.status).toBe(201);
+    expect(made.json).toMatchObject({ quoteId: q.json.id, client: { id: client.id }, salesNotes: "Marge serrée" });
+    expect(made.json.quote).toMatchObject({ number: q.json.number, title: "Soumission serveur", totalCents: expect.any(Number) });
+    expect(made.json.quote.lines).toHaveLength(1);
+    expect((await admin.post("/api/proj", { name: "X", clientId: other.id, quoteId: q.json.id })).json.error).toBe("quote_invalid");
+    expect((await tech.post("/api/proj", { name: "X", quoteId: q.json.id })).json.error).toBe("quote_forbidden");
+    expect((await tech.get(`/api/proj/quotes?clientId=${client.id}`)).json.error).toBe("quote_forbidden");
+    expect((await admin.get(`/api/proj/quotes?clientId=${client.id}`)).json.map((x: any) => x.id)).toContain(q.json.id);
+  });
+});

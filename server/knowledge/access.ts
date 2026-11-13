@@ -98,6 +98,7 @@ export const SECTION_ACCESS: Record<string, string[]> = {
   "Quote products become project charges; ordered / received (latest)": ["quotes.view", "projects.view"],
   "Project types (latest)": ["projects.view"],
   "Projects are an archive for now (latest)": ["projects.view"],
+  "Projects, new format (latest)": ["proj.view"],
   "Technician time SKU, and the charges shown when a quote becomes a project (latest)": ["quotes.view", "projects.view"],
   "Hours bank: top-up keeps every hour left (latest)": ["crm.view", "accounting.view"],
   "Self-managed clients, delegated technicians, company switcher (latest)": ["tickets.selfManaged", "admin.clients"],

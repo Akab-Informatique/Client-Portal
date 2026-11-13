@@ -2040,9 +2040,11 @@ export const timesheetEntries = pgTable(
     amountCents: bigint("amount_cents", { mode: "number" }),
     /** The ticket time entry (ticket_time_entries.id) this row mirrors, so a change on either follows on the other */
     ticketTimeId: uuid("ticket_time_id"),
+    /** The new-format project (proj_projects) the time was logged on; the old `project_id` stays for the archive */
+    projId: uuid("proj_id").references((): AnyPgColumn => projProjects.id, { onDelete: "set null" }),
     createdAt: created(),
   },
-  (t) => [index("timesheet_entries_user_date_idx").on(t.userId, t.date), index("timesheet_entries_client_idx").on(t.clientId)],
+  (t) => [index("timesheet_entries_user_date_idx").on(t.userId, t.date), index("timesheet_entries_client_idx").on(t.clientId), index("timesheet_entries_proj_idx").on(t.projId)],
 );
 
 /** Human resources file of an employee (the RH tab): hourly wage, and the weekly hours after which time counts as overtime. */
@@ -3704,4 +3706,146 @@ export const personalNotes = pgTable(
     updatedAt: updated(),
   },
   (t) => [index("personal_notes_user_idx").on(t.userId, t.kind)],
+);
+
+/** Snapshot of the quote a new-format project was made from (plain data, kept as it was sold) */
+export type ProjQuoteSnapshot = {
+  number: string;
+  title: string;
+  status: string;
+  totalCents: number;
+  lines: { description: string; details: string | null; quantityX100: number; unitPriceCents: number; recurrence: string; optional: boolean }[];
+  notes: string | null;
+};
+
+/** Projects, new format (Centre de commande › Projets): tasks assigned to the team, notes, and the time logged on them */
+export const projProjects = pgTable(
+  "proj_projects",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** P-1011… (continues the archive's numbers) */
+    number: text("number").notNull().unique(),
+    name: text("name").notNull(),
+    clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
+    leadId: uuid("lead_id").references(() => users.id, { onDelete: "set null" }),
+    contactId: uuid("contact_id").references(() => clientContacts.id, { onDelete: "set null" }),
+    status: text("status", { enum: ["planning", "active", "done", "cancelled"] }).notNull().default("planning"),
+    /** YYYY-MM-DD (Québec) */
+    startDate: text("start_date"),
+    dueDate: text("due_date"),
+    /** Hours sold for the project, in hundredths; none = no figure */
+    soldHoursX100: integer("sold_hours_x100"),
+    description: text("description").notNull().default(""),
+    /** Internal only (never printed for the client) */
+    salesNotes: text("sales_notes").notNull().default(""),
+    quoteId: uuid("quote_id").references(() => quotes.id, { onDelete: "set null" }),
+    quoteSnapshot: jsonb("quote_snapshot").$type<ProjQuoteSnapshot | null>(),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+  },
+  (t) => [index("proj_projects_status_idx").on(t.status), index("proj_projects_client_idx").on(t.clientId), index("proj_projects_lead_idx").on(t.leadId)],
+);
+
+/** The team of a new-format project (the lead is one of them too) */
+export const projMembers = pgTable(
+  "proj_members",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projProjects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    createdAt: created(),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
+);
+
+/** A task of a new-format project: a line of the checklist, given to one technician */
+export const projTasks = pgTable(
+  "proj_tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projProjects.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    priority: text("priority", { enum: ["low", "medium", "high", "urgent"] }).notNull().default("medium"),
+    status: text("status", { enum: ["todo", "doing", "done"] }).notNull().default("todo"),
+    assigneeId: uuid("assignee_id").references(() => users.id, { onDelete: "set null" }),
+    /** YYYY-MM-DD */
+    dueDate: text("due_date"),
+    position: integer("position").notNull().default(0),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("proj_tasks_project_idx").on(t.projectId, t.position), index("proj_tasks_assignee_idx").on(t.assigneeId)],
+);
+
+/** A note on a new-format project. Internal by default; a reply to the client is emailed (emailedTo: the addresses it went to). */
+export const projNotes = pgTable(
+  "proj_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projProjects.id, { onDelete: "cascade" }),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    text: text("text").notNull(),
+    internal: boolean("internal").notNull().default(true),
+    emailedTo: jsonb("emailed_to").$type<string[]>().notNull().default([]),
+    createdAt: created(),
+  },
+  (t) => [index("proj_notes_project_idx").on(t.projectId, t.createdAt)],
+);
+
+/** A note tags the tasks it is about */
+export const projNoteTasks = pgTable(
+  "proj_note_tasks",
+  {
+    noteId: uuid("note_id")
+      .notNull()
+      .references(() => projNotes.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => projTasks.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.noteId, t.taskId] })],
+);
+
+/** The tasks a time entry covered; `done`: that entry finished the task */
+export const projTimeTasks = pgTable(
+  "proj_time_tasks",
+  {
+    entryId: uuid("entry_id")
+      .notNull()
+      .references(() => timesheetEntries.id, { onDelete: "cascade" }),
+    taskId: uuid("task_id")
+      .notNull()
+      .references(() => projTasks.id, { onDelete: "cascade" }),
+    done: boolean("done").notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.entryId, t.taskId] }), index("proj_time_tasks_task_idx").on(t.taskId)],
+);
+
+/** One running timer per person per project (paused: base_seconds counts, paused_at set) */
+export const projTimers = pgTable(
+  "proj_timers",
+  {
+    projectId: uuid("project_id")
+      .notNull()
+      .references(() => projProjects.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    baseSeconds: integer("base_seconds").notNull().default(0),
+    pausedAt: timestamp("paused_at", { withTimezone: true }),
+  },
+  (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
 );
