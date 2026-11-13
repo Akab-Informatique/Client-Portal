@@ -16,7 +16,7 @@ import { ListBadge } from "./lists";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
 import { PRIORITY_STYLE, STATUS_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem } from "./shared";
 import { usePeople } from "./TaskDialog";
-import { DayProjects, MyTickets } from "./DayLists";
+import { MyTickets } from "./DayLists";
 import { DayTasks } from "./DayTasks";
 import { DayEdge } from "./DayEdge";
 import { AgendaCard } from "@/pages/tickets/Planning";
@@ -132,9 +132,9 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       : i.kind === "ptask"
         ? i.projectId && pws.openTask(i.projectId, i.refId)
         : i.kind === "pmilestone"
-          ? goTo(`/pipeline?section=projects&project=${i.projectId}&tab=milestones&milestone=${i.refId}`)
+          ? goTo(`/projects?project=${i.projectId}&tab=milestones&milestone=${i.refId}`)
           : i.kind === "pproject"
-            ? goTo(`/pipeline?section=projects&project=${i.refId}`)
+            ? goTo(`/projects?project=${i.refId}`)
             : onOpenTask(i.refId);
   const projectTasks = (data?.items ?? []).filter((i) => i.kind === "ptask");
 
@@ -299,7 +299,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           {/* the week, as on the Tickets page: a small square per day, and the priorities of the day picked below */}
           <AgendaCard compact filterTech={userId === me.id ? null : userId} />
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
-          {userId === me.id && can("projects.view") && <DayProjects />}
           {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" sortView="projectTasks" />}
           <DayTasks userId={userId} onOpenTask={onOpenTask} />
         </div>

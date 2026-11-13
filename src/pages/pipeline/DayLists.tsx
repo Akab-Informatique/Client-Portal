@@ -2,18 +2,16 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Pager } from "@/components/Pager";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
-import { BellRing, Columns3, Eye, Rows3, Search, FolderKanban, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, X, type LucideIcon } from "lucide-react";
+import { BellRing, Columns3, Eye, Rows3, Search, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, X, type LucideIcon } from "lucide-react";
 import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { ColumnHeader, CompactList, KanbanBoard, useColumns } from "@/pages/tickets/Layouts";
+import { CompactList, KanbanBoard } from "@/pages/tickets/Layouts";
 import { useCan, useMe } from "@/lib/session";
-import { shortDate, type TicketList } from "@/pages/tickets/shared";
-import type { Project } from "@/pages/projects/shared";
+import { type TicketList } from "@/pages/tickets/shared";
 import { DAY_ROUTE, isWork, type DayItem } from "./shared";
-import { DayEdge, ProjectEdge } from "./DayEdge";
+import { DayEdge } from "./DayEdge";
 import { usePeople } from "./TaskDialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -178,95 +176,6 @@ export function Priorities({ items, horizon, onOpen, canRemove, forUser }: { ite
             </li>
           ))}
         </ul>
-      )}
-    </section>
-  );
-}
-
-const PROJECT_COLUMNS = ["project", "client", "milestones", "due", "next"] as const;
-const PROJECT_WIDTHS = { project: 280, client: 170, milestones: 110, due: 120, next: 150 };
-
-/** The open projects: number and name, client, milestones done, due day, next milestone due. Columns move and resize like the tickets'. Mine, or another technician's with the right. A click opens the project. */
-export function DayProjects() {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  const me = useMe();
-  const can = useCan();
-  const people = usePeople();
-  const cols = useColumns("akab.pipeline.projects.columns.v1", PROJECT_COLUMNS, PROJECT_WIDTHS, "project");
-  const [who, setWho] = useState<string>(me.id);
-  const others = can("projects.manage");
-  const { data, isLoading } = useQuery({
-    queryKey: ["projects", "list", "mine", "open", who],
-    queryFn: () => api.get<Project[]>(`/projects?status=open${who === me.id ? "&view=mine" : `&member=${who}`}`),
-  });
-  const today = new Date().toLocaleDateString("en-CA");
-  // by due day, the ones with none last
-  const list = [...(data ?? [])].sort((a, b) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || a.number.localeCompare(b.number));
-  const grid = { gridTemplateColumns: cols.template };
-  const labels = { project: t("pipeline.day.project"), client: t("pipeline.day.projectClient"), milestones: t("pipeline.day.projectProgress"), due: t("pipeline.day.projectDue"), next: t("pipeline.day.projectNext") };
-  const day = (d: string | null | undefined) => <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", d && d < today ? "text-destructive" : "text-muted-foreground")}>{d ? shortDate(d) : "—"}</span>;
-  return (
-    <section className="glass rounded-2xl border">
-      <div className="flex flex-wrap items-center gap-2 px-4 pb-2 pt-3">
-        <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          <FolderKanban className="size-3.5" /> {t("pipeline.day.projects")} <span className="font-mono normal-case opacity-70">{data?.length ?? 0}</span>
-        </h3>
-        {others && (
-          <select value={who} onChange={(e) => setWho(e.target.value)} aria-label={t("pipeline.day.projectWhose")} className="ml-auto h-7 rounded-md border bg-transparent px-2 text-xs">
-            <option value={me.id}>{t("pipeline.day.projectsMine")}</option>
-            {(people.data ?? []).filter((p) => p.id !== me.id).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
-      {isLoading ? (
-        <Skeleton className="m-4 h-16" />
-      ) : !list.length ? (
-        <p className="px-4 pb-4 text-sm text-muted-foreground">{t("pipeline.day.noProjects")}</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <div style={{ minWidth: cols.minWidth }}>
-            <ColumnHeader cols={cols} labels={labels} style={grid} />
-            <ul className="divide-y divide-[color:var(--glass-border)]">
-              {list.map((p) => {
-                const cell: Record<(typeof PROJECT_COLUMNS)[number], React.ReactNode> = {
-                  project: (
-                    <span className="flex min-w-0 items-baseline gap-2">
-                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{p.number}</span>
-                      <span className="truncate font-medium" title={p.name}>
-                        {p.name}
-                      </span>
-                    </span>
-                  ),
-                  client: <span className="truncate text-xs text-muted-foreground">{p.client?.name ?? "—"}</span>,
-                  milestones: (
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {p.progress.done}/{p.progress.total}
-                    </span>
-                  ),
-                  due: day(p.dueDate),
-                  next: day(p.nextMilestoneDue),
-                };
-                return (
-                  <li key={p.id} className="relative">
-                    <ProjectEdge id={p.id} following={p.following} onOpen={() => navigate(`/pipeline?section=projects&project=${p.id}`)} className="absolute left-0 top-0 z-10 h-full" />
-                    <button type="button" onClick={() => navigate(`/pipeline?section=projects&project=${p.id}`)} style={grid} className="grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]">
-                      {cols.order.map((c) => (
-                        <span key={c} className="min-w-0">
-                          {cell[c]}
-                        </span>
-                      ))}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </div>
       )}
     </section>
   );

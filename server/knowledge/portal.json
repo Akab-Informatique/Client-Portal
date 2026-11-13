@@ -1398,6 +1398,16 @@
     "pipeline.view"
    ],
    "restrictTo": []
+  },
+  {
+   "id": "projects-are-an-archive-for-now-latest-1",
+   "title": "Projects are an archive for now (latest)",
+   "heading": "Projects are an archive for now (latest)",
+   "text": "The Projets module is kept **as it is, as an archive**, while the way projects work is rethought. Nothing is deleted (tables, `server/routes/projects.ts` at `/api/projects`, `src/pages/projects/`).\n- **Sidebar: \"Archive projets\"** (`/projects`, `src/modules/registry.ts` key `projects`, label `nav.projectsArchive`) holds the unchanged Projets page. **Administrators only**: `lockProjectsToAdmins()` (`server/db/seed.ts`, run at every start) strips every `projects.*` and `clientProjects.*` right from every role but the master and global administrators, and deletes such rights given to a person directly; the Technician defaults and client roles in `shared/permissions.ts` no longer carry them. **Clients have no Projets at all** (no sidebar entry, no `/api/portal/projects*` routes, no page).\n- **Gone from Opérations and Ma journée**: the Projets tab (`?section=projects` no longer exists) and the Projets section of Ma journée. Project links (day blocks, minimized project, notifications, search) open `/projects?project=…`, outside Opérations. A project block already on a day still shows.\n- **Transfers removed**: ticket → project (**Transformer en projet**, **Fusionner dans un projet**, `/api/tickets/:id/to-project*`, `server/lib/ticketToProject.ts`) and quote → project (button and `POST /api/quotes/:id/to-project`) are gone; the quote deposit invoice stays. Quotes already linked still show their \"Projet P-…\" badge.\n- **No bells**: `projectTick` (reminders, follow-up days) is not started (`server/index.ts`).\n- To bring projects back: give `projects.*` to the roles again, remove `lockProjectsToAdmins()`, restore the Operations tab. Test: \"projects archive: administrators only, nothing for clients\" (the other project tests give the test technician the rights in `beforeAll`).",
+   "requires": [
+    "projects.view"
+   ],
+   "restrictTo": []
   }
  ]
 }

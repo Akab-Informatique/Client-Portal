@@ -23,7 +23,6 @@ import { longDateTime } from "@/pages/tickets/shared";
 import { lineAmount, lineGross, QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuoteKind, type QuoteRecurrence } from "@shared/quotes";
 import { SurveyPanel } from "./SurveyPanel";
 import { QuoteDocument, type DocData } from "./QuoteDocument";
-import { useToProject } from "./useToProject";
 import { LineAdder } from "./LineAdder";
 import { MarginsPanel } from "./Margins";
 import { DepositDialog } from "./DepositDialog";
@@ -139,7 +138,6 @@ export function QuoteEditor() {
   const shownTab = tab === "margins" && !internal ? "quote" : tab;
   const [toInventory, setToInventory] = useState<Row | null>(null);
   const [preview, setPreview] = useState(false);
-  const project = useToProject();
 
   const query = useQuery({ queryKey: ["quotes", "one", id], queryFn: () => api.get<Quote>(`/quotes/${id}`), enabled: !isNew });
   const quote = query.data;
@@ -585,11 +583,6 @@ export function QuoteEditor() {
                   {save.isPending ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} {t("quotes.editor.save")}
                 </Button>
               )}
-              {quote && project.allowed(quote) && (
-                <Button variant="outline" className="w-full" disabled={dirty || project.pending} title={dirty ? t("quotes.editor.unsaved") : undefined} onClick={() => void project.start(quote)}>
-                  {project.pending ? <Loader2 className="size-4 animate-spin" /> : <FolderKanban className="size-4" />} {t("quotes.project.action")}
-                </Button>
-              )}
               {quote?.projectId ? (
                 <a href={`/projects?project=${quote.projectId}&tab=overview`} className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-500/20">
                   <FolderKanban className="size-4 shrink-0" /> {t("quotes.project.badge", { number: quote.projectNumber })}
@@ -652,7 +645,6 @@ export function QuoteEditor() {
         </aside>
       </div>
 
-      {project.dialog}
       {deposit && quote && <DepositDialog quote={quote} onClose={() => setDeposit(false)} onDone={(q) => { apply(q); setDeposit(false); }} />}
       {preview && doc && <QuoteDocument data={doc} onClose={() => setPreview(false)} />}
       {toInventory && quote && <ToInventoryDialog quoteId={quote.id} row={toInventory} onClose={() => setToInventory(null)} onDone={(pid, sku) => setRow(toInventory.key, { productId: pid, sku: sku ?? "" })} />}

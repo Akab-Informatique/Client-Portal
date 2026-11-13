@@ -784,8 +784,6 @@ export const SYSTEM_ROLES: Array<{
       "timesheets.use",
       "pipeline.view",
       "pipeline.edit",
-      "projects.view",
-      "projects.edit",
       "breakroom.use",
       "sms.view",
       "outlook.view",
@@ -815,7 +813,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Administrateur client", en: "Client administrator" },
     description: { fr: "Responsable chez le client : tout le portail client", en: "Person in charge at the client: the whole client portal" },
-    permissions: permissionsFor("client").filter((k) => k !== "clientTickets.delegate"),
+    permissions: permissionsFor("client").filter((k) => k !== "clientTickets.delegate" && !k.startsWith("clientProjects.")),
     locked: false,
   },
   {
@@ -824,7 +822,7 @@ export const SYSTEM_ROLES: Array<{
     name: { fr: "Comptabilité client", en: "Client accounting" },
     description: { fr: "Babillard, factures et soumissions", en: "Message board, invoices and quotes" },
     // the main and billing contacts get this role: their company's invoices, contracts and every ticket of the company
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view", "clientProjects.view", "clientProjects.comment"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view"],
     locked: false,
   },
   {
@@ -835,7 +833,7 @@ export const SYSTEM_ROLES: Array<{
       fr: "Babillard et tous les billets de l'entreprise (filtres par usager), sans les paramètres admin du portail",
       en: "Message board and every ticket of the company (filters by user), without the portal's admin settings",
     },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientProjects.view", "clientProjects.comment"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate"],
     locked: false,
   },
   {

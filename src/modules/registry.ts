@@ -1,4 +1,4 @@
-import { Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, FolderKanban, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Newspaper, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
+import { Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, Archive, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Newspaper, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -44,7 +44,7 @@ export const NAV_GROUPS = { security: { labelKey: "nav.security" } } as const;
 export const STAFF_MODULES: NavModule[] = [
   { key: "dashboard", path: "/", labelKey: "nav.dashboard", icon: LayoutDashboard, section: "team", permission: "dashboard.view" },
   { key: "messages", path: "/messages", labelKey: "nav.messages", icon: Megaphone, section: "command", permission: "messages.view" },
-  { key: "pipeline", path: "/pipeline", labelKey: "nav.pipeline", icon: Workflow, section: "command", permission: "pipeline.view", alsoPaths: ["/tickets", "/projects"] },
+  { key: "pipeline", path: "/pipeline", labelKey: "nav.pipeline", icon: Workflow, section: "command", permission: "pipeline.view", alsoPaths: ["/tickets"] },
   { key: "chat", path: "/chat", labelKey: "nav.chat", icon: MessagesSquare, section: "tools", permission: "chat.use" },
   { key: "outlook", path: "/outlook", labelKey: "nav.outlook", icon: Mail, section: "tools", permission: "outlook.view", optIn: "outlook" },
   { key: "timesheets", path: "/timesheets", labelKey: "nav.timesheets", icon: Clock, section: "tools", permission: "timesheets.use", orRight: "timesheets.manage", rule: "timesheetRequired" },
@@ -63,7 +63,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "hr", path: "/hr", labelKey: "nav.hr", icon: HeartHandshake, section: "accounting", permission: "hr.manage" },
   { key: "newsletter", path: "/newsletter", labelKey: "nav.newsletter", icon: Newspaper, section: "management", permission: "newsletter.view" },
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
-  { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "command", permission: "projects.view", hideInNav: true },
+  { key: "projects", path: "/projects", labelKey: "nav.projectsArchive", icon: Archive, section: "command", permission: "projects.view" },
   { key: "passbolt", path: "/security/passbolt", labelKey: "nav.passbolt", icon: KeyRound, section: "command", group: "security", permission: "passbolt.use", rule: "passbolt" },
   { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", permission: "reports.view" },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
@@ -90,7 +90,6 @@ export const CLIENT_MODULES: ClientNavModule[] = [
   { key: "board", path: "/", labelKey: "client.nav.board", icon: Megaphone, section: "board", permission: "board.view" },
   { key: "tickets", path: "/tickets", labelKey: "client.nav.tickets", icon: Ticket, section: "operations", permission: "clientTickets.view" },
   { key: "delegate", path: "/manage", labelKey: "selfManaged.delegate.nav", icon: Kanban, section: "operations", permission: "clientTickets.delegate" },
-  { key: "projects", path: "/projects", labelKey: "client.nav.projects", icon: FolderKanban, section: "operations", permission: "clientProjects.view" },
   { key: "devices", path: "/devices", labelKey: "client.nav.devices", icon: MonitorSmartphone, section: "operations", permission: "clientDevices.view", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "client.nav.documentation", icon: BookOpen, section: "operations", permission: "clientDocs.view", upcoming: true },
   { key: "invoices", path: "/invoices", labelKey: "client.nav.invoices", icon: Receipt, section: "accounting", permission: "clientInvoices.view" },

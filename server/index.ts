@@ -17,7 +17,7 @@ import { autoTickets } from "./lib/sms.ts";
 import { runIntake } from "./lib/mailIntake.ts";
 import { workflowTick } from "./lib/workflows.ts";
 import { pipelineTick } from "./lib/pipeline.ts";
-import { projectTick } from "./lib/projectTick.ts";
+// import { projectTick } from "./lib/projectTick.ts"; (archived)
 import { noteTick } from "./lib/personalNotes.ts";
 import { reminderTick } from "./lib/invoiceMail.ts";
 import { reportsTick } from "./lib/reports.ts";
@@ -67,7 +67,8 @@ setInterval(() => void runIntake().catch((e) => console.warn("[mail-intake] pass
 setInterval(() => void workflowTick().catch((e) => console.warn("[workflow] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 // Pipeline: each morning (at the chosen time, work days) everyone's day is planned and texted
 setInterval(() => void noteTick().catch((e) => console.warn("[notes] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
-setInterval(() => void projectTick().catch((e) => console.warn("[projects] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
+// Projects are archived for now: no reminders or follow-up bells until they are rethought (lockProjectsToAdmins in db/seed.ts)
+// setInterval(() => void projectTick().catch((e) => console.warn("[projects] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 setInterval(() => void pipelineTick().catch((e) => console.warn("[pipeline] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 setInterval(() => void reminderTick().catch((e) => console.warn("[invoice reminders] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 // Scheduled reports (Québec time): the due ones run and are sent to their channels

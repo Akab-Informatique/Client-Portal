@@ -97,6 +97,7 @@ export const SECTION_ACCESS: Record<string, string[]> = {
   "Credit on a client's account in QuickBooks (latest)": ["accounting.view"],
   "Quote products become project charges; ordered / received (latest)": ["quotes.view", "projects.view"],
   "Project types (latest)": ["projects.view"],
+  "Projects are an archive for now (latest)": ["projects.view"],
   "Technician time SKU, and the charges shown when a quote becomes a project (latest)": ["quotes.view", "projects.view"],
   "Hours bank: top-up keeps every hour left (latest)": ["crm.view", "accounting.view"],
   "Self-managed clients, delegated technicians, company switcher (latest)": ["tickets.selfManaged", "admin.clients"],

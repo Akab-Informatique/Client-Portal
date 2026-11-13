@@ -446,6 +446,7 @@ const en: Dict = {
     modules: "Modules",
     commandCenter: "Command center",
     projects: "Projects",
+    projectsArchive: "Projects archive",
     tools: "Tools",
     dashboard: "Dashboard",
     messages: "Message board",

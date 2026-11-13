@@ -1,19 +1,18 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { CalendarCheck, FolderKanban, ListChecks, Loader2, Ticket, Workflow } from "lucide-react";
+import { CalendarCheck, ListChecks, Loader2, Ticket, Workflow } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { cn } from "@/lib/utils";
 import { MyDay } from "./MyDay";
 import { TaskDialog } from "./TaskDialog";
 import { TeamList } from "./TeamList";
 
-// the Tickets and Projects pages, shown here as tabs too (their own pages and links keep working)
+// the Tickets page, shown here as a tab too (its own page and links keep working)
 const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage").then((m) => ({ default: m.TicketsPage })));
-const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 
-type Tab = "day" | "tickets" | "projects" | "tasks";
-const TABS: Tab[] = ["day", "tickets", "projects", "tasks"];
+type Tab = "day" | "tickets" | "tasks";
+const TABS: Tab[] = ["day", "tickets", "tasks"];
 
 /**
  * Mon travail (was "Pipeline"): everything a technician works on, in one place. "Ma journée" is the dashboard (the AI's
@@ -58,7 +57,6 @@ export function PipelinePage() {
           [
             ["day", CalendarCheck, t("pipeline.tabs.day")],
             ["tickets", Ticket, t("pipeline.tabs.tickets")],
-            ["projects", FolderKanban, t("pipeline.tabs.projects")],
             ["tasks", ListChecks, t("pipeline.tabs.tasks")],
           ] as const
         ).map(([k, Icon, label]) => (
@@ -70,8 +68,10 @@ export function PipelinePage() {
 
       {tab === "day" && <MyDay onOpenTask={(id) => setOpen(id)} />}
       {tab === "tasks" && <TeamList onOpenTask={(id) => setOpen(id)} />}
-      {(tab === "tickets" || tab === "projects") && (
-        <Suspense fallback={<Loader2 className="mx-auto mt-12 size-6 animate-spin text-muted-foreground" />}>{tab === "tickets" ? <TicketsPage /> : <ProjectsPage />}</Suspense>
+      {tab === "tickets" && (
+        <Suspense fallback={<Loader2 className="mx-auto mt-12 size-6 animate-spin text-muted-foreground" />}>
+          <TicketsPage />
+        </Suspense>
       )}
 
       {open && <TaskDialog key={open} taskId={open === "new" ? null : open} onClose={() => setOpen(null)} onOpenTask={(id) => setOpen(id)} />}

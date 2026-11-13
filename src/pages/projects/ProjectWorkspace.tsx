@@ -64,7 +64,7 @@ export function ProjectWorkspaceProvider({ enabled, children }: { enabled: boole
       const d = docked.find((x) => x.taskId === taskId);
       if (d?.folder) {
         // the folder first, then the task on top of it (a window opened later is drawn above the earlier one)
-        navigate(`/pipeline?section=projects&project=${projectId}&tab=milestones`);
+        navigate(`/projects?project=${projectId}&tab=milestones`);
         setTimeout(() => openTask(projectId, taskId), 250);
       } else openTask(projectId, taskId);
     },
@@ -113,7 +113,7 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
   const navigate = useNavigate();
   // a minimized phase (its timer runs) reopens the project folder on that phase
   const restoreItem = (d: { projectId: string; taskId: string; phase: boolean; folder?: boolean }) =>
-    d.folder ? (onRestoreFolder(d.projectId), navigate(`/pipeline?section=projects&project=${d.projectId}&tab=milestones`)) : d.phase ? navigate(`/pipeline?section=projects&project=${d.projectId}&tab=milestones&milestone=${d.taskId}`) : onRestore(d.projectId, d.taskId);
+    d.folder ? (onRestoreFolder(d.projectId), navigate(`/projects?project=${d.projectId}&tab=milestones`)) : d.phase ? navigate(`/projects?project=${d.projectId}&tab=milestones&milestone=${d.taskId}`) : onRestore(d.projectId, d.taskId);
   const qc = useQueryClient();
   const { data: timers = [] } = useQuery({ queryKey: [...KEY, "timers"], queryFn: () => api.get<RunningTimer[]>("/projects/timers"), refetchInterval: 30_000 });
   // pause / play from the card: a phase's timer (its id is the milestone's) or a task's

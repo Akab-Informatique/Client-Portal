@@ -69,6 +69,9 @@ export async function seed(): Promise<void> {
   // every client has its own client roles (and users of the old shared ones move to them)
   await ensureAllClientRoles();
 
+  // Projects are archived for now: only administrators keep any project right, clients none
+  await lockProjectsToAdmins();
+
   // Built-in dashboards: empty, administrators only until an admin shares them
   for (const b of BUILTIN_DASHBOARDS) {
     const [existing] = await d.select({ id: schema.dashboards.id }).from(schema.dashboards).where(eq(schema.dashboards.slug, b.slug));
@@ -109,6 +112,40 @@ export async function seed(): Promise<void> {
   }
 
   if (demo) await seedDemo(adminRole);
+}
+
+/** True for the rights of the Projets module (staff `projects.*`, client `clientProjects.*`). */
+const isProjectRight = (p: string) => p.startsWith("projects.") || p.startsWith("clientProjects.");
+
+/**
+ * The projects are an archive while they are rethought: only the administrators (master and global) keep
+ * `projects.*`, and clients keep no `clientProjects.*` at all. Run at every start, so a right given back
+ * by hand to another role or user is taken away again until this is lifted.
+ */
+export async function lockProjectsToAdmins(): Promise<void> {
+  const d = db();
+  const rows = await d.select({ id: schema.roles.id, slug: schema.roles.slug, clientId: schema.roles.clientId, permissions: schema.roles.permissions, defaultsApplied: schema.roles.defaultsApplied }).from(schema.roles);
+  const adminIds = new Set<string>();
+  for (const r of rows) {
+    const admin = !r.clientId && (r.slug === MASTER_ROLE || r.slug === "global-admin");
+    if (admin) {
+      adminIds.add(r.id);
+      continue;
+    }
+    if (r.permissions.some(isProjectRight)) {
+      await d.update(schema.roles).set({ permissions: r.permissions.filter((p) => !isProjectRight(p)), updatedAt: new Date() }).where(eq(schema.roles.id, r.id));
+    }
+  }
+  // rights given to a person directly: the administrators keep theirs, nobody else
+  const grants = await d
+    .select({ userId: schema.userPermissions.userId, permission: schema.userPermissions.permission, roleId: schema.users.roleId })
+    .from(schema.userPermissions)
+    .innerJoin(schema.users, eq(schema.users.id, schema.userPermissions.userId));
+  for (const g of grants) {
+    if (isProjectRight(g.permission) && !(g.roleId && adminIds.has(g.roleId))) {
+      await d.delete(schema.userPermissions).where(and(eq(schema.userPermissions.userId, g.userId), eq(schema.userPermissions.permission, g.permission)));
+    }
+  }
 }
 
 async function roleBySlug(slug: string): Promise<string> {

@@ -52,7 +52,6 @@ const ClientLayout = lazy(() => import("@/layouts/ClientLayout").then((m) => ({ 
 const ClientTicketsPage = lazy(() => import("@/pages/client/ClientTicketsPage").then((m) => ({ default: m.ClientTicketsPage })));
 const ClientSettingsPage = lazy(() => import("@/pages/client/ClientSettingsPage").then((m) => ({ default: m.ClientSettingsPage })));
 const DelegatePage = lazy(() => import("@/pages/client/DelegatePage").then((m) => ({ default: m.DelegatePage })));
-const ClientProjectsPage = lazy(() => import("@/pages/client/ClientProjectsPage").then((m) => ({ default: m.ClientProjectsPage })));
 const ClientInvoicesPage = lazy(() => import("@/pages/client/ClientBillingPages").then((m) => ({ default: m.ClientInvoicesPage })));
 const ClientContractsPage = lazy(() => import("@/pages/client/ClientBillingPages").then((m) => ({ default: m.ClientContractsPage })));
 
@@ -82,8 +81,8 @@ function ServerDown({ onRetry, retrying }: { onRetry: () => void; retrying: bool
   );
 }
 
-/** Tickets and Projects live inside Opérations: an old address (/tickets?…, /projects?…) lands on its tab, with the same filters and links. */
-function InOperations({ section, children }: { section: "tickets" | "projects"; children: React.ReactNode }) {
+/** Tickets live inside Opérations: an old address (/tickets?…) lands on its tab, with the same filters and links. */
+function InOperations({ section, children }: { section: "tickets"; children: React.ReactNode }) {
   const can = useCan();
   const { search } = useLocation();
   if (!can("pipeline.view")) return <>{children}</>;
@@ -127,7 +126,7 @@ function StaffApp() {
         <Route path="tickets" element={<Guard permission="tickets.view"><InOperations section="tickets"><TicketsPage /></InOperations></Guard>} />
         <Route path="store" element={<Guard permission="store.view"><StorePage /></Guard>} />
         <Route path="pipeline" element={<Guard permission="pipeline.view"><PipelinePage /></Guard>} />
-        <Route path="projects" element={<Guard permission="projects.view"><InOperations section="projects"><ProjectsPage /></InOperations></Guard>} />
+        <Route path="projects" element={<Guard permission="projects.view"><ProjectsPage /></Guard>} />
         <Route path="security/passbolt" element={<Guard permission="passbolt.use"><PassboltPage /></Guard>} />
         <Route path="newsletter" element={<Guard permission="newsletter.view"><NewsletterPage /></Guard>} />
         <Route path="reports" element={<Guard permission="reports.view"><ReportsPage /></Guard>} />
@@ -187,7 +186,6 @@ function Root() {
               <Route path="settings" element={<ClientSettingsPage />} />
               <Route path="tickets" element={<Guard permission="clientTickets.view"><ClientTicketsPage /></Guard>} />
               <Route path="manage" element={<Guard permission="clientTickets.delegate"><DelegatePage /></Guard>} />
-              <Route path="projects" element={<Guard permission="clientProjects.view"><ClientProjectsPage /></Guard>} />
               <Route path="invoices" element={<Guard permission="clientInvoices.view"><ClientInvoicesPage /></Guard>} />
               <Route path="contracts" element={<Guard permission="clientContracts.view"><ClientContractsPage /></Guard>} />
               <Route path="*" element={<Navigate to="/" replace />} />

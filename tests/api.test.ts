@@ -96,6 +96,10 @@ beforeAll(async () => {
   await initDb({ memory: true });
   await seed();
   app = createApp();
+  // Projects are an archive for now (administrators only, see lockProjectsToAdmins): the tests of the module still run it,
+  // with a technician who has its rights
+  const [techRole] = await db().select().from(schema.roles).where(and(eq(schema.roles.slug, "technician"), isNull(schema.roles.clientId)));
+  await db().update(schema.roles).set({ permissions: [...techRole.permissions, "projects.view", "projects.edit"] }).where(eq(schema.roles.id, techRole.id));
   // the approval flow of the older tests is the manual one (the portal itself approves at once by default)
   await db().insert(schema.integrations).values({ provider: "time.reports", enabled: true, config: { autoApprove: false, recipients: [] } });
 });
@@ -1803,38 +1807,6 @@ describe("tickets: client and contact", () => {
     // the printed sheet takes AKAB's address and phone from the set-up (or its default)
     expect(handed.json.company).toMatchObject({ phone: "450-834-3344", address: expect.stringContaining("J0K 3H0") });
 
-    // quote → project: a project of Projets sold as a package (hours and price of the hour lines) and a point for the weekly meeting, once
-    const proj = (
-      await admin.post("/api/quotes", {
-        clientId: client.id,
-        title: "Migration du bureau",
-        lines: [
-          { description: "Portable", quantityX100: 200, unitPriceCents: 100000 },
-          { description: "Main-d'œuvre : migration", quantityX100: 3000, unitPriceCents: 12000 },
-          { description: "Surveillance", quantityX100: 100, unitPriceCents: 5000, recurrence: "monthly" },
-        ],
-      })
-    ).json;
-    expect(proj.clientId ?? proj).toBe(client.id);
-    expect((await tech.post(`/api/quotes/${proj.id}/to-project`, {})).status).toBe(403);
-    expect((await admin.post(`/api/quotes/${(await admin.post("/api/quotes", { prospectName: "Sans client", lines: [{ description: "x", unitPriceCents: 1 }] })).json.id}/to-project`, {})).json.error).toBe("project_needs_client");
-    const pointsBefore = (await admin.get("/api/meetings/points")).json.length;
-    // the client is tied to a company of the ticket source (the CRM keeps its id)
-    const tk0 = (await admin.get("/api/tickets?view=all")).json.items[0];
-    await db().update(schema.clients).set({ autotaskId: tk0.company.id }).where(eq(schema.clients.id, client.id));
-    const made2 = await admin.post(`/api/quotes/${proj.id}/to-project`, {});
-    expect(made2.status).toBe(201);
-    expect(made2.json).toMatchObject({ projectId: expect.any(String), projectNumber: expect.stringMatching(/^P-\d+$/), meetingPointId: expect.any(String) });
-    expect((await admin.post(`/api/quotes/${proj.id}/to-project`, {})).json.error).toBe("already_project");
-    expect((await admin.get(`/api/quotes/${proj.id}`)).json).toMatchObject({ projectId: made2.json.projectId, projectNumber: made2.json.projectNumber });
-    // 30 h sold at 120 $ (the hour line), sold as a package, in Projets
-    const pj = (await admin.get(`/api/projects/${made2.json.projectId}`)).json;
-    expect(pj).toMatchObject({ name: "Migration du bureau", billingMode: "fixed", budgetHours: 30, fixedPrice: 3600, client: { id: client.id }, quote: { id: proj.id }, sold: { hours: 30, priceCents: 360000, rateCents: 12000, workedHours: 0 } });
-    const pts = (await admin.get("/api/meetings/points")).json;
-    expect(pts.length).toBe(pointsBefore + 1);
-    expect(pts.find((x: any) => x.id === made2.json.meetingPointId)).toMatchObject({ text: expect.stringContaining("Migration du bureau") });
-    await admin.del(`/api/projects/${made2.json.projectId}`);
-
     // a new client's site visit: the checklist answers are kept with the quote, sent with it only, and copied
     const visit = (await admin.post("/api/quotes", { kind: "site_visit", prospectName: "Clinique du Nord", survey: { "general.users": "14", "devices.laptop.qty": "9", "security.mfa_admin": "no" } })).json;
     expect(visit).toMatchObject({ kind: "site_visit", survey: { "general.users": "14", "devices.laptop.qty": "9", "security.mfa_admin": "no" } });
@@ -1928,49 +1900,6 @@ describe("tickets: client and contact", () => {
       expect((await admin.get(`/api/crm/credit-notes?clientId=${cl.id}`)).json.map((x: any) => x.number)).toEqual([cn.json.number]);
     } finally {
       await db().delete(schema.creditNotes).where(eq(schema.creditNotes.clientId, cl.id));
-      await db().update(schema.quotes).set({ depositInvoiceId: null }).where(eq(schema.quotes.clientId, cl.id));
-      await db().delete(schema.quotes).where(eq(schema.quotes.clientId, cl.id));
-      await db().delete(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id));
-      await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, cl.id));
-      await db().delete(schema.clients).where(eq(schema.clients.id, cl.id));
-      if (billingRow) await db().update(schema.integrations).set({ config: billingRow.config }).where(eq(schema.integrations.provider, "billing"));
-      else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "billing"));
-    }
-  });
-
-  it("quotes: the deposit is taken on the lines ticked (equipment only), and the project invoice takes off only the deposit on its hours", async () => {
-    const admin = await session("admin@akab.local");
-    const [cl] = await db().insert(schema.clients).values({ name: "Zz Dépôt équipement (test)", autotaskId: 9_100_041 }).returning();
-    const [billingRow] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "billing"));
-    let projectId = "";
-    try {
-      const q = (
-        await admin.post("/api/quotes", {
-          clientId: cl.id,
-          title: "Serveur et installation",
-          lines: [
-            { description: "Serveur Dell", quantityX100: 100, unitPriceCents: 200000 },
-            { description: "Heures d'installation", quantityX100: 1000, unitPriceCents: 10000 },
-          ],
-        })
-      ).json;
-      await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" });
-      const server = q.lines.find((l: any) => l.description === "Serveur Dell");
-      // a line that is not one of the quote's: refused
-      expect((await admin.post(`/api/quotes/${q.id}/deposit`, { send: false, lineIds: ["00000000-0000-4000-8000-000000000000"] })).json.error).toBe("deposit_lines_invalid");
-      // 50 % of the server only: 1 000 $ before taxes
-      const dep = await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 50, send: false, lineIds: [server.id] });
-      expect(dep.status).toBe(201);
-      expect(dep.json.quote.depositLineIds).toEqual([server.id]);
-      const lines = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, dep.json.invoice.id));
-      expect(lines.map((l) => l.amountCents)).toEqual([100000]);
-      expect(lines[0].description).toContain("Serveur Dell");
-      // the project sells the 10 hours; its invoice takes nothing off (the deposit was on the equipment)
-      projectId = (await admin.post(`/api/quotes/${q.id}/to-project`, {})).json.projectId;
-      const billed = (await admin.post(`/api/projects/${projectId}/bill`, {})).json;
-      expect(billed).toMatchObject({ lines: 1, totalCents: 100000 });
-    } finally {
-      if (projectId) await admin.del(`/api/projects/${projectId}`);
       await db().update(schema.quotes).set({ depositInvoiceId: null }).where(eq(schema.quotes.clientId, cl.id));
       await db().delete(schema.quotes).where(eq(schema.quotes.clientId, cl.id));
       await db().delete(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id));
@@ -5149,12 +5078,12 @@ describe("client portal: sections, default roles and per-user rights", () => {
     const roles = (await admin.get(`/api/admin/clients/${firstClient.id}/roles`)).json;
     expect(roles.every((r: any) => r.audience === "client" && r.clientId === firstClient.id)).toBe(true);
     const bySlug = Object.fromEntries(roles.map((r: any) => [r.slug, r.permissions.slice().sort()]));
-    expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientContracts.autopay", "clientContracts.view", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientProjects.comment", "clientProjects.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
-    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientContracts.autopay", "clientContracts.view", "clientInvoices.view", "clientProjects.comment", "clientProjects.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-admin"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientContracts.autopay", "clientContracts.view", "clientDevices.view", "clientDocs.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-accounting"]).toEqual(["board.ticket", "board.view", "clientContracts.autopay", "clientContracts.view", "clientInvoices.view", "clientQuotes.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-tech"]).toEqual(["board.ticket", "board.view", "clientDevices.view", "clientDocs.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-user"]).toEqual(["board.ticket", "board.view", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     // every ticket of the company, but none of the portal's admin settings
-    expect(bySlug["client-tickets-admin"]).toEqual(["board.ticket", "board.view", "clientProjects.comment", "clientProjects.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
+    expect(bySlug["client-tickets-admin"]).toEqual(["board.ticket", "board.view", "clientTickets.all", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
     expect(bySlug["client-config"]).toEqual(["board.ticket", "board.view", "clientAdmin.company", "clientAdmin.users", "clientTickets.attach", "clientTickets.comment", "clientTickets.escalate", "clientTickets.view"]);
   });
 
@@ -7342,104 +7271,6 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await admin.post(`/api/projects/${made.json.id}/bill`, {})).json.error).toBe("project_billed");
     const moved = await admin.patch(`/api/projects/${made.json.id}`, { bankExpiresOn: "2100-01-31" });
     expect(moved.json.bankExpiresOn).toBe("2100-01-31");
-  });
-
-  it("a quote is sold fixed, as a bank of hours or hourly: the deposit and the project follow", async () => {
-    resetRateLimit("login:ip:unknown");
-    const admin = await signIn("admin@akab.local");
-    const [client] = (await admin.get("/api/quotes/clients")).json;
-    // the client needs a company of the ticket source: keep the one it has, else take one nobody uses
-    const [row] = await db().select().from(schema.clients).where(eq(schema.clients.id, client.id));
-    if (!row.autotaskId) {
-      const used = new Set((await db().select({ a: schema.clients.autotaskId }).from(schema.clients)).map((r) => r.a));
-      const free = ((await admin.get("/api/tickets?view=all")).json.items as any[]).map((x) => x.company.id).find((id) => !used.has(id));
-      await db().update(schema.clients).set({ autotaskId: free }).where(eq(schema.clients.id, client.id));
-    }
-    const make = async (saleType: string) => {
-      const q = (await admin.post("/api/quotes", { clientId: client.id, title: "Vente " + saleType, saleType, lines: [{ description: "Main-d'œuvre : installation", quantityX100: 1000, unitPriceCents: 10000 }] })).json;
-      expect(q.saleType).toBe(saleType);
-      expect((await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" })).status).toBe(200);
-      expect((await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" })).status).toBe(200);
-      return q;
-    };
-    // hourly: nothing before the work; the project is hourly with a rate (100 $ / h), no price
-    const h = await make("hourly");
-    expect((await admin.post(`/api/quotes/${h.id}/deposit`, { percent: 50, send: false })).json.error).toBe("deposit_not_allowed");
-    const hp = (await admin.post(`/api/quotes/${h.id}/to-project`, {})).json;
-    expect((await admin.get(`/api/projects/${hp.projectId}`)).json).toMatchObject({ billingMode: "hourly", hourlyRate: 100, fixedPrice: null, budgetHours: null });
-    // bank: paid in full whatever percent is asked; the project is a bank of 10 h
-    const b = await make("bank");
-    const dep = await admin.post(`/api/quotes/${b.id}/deposit`, { percent: 30, send: false });
-    expect(dep.status).toBe(201);
-    expect(dep.json.quote.depositPercentX100 ?? 10000).toBe(10000);
-    const bp = (await admin.post(`/api/quotes/${b.id}/to-project`, {})).json;
-    const bank = (await admin.get(`/api/projects/${bp.projectId}`)).json;
-    expect(bank).toMatchObject({ billingMode: "bank", budgetHours: 10, fixedPrice: 1000, sold: { mode: "bank", hours: 10, diffHours: 10 } });
-    // already paid in full: nothing left to bill on the project
-    expect((await admin.post(`/api/projects/${bp.projectId}/bill`, {})).json.error).toBe("project_nothing_to_bill");
-    // fixed: a share (50 %) and the rest with the project
-    const f = await make("fixed");
-    expect((await admin.post(`/api/quotes/${f.id}/deposit`, { percent: 50, send: false })).status).toBe(201);
-    const fp = (await admin.post(`/api/quotes/${f.id}/to-project`, {})).json;
-    expect((await admin.get(`/api/projects/${fp.projectId}`)).json).toMatchObject({ billingMode: "fixed", fixedPrice: 1000, budgetHours: 10 });
-    // a project made by hand: a fixed price needs its price, a bank its hours
-    expect((await admin.post("/api/projects", { name: "x", billingMode: "fixed" })).json.error).toBe("price_required");
-    expect((await admin.post("/api/projects", { name: "x", billingMode: "bank" })).json.error).toBe("bank_needs_client");
-    // time on a bank project is deducted from the bank and never billed by itself
-    const ms = bank.milestones?.[0]?.id ?? (await admin.post(`/api/projects/${bp.projectId}/milestones`, { name: "Phase" })).json.id;
-    const task = (await admin.post(`/api/projects/${bp.projectId}/milestones/${ms}/tasks`, { title: "Installer" })).json;
-    const e = (await admin.post(`/api/projects/${bp.projectId}/time`, { date: qcToday(), hours: 4, taskId: task.id })).json;
-    expect(e.billable).toBe(false);
-    expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 4, diffHours: 6 });
-    // time logged on a project task can be deleted like any manual entry (it used to answer not found), and the bank is given back
-    expect((await admin.del(`/api/time/entries/${e.id}`)).status).toBe(200);
-    expect((await admin.get(`/api/projects/${bp.projectId}`)).json.sold).toMatchObject({ workedHours: 0, diffHours: 10 });
-
-    // the products of a quote become charges of the project (billable, at the quote's price, rebate and cost); hours and services do not
-    const [prod] = await db().insert(schema.storeProducts).values({ sku: "SRV-QP-1", name: "Serveur Dell", priceCents: 250000, costCents: 180000 }).returning();
-    const qp = (
-      await admin.post("/api/quotes", {
-        clientId: client.id,
-        title: "Avec produits",
-        saleType: "fixed",
-        lines: [
-          { description: "Serveur Dell", productId: prod.id, sku: "SRV-QP-1", quantityX100: 200, unitPriceCents: 250000, unitCostCents: 180000, discountX100: 1000 },
-          { description: "Main-d'œuvre : installation", quantityX100: 500, unitPriceCents: 10000 },
-          { description: "Option écran", sku: "ECR-1", quantityX100: 100, unitPriceCents: 30000, optional: true },
-        ],
-      })
-    ).json;
-    const mp = (await admin.post(`/api/quotes/${qp.id}/to-project`, {})).json;
-    expect(mp.charges).toBe(1);
-    const ch = (await admin.get(`/api/projects/${mp.projectId}/charges`)).json as any[];
-    expect(ch).toHaveLength(1);
-    expect(ch[0]).toMatchObject({ name: "Serveur Dell", billable: true });
-    const [row2] = await db().select().from(schema.ticketCharges).where(eq(schema.ticketCharges.projectId, mp.projectId));
-    expect(row2).toMatchObject({ quantityX100: 200, unitPriceCents: 250000, unitCostCents: 180000, rebateBps: 1000, projectId: mp.projectId });
-    // where the goods stand: ordered, received at the office, or none again
-    expect(ch[0].supply).toBeNull();
-    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: "ordered" })).json[0].supply).toBe("ordered");
-    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: "received" })).json[0].supply).toBe("received");
-    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: "lost" })).status).toBe(400);
-    expect((await admin.put(`/api/projects/${mp.projectId}/charges/${ch[0].id}/supply`, { supply: null })).json[0].supply).toBeNull();
-    // the hours are the package: the equipment is not in the fixed price (billed as charges)
-    expect((await admin.get(`/api/projects/${mp.projectId}`)).json).toMatchObject({ billingMode: "fixed", fixedPrice: 500, budgetHours: 5 });
-    // the "Temps de technicien" SKU is what hours sold are read from, whatever the words of the line
-    const qt = (
-      await admin.post("/api/quotes", {
-        clientId: client.id,
-        title: "Avec temps de technicien",
-        saleType: "fixed",
-        lines: [
-          { description: "Poste de travail", sku: "PC-QT-1", quantityX100: 100, unitPriceCents: 150000 },
-          { description: "Installation et configuration", sku: "TEMPS-TECH", quantityX100: 600, unitPriceCents: 11000 },
-          { description: "Main-d'œuvre : formation", quantityX100: 200, unitPriceCents: 9000 },
-        ],
-      })
-    ).json;
-    const mt = (await admin.post(`/api/quotes/${qt.id}/to-project`, {})).json;
-    expect(mt.charges).toBe(1);
-    expect((await admin.get(`/api/projects/${mt.projectId}`)).json).toMatchObject({ budgetHours: 6, fixedPrice: 660 });
   });
 
   it("project types: a list the team keeps, a type on each project and a filter", async () => {
@@ -11118,81 +10949,6 @@ describe("ticket charges are work to bill at once", () => {
   });
 });
 
-describe("a project sold from a quote", () => {
-  it("tickets tied to it count their time in it, are not billed on their own, and the project is invoiced as sold less the deposit", async () => {
-    resetRateLimit("login:ip:unknown");
-    const tech = await signIn("tech@akab.local");
-    const admin = await signIn("admin@akab.local");
-    const [cl] = await db().insert(schema.clients).values({ name: "Zz Projet vendu (test)", autotaskId: 9_100_031 }).returning();
-    const [other] = await db().insert(schema.clients).values({ name: "Zz Autre client (test)", autotaskId: 9_100_032 }).returning();
-    const [billingRow] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "billing"));
-    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
-    (await import("../server/lib/localTickets.ts")).resetTicketMode();
-    let projectId = "";
-    try {
-      // a quote of 10 hours at 100 $, accepted, its 50 % deposit invoiced
-      const q = (await admin.post("/api/quotes", { clientId: cl.id, title: "Réseau neuf", lines: [{ description: "Heures de configuration", quantityX100: 1000, unitPriceCents: 10000 }] })).json;
-      await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" });
-      await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" });
-      const dep = (await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 50, send: false })).json;
-      expect(dep.invoice).toBeTruthy();
-      // the project: 10 h sold for 1 000 $
-      const made = (await admin.post(`/api/quotes/${q.id}/to-project`, {})).json;
-      projectId = made.projectId;
-      expect((await admin.get(`/api/projects/${projectId}`)).json.sold).toMatchObject({ hours: 10, priceCents: 100000, rateCents: 10000 });
-
-      // a support ticket of the client, with 2 h logged before it is tied
-      const tk = (await tech.post("/api/tickets", { title: "Soutien du projet", description: "x", companyId: cl.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
-      const log = async (hours: number) => {
-        await tech.post(`/api/tickets/${tk.id}/timer/start`);
-        const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === tk.id);
-        expect((await tech.post(`/api/tickets/timers/${timer.id}/submit`, { hours, summary: "Configuration", billable: true })).status).toBe(201);
-      };
-      await log(2);
-      // a ticket of another client cannot be tied
-      const foreign = (await tech.post("/api/tickets", { title: "Ailleurs", description: "x", companyId: other.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
-      expect((await tech.post(`/api/projects/${projectId}/tickets`, { ticket: foreign.id })).json.error).toBe("ticket_other_client");
-      // tied by its number: the 2 h already logged come with it, then 1,5 h more
-      expect((await tech.post(`/api/projects/${projectId}/tickets`, { ticket: tk.number })).status).toBe(201);
-      await log(1.5);
-      const pj = (await admin.get(`/api/projects/${projectId}`)).json;
-      expect(pj.tickets).toEqual([expect.objectContaining({ id: tk.id, number: tk.number, hours: 3.5 })]);
-      expect(pj.sold).toMatchObject({ workedHours: 3.5, ticketHours: 3.5, diffHours: 6.5, workedValueCents: 35000, diffCents: 65000 });
-      expect(pj.time.entries.every((e: any) => e.ticket?.number === tk.number)).toBe(true);
-      // sold as a package: the ticket's hours are never work to bill on their own
-      await admin.post("/api/billables/import", {});
-      const ptime = (await db().select().from(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id))).filter((i) => i.sourceId?.startsWith("ptime:"));
-      expect(ptime).toEqual([]);
-
-      // invoicing: one line as sold (10 h, 1 000 $), less the 500 $ deposit; once only
-      expect((await tech.post(`/api/projects/${projectId}/bill`, {})).status).toBe(403);
-      const billed = await admin.post(`/api/projects/${projectId}/bill`, {});
-      expect(billed.status).toBe(201);
-      expect(billed.json).toMatchObject({ lines: 2, totalCents: 50000, deposit: { number: dep.invoice.number } });
-      const lines = await db().select().from(schema.billingItems).where(eq(schema.billingItems.clientId, cl.id));
-      const main = lines.find((i) => i.sourceId === `project:${projectId}`)!;
-      expect(main).toMatchObject({ kind: "project", status: "pending", quantityX100: 1000, amountCents: 100000 });
-      expect(main.description).toContain("10 h");
-      expect(lines.find((i) => i.sourceId === `project:${projectId}:deposit:0`)).toMatchObject({ amountCents: -50000, taxable: true });
-      expect((await admin.post(`/api/projects/${projectId}/bill`, {})).json.error).toBe("project_billed");
-
-      // untied: its time leaves the project
-      await tech.del(`/api/projects/${projectId}/tickets/${tk.id}`);
-      expect((await admin.get(`/api/projects/${projectId}`)).json.sold.workedHours).toBe(0);
-    } finally {
-      if (projectId) await admin.del(`/api/projects/${projectId}`);
-      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
-      await db().update(schema.quotes).set({ depositInvoiceId: null }).where(eq(schema.quotes.clientId, cl.id));
-      await db().delete(schema.quotes).where(eq(schema.quotes.clientId, cl.id));
-      await db().delete(schema.billingItems).where(inArray(schema.billingItems.clientId, [cl.id, other.id]));
-      await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, cl.id));
-      await db().delete(schema.clients).where(inArray(schema.clients.id, [cl.id, other.id]));
-      if (billingRow) await db().update(schema.integrations).set({ config: billingRow.config }).where(eq(schema.integrations.provider, "billing"));
-      (await import("../server/lib/localTickets.ts")).resetTicketMode();
-    }
-  });
-});
-
 describe("a ticket moved to another client", () => {
   it("its contract and unbilled work follow the new client; what is invoiced stays", async () => {
     resetRateLimit("login:ip:unknown");
@@ -11235,98 +10991,6 @@ describe("a ticket moved to another client", () => {
       await db().delete(schema.billingItems).where(inArray(schema.billingItems.clientId, [wrong.id, right.id]));
       await db().delete(schema.clientInvoices).where(eq(schema.clientInvoices.clientId, wrong.id));
       await db().delete(schema.clients).where(inArray(schema.clients.id, [wrong.id, right.id]));
-      (await import("../server/lib/localTickets.ts")).resetTicketMode();
-    }
-  });
-});
-
-describe("project notes: internal or public, and the client's projects page", () => {
-  it("an internal note is staff only; a public one is read by the client's people, who can answer; other companies see nothing", async () => {
-    resetRateLimit("login:ip:unknown");
-    const tech = await signIn("tech@akab.local");
-    const boss = await signIn("responsable1@client.example");
-    const employee = await signIn("employe1@client.example");
-    const other = await signIn("responsable2@client.example");
-    const [bossUser] = await db().select().from(schema.users).where(eq(schema.users.email, "responsable1@client.example"));
-    const co = { id: bossUser.clientId! };
-    const made = await tech.post("/api/projects", { name: "Refonte du réseau (client)", clientId: co.id, milestones: [{ name: "Audit" }] });
-    expect(made.status).toBe(201);
-    const id = made.json.id;
-    // internal by default; public when asked
-    expect((await tech.post(`/api/projects/${id}/notes`, { text: "Marge serrée, à surveiller" })).status).toBe(201);
-    expect((await tech.post(`/api/projects/${id}/notes`, { text: "L'audit commence lundi", internal: false })).status).toBe(201);
-    const staffView = (await tech.get(`/api/projects/${id}`)).json.notes;
-    expect(staffView.map((n: any) => [n.text, n.internal])).toEqual(expect.arrayContaining([["Marge serrée, à surveiller", true], ["L'audit commence lundi", false]]));
-    // the client's administrator sees the project, its milestones and only the public note
-    const list = (await boss.get("/api/portal/projects")).json;
-    expect(list.find((x: any) => x.id === id)).toMatchObject({ name: "Refonte du réseau (client)", milestones: { done: 0, total: 1 } });
-    const detail = (await boss.get(`/api/portal/projects/${id}`)).json;
-    expect(detail.milestones.map((m: any) => m.name)).toEqual(["Audit"]);
-    expect(detail.notes.map((n: any) => n.text)).toEqual(["L'audit commence lundi"]);
-    expect(JSON.stringify(detail)).not.toContain("Marge serrée");
-    // a plain employee has no right to projects, another company's administrator cannot open it
-    expect((await employee.get("/api/portal/projects")).status).toBe(403);
-    expect((await other.get(`/api/portal/projects/${id}`)).status).toBe(404);
-    expect((await other.get("/api/portal/projects")).json.some((x: any) => x.id === id)).toBe(false);
-    // the client answers: a public note, the lead is told
-    expect((await boss.post(`/api/portal/projects/${id}/notes`, { text: "Parfait, merci" })).status).toBe(201);
-    expect((await boss.get(`/api/portal/projects/${id}`)).json.notes[0]).toMatchObject({ text: "Parfait, merci", fromClient: true });
-    expect((await tech.get(`/api/projects/${id}`)).json.notes.find((n: any) => n.text === "Parfait, merci")).toMatchObject({ internal: false, fromClient: true });
-    expect((await tech.get("/api/notifications")).json.items.some((n: any) => n.type === "project.note" && n.data.message === "Parfait, merci")).toBe(true);
-    // a client never writes an internal note, nor reaches the staff routes
-    expect((await boss.post(`/api/projects/${id}/notes`, { text: "x", internal: false })).status).toBe(403);
-  });
-});
-
-describe("a ticket merged into an existing project", () => {
-  it("lists the client's open projects, adds the ticket's notes and checklist to the chosen one, and closes the ticket; another client's or a finished project is refused", async () => {
-    resetRateLimit("login:ip:unknown");
-    const tech = await signIn("tech@akab.local");
-    const [co] = await db().insert(schema.clients).values({ name: "Zz Fusion projet (test)", autotaskId: 9_100_061 }).returning();
-    const [other] = await db().insert(schema.clients).values({ name: "Zz Autre client (test)", autotaskId: 9_100_062 }).returning();
-    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
-    (await import("../server/lib/localTickets.ts")).resetTicketMode();
-    try {
-      const tk = (await tech.post("/api/tickets", { title: "Ajouter un poste", description: "x", companyId: co.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
-      await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Le client veut un poste de plus", internal: false, email: false });
-      await db().insert(schema.ticketChecklist).values({ ticketId: tk.id, text: "Commander le poste", position: 0 });
-      const mine = (await tech.post("/api/projects", { name: "Déploiement postes", clientId: co.id, milestones: [{ name: "Phase 1" }] })).json;
-      const finished = (await tech.post("/api/projects", { name: "Vieux projet", clientId: co.id })).json;
-      await db().update(schema.projects).set({ status: "done" }).where(eq(schema.projects.id, finished.id));
-      const theirs = (await tech.post("/api/projects", { name: "Projet d'un autre", clientId: other.id })).json;
-      const orphan = (await tech.post("/api/projects", { name: "Projet sans client" })).json;
-      // only this client's open projects are offered
-      const targets = (await tech.get(`/api/tickets/${tk.id}/to-project/targets`)).json;
-      // (other tests leave projects with no client around: only ours are checked)
-      const ids = targets.map((x: any) => x.id);
-      expect(ids).toEqual(expect.arrayContaining([mine.id, orphan.id]));
-      expect(ids).not.toContain(theirs.id);
-      expect(ids).not.toContain(finished.id);
-      expect(targets.find((x: any) => x.id === orphan.id).noClient).toBe(true);
-      // another client's project, a finished one, and an unknown one are refused
-      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: theirs.id })).json.error).toBe("project_other_client");
-      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: finished.id })).json.error).toBe("project_closed");
-      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: "00000000-0000-4000-8000-000000000000" })).json.error).toBe("project_not_found");
-      // merged: nothing new is made, the project keeps its name; notes, summary and a phase are added; the ticket closes
-      const before = (await tech.get("/api/projects?status=all")).json.length;
-      const r = await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: mine.id });
-      expect(r.status).toBe(200);
-      expect(r.json).toMatchObject({ merged: true, project: { id: mine.id, number: mine.number, name: "Déploiement postes" }, notes: 1, checklist: 1 });
-      expect((await tech.get("/api/projects?status=all")).json).toHaveLength(before);
-      // a project with no client yet can take a ticket too, and then has that client
-      const tk2 = (await tech.post("/api/tickets", { title: "Autre billet", description: "x", companyId: co.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
-      expect((await tech.post(`/api/tickets/${tk2.id}/to-project`, { intoProjectId: orphan.id })).status).toBe(200);
-      expect((await tech.get(`/api/projects/${orphan.id}`)).json.client).toMatchObject({ id: co.id });
-      const detail = (await tech.get(`/api/projects/${mine.id}`)).json;
-      expect(detail.name).toBe("Déploiement postes");
-      expect(detail.notes.some((n: any) => n.text.includes("Le client veut un poste de plus"))).toBe(true);
-      expect(detail.notes.some((n: any) => n.text.includes("fusionné dans ce projet"))).toBe(true);
-      expect(detail.milestones.map((m: any) => m.name)).toEqual(["Phase 1", `Transfert depuis ${tk.number}`]);
-      const closed = (await tech.get(`/api/tickets/${tk.id}`)).json;
-      expect(closed.notes.some((n: any) => n.text.includes(`Fusionné dans le projet ${mine.number}`))).toBe(true);
-      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, { intoProjectId: mine.id })).json.error).toBe("ticket_complete");
-    } finally {
-      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();
     }
   });
@@ -11648,86 +11312,6 @@ describe("a charge not approved yet goes to another ticket or a project; an admi
       expect((await admin.patch(`/api/projects/${project.id}/time/${given.json.id}`, { date: "2026-11-03", hours: 2.25, note: "corrigé" })).status).toBe(200);
       const [edited] = await db().select().from(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, given.json.id));
       expect([edited.date, edited.hoursX100, edited.note, edited.billableX100]).toEqual(["2026-11-03", 225, "corrigé", 225]);
-    } finally {
-      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
-      (await import("../server/lib/localTickets.ts")).resetTicketMode();
-    }
-  });
-});
-
-describe("a ticket turned into a project", () => {
-  it("copies the notes, moves the time and charges not approved yet, keeps the approved ones, and closes the ticket", async () => {
-    resetRateLimit("login:ip:unknown");
-    const tech = await signIn("tech@akab.local");
-    const admin = await signIn("admin@akab.local");
-    const [techUser] = await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local"));
-    const [co] = await db().insert(schema.clients).values({ name: "Zz Transformé (test)", autotaskId: 9_100_051 }).returning();
-    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
-    (await import("../server/lib/localTickets.ts")).resetTicketMode();
-    try {
-      const tk = (await tech.post("/api/tickets", { title: "Migration serveur", description: "Gros chantier", companyId: co.autotaskId, priority: "medium", queue: "support", assigneeId: null, dueDate: "2026-12-05" })).json;
-      await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Discussion avec le client", internal: false, email: false });
-      await tech.post(`/api/tickets/${tk.id}/notes`, { text: "Note pour l'équipe", internal: true });
-      // a checklist (one item done, one waiting for the first), a file, tags and a start day
-      const [first] = await db().insert(schema.ticketChecklist).values({ ticketId: tk.id, text: "Sauvegarder", position: 0, done: true }).returning();
-      await db().insert(schema.ticketChecklist).values({ ticketId: tk.id, text: "Migrer", position: 1, dependsOnId: first.id });
-      await db().insert(schema.ticketAttachments).values({ ticketId: tk.id, name: "plan.txt", contentType: "text/plain", size: 5, data: Buffer.from("salut").toString("base64"), author: "Tech" });
-      await db().insert(schema.ticketMeta).values({ ticketId: tk.id, startDate: "2026-11-09", tags: ["serveur"], estimateMinutes: 120 }).onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { startDate: "2026-11-09", tags: ["serveur"], estimateMinutes: 120 } });
-      // two time entries: one still pending, one already approved (stays)
-      const type = await (await import("../server/lib/timesheets.ts")).labourType();
-      const mkTime = async (minutes: number) => {
-        const [e] = await db().insert(schema.ticketTimeEntries).values({ ticketId: tk.id, userId: techUser.id, author: "Tech", startedAt: new Date("2026-11-02T14:00:00Z"), minutes, summary: "Travail", billable: true }).returning();
-        await db().insert(schema.timesheetEntries).values({ userId: techUser.id, date: "2026-11-02", typeId: type.id, hoursX100: minutes * 100 / 60, ticketId: tk.id, ticketNumber: tk.number, ticketTitle: tk.title, ticketTimeId: e.id, billableX100: minutes * 100 / 60, clientId: co.id, source: "ticket" });
-        return e;
-      };
-      const pending = await mkTime(60);
-      const approved = await mkTime(30);
-      // the copy into Approbation makes both lines (pending); one is approved
-      await (await import("../server/lib/billables.ts")).syncBillablesNow();
-      const labour = (await admin.get("/api/billables?kind=labour")).json;
-      await admin.post("/api/billables/status", { ids: [labour.find((i: any) => i.sourceId === `ptime:${approved.id}`).id], status: "approved" });
-      // two charges: one pending, one approved
-      const c1 = (await tech.post(`/api/tickets/${tk.id}/charges`, { name: "Switch", quantity: 1, unitPrice: 100, billable: true })).json[0].id;
-      const c2 = (await tech.post(`/api/tickets/${tk.id}/charges`, { name: "Câble", quantity: 1, unitPrice: 10, billable: true })).json.find((x: any) => x.name === "Câble").id;
-      const approvedLine = (await admin.get("/api/billables?kind=charge")).json.find((i: any) => i.sourceId === `pcharge:${c2}`);
-      await admin.post("/api/billables/status", { ids: [approvedLine.id], status: "approved" });
-
-      expect((await tech.get(`/api/tickets/${tk.id}/to-project`)).json).toEqual({ notes: 2, checklist: 2, files: 1, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
-      const r = await tech.post(`/api/tickets/${tk.id}/to-project`, {});
-      expect(r.status).toBe(200);
-      expect(r.json).toMatchObject({ ok: true, notes: 2, checklist: 2, files: 1, time: { moved: 1, stays: 1 }, charges: { moved: 1, stays: 1 } });
-      const project = (await admin.get(`/api/projects/${r.json.project.id}`)).json;
-      expect(project).toMatchObject({ name: "Migration serveur", client: { id: co.id }, startDate: "2026-11-09", dueDate: "2026-12-05", budgetHours: 2 });
-      // the checklist is a phase "Transfert" with a task per item; the ticket has none left
-      const phase = project.milestones.find((m: any) => m.name === `Transfert depuis ${tk.number}`);
-      expect(phase.tasks.map((x: any) => [x.title, x.status])).toEqual([["Sauvegarder", "done"], ["Migrer", "todo"]]);
-      expect(await db().select().from(schema.ticketChecklist).where(eq(schema.ticketChecklist.ticketId, tk.id))).toEqual([]);
-      // the file moved; the first note keeps the ticket's tags
-      expect((await tech.get(`/api/projects/${project.id}/files`)).json.map((f: any) => f.name)).toEqual(["plan.txt"]);
-      expect(await db().select().from(schema.ticketAttachments).where(eq(schema.ticketAttachments.ticketId, tk.id))).toEqual([]);
-      expect(project.notes.map((n: any) => n.text).join(" ")).toContain("Étiquettes : serveur");
-      // the notes are in the project, each saying where it came from
-      expect(project.notes.map((n: any) => n.text).join("\n")).toContain("Discussion avec le client");
-      expect(project.notes.map((n: any) => n.text).join("\n")).toContain(`[${tk.number}`);
-      // the pending time is the project's (1 h); the ticket's copy is no longer billable and its line is gone; the approved one stays
-      expect(project.hours).toBe(1);
-      const [tp] = await db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.id, pending.id));
-      expect(tp.billable).toBe(false);
-      const [ta] = await db().select().from(schema.ticketTimeEntries).where(eq(schema.ticketTimeEntries.id, approved.id));
-      expect(ta.billable).toBe(true);
-      const items = (await admin.get("/api/billables")).json;
-      expect(items.some((i: any) => i.sourceId === `ptime:${pending.id}`)).toBe(false);
-      expect(items.find((i: any) => i.sourceId === `ptime:${approved.id}`)).toMatchObject({ status: "approved" });
-      // charges: the pending one is on the project, the approved one is still on the ticket
-      expect((await tech.get(`/api/projects/${project.id}/charges`)).json.map((x: any) => x.id)).toEqual([c1]);
-      expect((await tech.get(`/api/tickets/${tk.id}/charges`)).json.map((x: any) => x.id)).toEqual([c2]);
-      // the ticket is closed with a note naming the project
-      const after = (await tech.get(`/api/tickets/${tk.id}`)).json;
-      expect(after.completedAt ?? after.status).toBeTruthy();
-      expect(after.status).toBe("transformed");
-      expect(JSON.stringify(after.notes)).toContain(`Transformé en projet ${project.number}`);
-      // once only
-      expect((await tech.post(`/api/tickets/${tk.id}/to-project`, {})).json.error).toBe("ticket_complete");
     } finally {
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
       (await import("../server/lib/localTickets.ts")).resetTicketMode();
@@ -13049,5 +12633,32 @@ describe("private notes and quick reminders (the To do panel)", () => {
     expect((await tech.patch(`/api/my-notes/${rem.json.id}`, { remindAt: past })).json.notified).toBe(false);
     expect(await noteTick()).toBe(1);
     expect((await tech.del(`/api/my-notes/${note.json.id}`)).status).toBe(200);
+  });
+});
+
+describe("projects archive: administrators only, nothing for clients", () => {
+  it("only administrators keep the project rights, clients have none, and the transfer routes are gone", async () => {
+    const { lockProjectsToAdmins } = await import("../server/db/seed.ts");
+    const rolesOf = async () => (await db().select().from(schema.roles)).filter((r) => r.permissions.some((p) => p.startsWith("projects.") || p.startsWith("clientProjects.")));
+    // a technician role given the rights (as the module's tests do) and a client role given a client right by hand
+    const [clientRole] = await db().select().from(schema.roles).where(eq(schema.roles.slug, "client-admin")).limit(1);
+    await db().update(schema.roles).set({ permissions: [...clientRole.permissions, "clientProjects.view"] }).where(eq(schema.roles.id, clientRole.id));
+    const before = (await rolesOf()).map((r) => r.slug);
+    expect(before).toEqual(expect.arrayContaining(["technician", "client-admin"]));
+    await lockProjectsToAdmins();
+    const after = (await rolesOf()).map((r) => r.slug);
+    expect(after.sort()).toEqual(["administrator", "global-admin"].filter((s) => after.includes(s)).sort());
+    expect(after).toContain("administrator");
+    // the technician no longer reaches the archive; the administrator does
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    expect((await tech.get("/api/projects")).status).toBe(403);
+    expect((await admin.get("/api/projects")).status).toBe(200);
+    // the transfers to a project and the client portal's projects are gone
+    expect((await admin.get("/api/tickets/1/to-project")).status).toBe(404);
+    expect((await admin.post("/api/quotes/00000000-0000-4000-8000-000000000000/to-project", {})).status).toBe(404);
+    // the other tests of the module run with a technician who has the rights again
+    const [techRole] = await db().select().from(schema.roles).where(and(eq(schema.roles.slug, "technician"), isNull(schema.roles.clientId)));
+    await db().update(schema.roles).set({ permissions: [...techRole.permissions, "projects.view", "projects.edit"] }).where(eq(schema.roles.id, techRole.id));
   });
 });

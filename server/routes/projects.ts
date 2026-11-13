@@ -1262,7 +1262,7 @@ export const projectsRoutes = new Hono<AppEnv>()
     // internal note: colleagues told (active staff only, never oneself): the bell, and as ticked an email and a Teams chat message
     let told: Awaited<ReturnType<typeof notifyTechs>> = [];
     if (kind === "internal" && n.notifyUserIds.length) {
-      const link = `/pipeline?section=projects&project=${p.id}&tab=milestones&milestone=${ms.id}`;
+      const link = `/projects?project=${p.id}&tab=milestones&milestone=${ms.id}`;
       told = await notifyTechs(
         { id: 0, number: p.number, title: ms.name, company: { name: "" }, link, head: `vous signale une note de la phase « ${ms.name} » du projet ${p.number} (${p.name})` },
         { id: a.user.id, name: a.realUser.name },

@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ClipboardList, FileSignature, FolderKanban, Loader2, Plus, Search, ThumbsDown } from "lucide-react";
+import { ClipboardList, FileSignature, FolderKanban, Plus, Search, ThumbsDown } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,14 +16,12 @@ import { money } from "@/pages/crm/shared";
 import { shortDate } from "@/pages/tickets/shared";
 import { QUOTE_STATUSES } from "@shared/quotes";
 import { STATUS_STYLE, type QuoteListItem } from "./shared";
-import { useToProject } from "./useToProject";
 
 /** Accounting › Soumissions: every quote, newest first. */
 export function QuotesPage() {
   const { t, i18n } = useTranslation();
   const nav = useNavigate();
   const can = useCan();
-  const project = useToProject();
   const confirm = useConfirm();
   const qc = useQueryClient();
   const decline = useMutation({
@@ -155,17 +153,7 @@ export function QuotesPage() {
                         <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-300" title={t("quotes.project.doneTitle")}>
                           <FolderKanban className="size-3.5" /> {t("quotes.project.badge", { number: x.projectTicketNumber })}
                         </span>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={project.pending || !project.allowed(x)}
-                          title={!x.clientId ? t("quotes.errors.project_needs_client") : x.lineCount === 0 ? t("quotes.errors.quote_empty") : undefined}
-                          onClick={() => void project.start(x)}
-                        >
-                          {project.pending ? <Loader2 className="size-4 animate-spin" /> : <FolderKanban className="size-4" />} {t("quotes.project.action")}
-                        </Button>
-                      )}
+                      ) : null}
                       {(x.status === "draft" || x.status === "sent") && (
                         <Button
                           variant="ghost"
@@ -185,7 +173,6 @@ export function QuotesPage() {
           </ul>
         )}
       </div>
-      {project.dialog}
     </div>
   );
 }

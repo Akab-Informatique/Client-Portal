@@ -444,6 +444,7 @@ const fr = {
     modules: "Modules",
     commandCenter: "Centre de commande",
     projects: "Projets",
+    projectsArchive: "Archive projets",
     tools: "Outils",
     dashboard: "Tableau de bord",
     messages: "Babillard",
