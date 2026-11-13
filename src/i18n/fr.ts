@@ -5661,6 +5661,17 @@ const fr = {
       rotateText: "Les anciens liens de rapport de ce robot cesseront de fonctionner : il faudra les remplacer là où ils sont utilisés.",
     },
     links: { title: "Liens de rapport", label: "Tâche affichée" },
+    xmas: {
+      title: "Noël — Octet",
+      hint: "Du 1er au 25 décembre, le bureau de la télé est décoré et Octet, le lutin d'AKAB, brise les prix. Écris l'aubaine de chaque jour (80 caractères au plus).",
+      day: "Jour {{day}}",
+      placeholder: "Aubaine du jour…",
+      save: "Enregistrer les aubaines",
+      saved: "Aubaines enregistrées",
+      preview: "Prévisualiser le jour",
+      previewOff: "Aujourd'hui (sans aperçu)",
+      previewDay: "{{day}} décembre",
+    },
     override: { title: "Définir l'état", apply: "Appliquer", hint: "Pour tester l'écran." },
   },
   breakroom: {

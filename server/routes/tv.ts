@@ -13,12 +13,14 @@ import {
   botExists,
   deleteBot,
   displayKeyMatches,
+  getAubaines,
   getDisplayKey,
   managedBots,
   parseState,
   publicState,
   rotateBotKey,
   rotateDisplayKey,
+  setAubaines,
   setStatus,
   updateBot,
 } from "../lib/tv.ts";
@@ -41,6 +43,8 @@ const hidden = (c: Context) => c.header("Cache-Control", "no-store");
 const zName = z.object({ name: z.string().max(60) });
 const zPatch = z.object({ name: z.string().max(60).optional(), sort: z.number().int().min(0).max(1000).optional() });
 const zStatus = z.object({ state: z.enum(TV_STATES), label: z.union([z.string().max(200), z.number().int()]).nullish() });
+
+const zAubaines = z.object({ aubaines: z.record(z.string().regex(/^[0-9]{1,2}$/), z.string().max(2000)) });
 
 export const tvRoutes = new Hono<AppEnv>()
   // ── Public: the lobby screen (display key in the URL) ──
@@ -78,9 +82,21 @@ export const tvRoutes = new Hono<AppEnv>()
   })
 
   // ── Signed in: the Dashboard TV page ──
-  .get("/state", requireStaff, requirePermission("tv.view"), async (c) => c.json(await publicState()))
+  .get("/state", requireStaff, requirePermission("tv.view"), async (c) => {
+    const x = c.req.query("xmas");
+    const xmas = x && /^[0-9]{1,2}$/.test(x) ? Number(x) : null; // staff preview of a day of the Christmas scene
+    return c.json(await publicState({ xmas }));
+  })
 
   // ── Managers ──
+  .get("/aubaines", requireStaff, requirePermission("tv.manage"), async (c) => c.json({ aubaines: await getAubaines() }))
+  .put("/aubaines", requireStaff, requirePermission("tv.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, zAubaines);
+    const aubaines = await setAubaines(p.aubaines);
+    await audit(a.user.id, "tv.aubaines.updated", undefined, { days: Object.keys(aubaines).length });
+    return c.json({ aubaines });
+  })
   .get("/bots", requireStaff, requirePermission("tv.manage"), async (c) =>
     c.json({ displayKey: await getDisplayKey(), labels: [...LABELS], bots: await managedBots() }),
   )

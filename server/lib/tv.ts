@@ -229,15 +229,66 @@ export async function unassignedCount(): Promise<number> {
   return n;
 }
 
-/** The public body: names and approved labels only, never a key. */
-export async function publicState() {
+// ── Christmas: Octet, 1 to 25 December (Québec time) ──
+export const AUBAINE_MAX = 80;
+
+/** The day of December (1..25) in Québec at that moment, or null outside the window. */
+export function quebecChristmasDay(now: Date = new Date()): number | null {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", month: "numeric", day: "numeric" }).formatToParts(now);
+  const month = Number(parts.find((p) => p.type === "month")?.value);
+  const day = Number(parts.find((p) => p.type === "day")?.value);
+  return month === 12 && day >= 1 && day <= 25 ? day : null;
+}
+
+/** Plain text, trimmed, no control characters, at most 80 characters; empty = none. */
+export function cleanAubaine(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return [...value.replace(/[<>]/g, " ").replace(/[\p{Cc}]/gu, " ").replace(/\s+/g, " ").trim()].slice(0, AUBAINE_MAX).join("").trim();
+}
+
+export async function getAubaines(): Promise<Record<string, string>> {
+  await ensureTv();
+  const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, TV_PROVIDER));
+  const raw = ((row?.config ?? {}) as { aubaines?: Record<string, unknown> }).aubaines ?? {};
+  const out: Record<string, string> = {};
+  for (let d = 1; d <= 25; d++) {
+    const v = cleanAubaine(raw[String(d)]);
+    if (v) out[String(d)] = v;
+  }
+  return out;
+}
+
+export async function setAubaines(input: Record<string, unknown>): Promise<Record<string, string>> {
+  await ensureTv();
+  const clean: Record<string, string> = {};
+  for (let d = 1; d <= 25; d++) {
+    const v = cleanAubaine(input[String(d)]);
+    if (v) clean[String(d)] = v;
+  }
+  const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, TV_PROVIDER));
+  const config = { ...((row?.config ?? {}) as Record<string, unknown>), aubaines: clean };
+  await db().update(schema.integrations).set({ config, updatedAt: new Date() }).where(eq(schema.integrations.provider, TV_PROVIDER));
+  return clean;
+}
+
+/** null outside 1-25 December; inside, which day it is, whether Octet wears the big black shirt (from the 8th) and the day's aubaine. */
+export async function christmasOf(now: Date = new Date(), override?: number | null) {
+  const day = override != null && Number.isInteger(override) && override >= 1 && override <= 25 ? override : quebecChristmasDay(now);
+  if (day == null) return null;
+  const aubaines = await getAubaines();
+  return { day, shirt: day >= 8, aubaine: aubaines[String(day)] ?? null };
+}
+
+/** The public body: names and approved labels only, never a key. `xmas` (staff preview only) forces a day of the Christmas scene. */
+export async function publicState(opts: { now?: Date; xmas?: number | null } = {}) {
   const now = Date.now();
   const unassigned = await unassignedCount();
   const list = (await rows()).map(({ bot, status }) => {
     const e = statusOf(status, now);
     return { id: bot.id, name: bot.name, state: e.state, label: e.label, since: e.since.toISOString() };
   });
-  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, unassigned, bots: list };
+  const christmas = await christmasOf(opts.now ?? new Date(now), opts.xmas);
+  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, unassigned, christmas, bots: list };
 }
 
 /** For the managers: same as the public list, plus each bot's secret report key and its position. */

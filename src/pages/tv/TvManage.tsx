@@ -43,7 +43,7 @@ function copy(text: string, ok: string, bad: string) {
   );
 }
 
-export function TvManage() {
+export function TvManage({ xmasDay, onXmasDay }: { xmasDay: number; onXmasDay: (d: number) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -196,6 +196,8 @@ export function TvManage() {
         </>
       )}
 
+      <XmasCard day={xmasDay} onDay={onXmasDay} />
+
       <NameDialog
         open={adding}
         title={t("tv.bots.add")}
@@ -340,5 +342,61 @@ function NameDialog({ open, title, initial, onClose, onSave }: { open: boolean; 
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const DAYS = Array.from({ length: 25 }, (_, i) => i + 1);
+
+/** The 25 aubaines of Octet's Christmas campaign, and a preview of any day on the screen above */
+function XmasCard({ day, onDay }: { day: number; onDay: (d: number) => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["tv", "aubaines"], queryFn: () => api.get<{ aubaines: Record<string, string> }>("/tv/aubaines") });
+  const [draft, setDraft] = useState<Record<string, string> | null>(null);
+  const values = draft ?? q.data?.aubaines ?? {};
+  const save = useMutation({
+    mutationFn: () => api.put<{ aubaines: Record<string, string> }>("/tv/aubaines", { aubaines: values }),
+    onSuccess: (r) => {
+      qc.setQueryData(["tv", "aubaines"], r);
+      setDraft(null);
+      toast.success(t("tv.xmas.saved"));
+    },
+    onError: () => toast.error(t("tv.error")),
+  });
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium">{t("tv.xmas.title")}</h3>
+        <p className="max-w-[65ch] text-xs text-muted-foreground">{t("tv.xmas.hint")}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <label htmlFor="tv-xmas-day" className="text-sm">
+          {t("tv.xmas.preview")}
+        </label>
+        <select id="tv-xmas-day" value={day} onChange={(e) => onDay(Number(e.target.value))} className="h-9 rounded-md border border-input bg-background px-2 text-sm">
+          <option value={0}>{t("tv.xmas.previewOff")}</option>
+          {DAYS.map((d) => (
+            <option key={d} value={d}>
+              {t("tv.xmas.previewDay", { day: d })}
+            </option>
+          ))}
+        </select>
+      </div>
+      {q.isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {DAYS.map((d) => (
+            <label key={d} className="grid grid-cols-[4.5rem_1fr] items-center gap-2 text-sm">
+              <span className="text-muted-foreground">{t("tv.xmas.day", { day: d })}</span>
+              <Input value={values[String(d)] ?? ""} maxLength={80} placeholder={t("tv.xmas.placeholder")} onChange={(e) => setDraft({ ...values, [String(d)]: e.target.value })} />
+            </label>
+          ))}
+        </div>
+      )}
+      <Button size="sm" disabled={!draft || save.isPending} onClick={() => save.mutate()}>
+        {t("tv.xmas.save")}
+      </Button>
+    </div>
   );
 }

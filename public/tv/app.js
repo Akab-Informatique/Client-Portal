@@ -186,7 +186,7 @@
     return pts;
   }
   function updateQueue() {
-    var q = order.filter(function (b) { return b.state === 'needs_human' && !b.leaving; });
+    var q = order.filter(function (b) { return b.state === 'needs_human' && !b.leaving && !(xmas && isHostage(b)); }); // a hostage never leaves its desk
     q.sort(function (a, b) { return (a.since - b.since) || (a.id < b.id ? -1 : 1); });
     var mq = lay.cols <= 3 ? 4 : 3; // spots that stay clear of the bot desk grid
     staff.qn = QUEUE_ON ? Math.min(mq, q.length) : 0;
@@ -221,7 +221,7 @@
   function visitSpot(k) { var d = lay.desks[0]; return { x: d.standX + 24 * k, y: d.standY }; }
   function freeSlot() { for (var i = 0; i < 3; i++) if (!slots[i]) return i; return -1; }
   function bossReady() { return !!bossBot && bossBot.state !== 'needs_human' && bossBot.mode === 'seat' && !bossBot.path.length; }
-  function canVisit(b) { return bossBot && b !== bossBot && bossReady() && freeSlot() >= 0 && bossBot.desk === 0; }
+  function canVisit(b) { return !(xmas && isHostage(b)) && bossBot && b !== bossBot && bossReady() && freeSlot() >= 0 && bossBot.desk === 0; }
   function startVisit(b, kind, after) {
     var k = freeSlot(); if (k < 0) return false;
     slots[k] = b; var sp = visitSpot(k);
@@ -237,7 +237,7 @@
   }
   function tryDeliver(b) {
     b.delT = 5 + Math.random() * 5;
-    if (!PEOPLE_ON || !humans.length || b.sp === 'boss' || staff.qn >= 3 || b.gag || b.visit || b.leaving) return;
+    if (!PEOPLE_ON || !humans.length || b.sp === 'boss' || (xmas && isHostage(b)) || staff.qn >= 3 || b.gag || b.visit || b.leaving) return;
     var busy = false; bots.forEach(function (o) { if (o.dv) busy = true; });
     var al = humans.filter(function (h) { return h.p.queueDesk; })[0];
     if (busy || !al || al.mode !== 'sit') return;
@@ -349,7 +349,7 @@
     items.forEach(function (x) {
       var it = x.it, id = x.id, b = bots.get(id), isNew = false;
       var st = (it.state === 'working' || it.state === 'needs_human') ? it.state : 'idle';
-      var fake = AMBIANCE && st === 'idle'; if (fake) st = 'working';
+      var fake = AMBIANCE && st === 'idle'; if (xmas && normName(it.name) === 'facebook' && st === 'idle') fake = true; if (fake) st = 'working';
       if (!b) { b = newBot(id, dmap[id]); bots.set(id, b); isNew = true; }
       else if (b.leaving) { b.leaving = false; b.state = null; }
       b.name = String(it.name != null ? it.name : id).slice(0, 12);
@@ -429,6 +429,7 @@
     if (bossBot) bossBot.talking = bossTalking;
     try { updateQueue(); } catch (e) { /* ignore */ }
     try { updateHumans(dt); } catch (e) { humans = []; }
+    try { xmasUpdate(dt); } catch (e) { xmasReset(); }
     try { gagUpdate(dt); } catch (e) { gag = null; rackRed = false; bots.forEach(function (b) { b.gag = false; }); }
   }
 
@@ -740,6 +741,7 @@
   }
   // name plaque (robot colour); redrawn after the bubbles so it is always on top
   function drawPlaque(dk, b) {
+    b = plaqueBot(b);
     var cx = dk.cx, dy = dk.dy, n = b.name.toUpperCase(), w = PX.measure(n, 1) + 4;
     if (w > 56) R(cx - Math.floor(w / 2) - 1, dy + 5, w + 2, 11, DARK);
     R(cx - Math.floor(w / 2), dy + 6, w, 9, b.col.base); T(n, cx, dy + 7, DARK, 1, null, 'center');
@@ -766,6 +768,7 @@
       R(bx + 1, gy, 1, 1, '#7df9ff');
       if (i) { var py = y + 8 + (hash(k - 1, 3) % 7); R(bx - 2, Math.round((py + gy) / 2), 1, 1, '#2a7f8f'); }
     }
+    if (xmas) drawSnowWindow(x, y, w, h, t);
     g.restore();
     R(x + w - 14, y + 4, 2, 2, '#62ff7a'); R(x + w - 10, y + 4, 2, 2, '#FFF200'); R(x + w - 6, y + 4, 2, 2, '#7df9ff');
     if (unassigned > 0) drawUnassigned(t, x, y, w, h);
@@ -791,11 +794,11 @@
     if (on) { R(bx - 4, y - 7, 2, 1, '#ff3b30'); R(bx + 8, y - 7, 2, 1, '#ff3b30'); R(bx + 2, y - 12, 2, 2, '#ff3b30'); }
   }
   function drawLeds(t, anyCoffee) {
-    var red = rackRed;
+    var red = rackRed, off = xmas && oct.rackOff;
     var step = Math.floor(t * 4);
     for (var u = 0; u < 5; u++) for (var k = 0; k < 4; k++) {
       var h = hash(u * 5 + k, step + (k > 1 ? Math.floor(step / 3) : 0)) % 5;
-      R(11 + k * 3, 66 + u * 11 + (k & 1) * 2, 2, 2, red ? ((step & 1) ? '#ff3b30' : '#8a1a14') : h === 0 ? '#ff3b30' : (h < 3 ? '#62ff7a' : '#245a30'));
+      R(11 + k * 3, 66 + u * 11 + (k & 1) * 2, 2, 2, off ? '#10172a' : red ? ((step & 1) ? '#ff3b30' : '#8a1a14') : h === 0 ? '#ff3b30' : (h < 3 ? '#62ff7a' : '#245a30'));
     }
     R(31, 63, 4, 2, (Math.floor(t * 2) & 1) ? '#FFF200' : '#6a5a10');
     // coffee machine light + steam
@@ -901,6 +904,7 @@
   function drawHeader(t, now) {
     if (!CLOCK) return;
     var str = pad2(now.getHours()) + ((Math.floor(t) & 1) ? ' ' : ':') + pad2(now.getMinutes());
+    if (xmas && oct.clockOff) str = '  ' + ((Math.floor(t) & 1) ? ' ' : ':') + '  ';
     T(str, 426, 21, '#F7941D', 2, null, 'center'); T(str, 426, 20, '#FFF200', 2, null, 'center');
   }
 
@@ -925,10 +929,12 @@
     }
     drawLeds(t, anyCoffee);
     drawPlantBoost();
+    if (xmas) { try { drawXmasBack(t); } catch (e) { /* ignore */ } }
     if (bossBot) ents.push({ k: -5, f: function () {
       var sp = visitSpot(0); R(sp.x - 14, sp.y - 3, 28, 8, '#1a2140'); R(sp.x - 14, sp.y - 3, 28, 1, '#33381f'); R(sp.x - 14, sp.y + 4, 28, 1, '#33381f');
     } });
     try { gagEntities(ents, t); } catch (e) { /* ignore */ }
+    if (xmas) { try { xmasEnts(ents, t); } catch (e) { /* ignore */ } }
     lay.desks.forEach(function (dk) {
       ents.push({ k: dk.dy, f: function () { drawChair(dk); } });
       ents.push({ k: dk.dy + 10, f: function () { drawDeskFront(dk, t); } });
@@ -945,6 +951,7 @@
       var showTag = pose !== 'sit';
       ents.push({ k: b.y, f: function () {
         drawRobot(b, b.x, b.y + gagJy(b), pose, t);
+        if (xmas && isHostage(b)) drawHostage(b);
         b._tag = showTag ? (b.goal && b.goal.type === 'queue' ? 2 : 1) : 0;
         if (showTag) drawTag(b, b.x, b.y, b.goal && b.goal.type === 'queue');
         if (pose === 'doze') for (var z = 0; z < 3; z++) {
@@ -966,6 +973,7 @@
     // overlays: bubbles
     var maxc0 = Math.max(8, Math.floor((lay.cell - 6) / 6));
     order.forEach(function (b) {
+      if (xmas && isHostage(b) && b.state === 'working') return;
       if (b.state === 'working' && b.mode === 'seat' && !b.path.length && !b.bubOn) {
         R(Math.round(b.x) - 5, Math.round(b.y - 36), 2, 2, '#ffffff'); R(Math.round(b.x) - 1, Math.round(b.y - 36) - (Math.floor(t * 3) % 3 === 1 ? 1 : 0), 2, 2, '#ffffff'); R(Math.round(b.x) + 3, Math.round(b.y - 36), 2, 2, '#ffffff');
       } else if (b.state === 'working' && b.mode === 'seat' && !b.path.length) {
@@ -998,6 +1006,7 @@
     });
     humans.forEach(function (h) { try { if (h.bub) iconBubble(h.x - 24, h.y - 26, h.bub.k, t); } catch (e) { /* ignore */ } });
     try { gagOverlay(t); } catch (e) { /* ignore */ }
+    if (xmas) { try { xmasOverlay(t); drawGarland(t); order.forEach(function (b) { if (isHostage(b) && !b.leaving) drawHostageSign(lay.desks[b.desk], t); }); } catch (e) { /* ignore */ } }
     // plaques and name tags always above bubbles
     lay.desks.forEach(function (dk) { var pb = botAt(dk.i); if (pb) drawPlaque(dk, pb); });
     humans.forEach(function (h) { drawHPlaque(h); });
@@ -1014,6 +1023,7 @@
     var stg = document.getElementById('stage');
     stg.style.width = Math.floor(W * s) + 'px'; stg.style.height = Math.floor(H * s) + 'px';
     logoScale = Math.floor(W * s) / W;
+    stg.style.setProperty('--u', logoScale + 'px');
     placeLogo();
   }
   window.addEventListener('resize', resize);
@@ -1086,7 +1096,7 @@
       var nu = Math.max(0, Math.floor(Number(d.unassigned) || 0));
       if (prevUnassigned !== null && nu > prevUnassigned) chime();
       prevUnassigned = nu; unassigned = nu;
-      applyData(d); st.lastOk = Date.now(); st.stale = !!d.stale; fails = 0;
+      setXmas(d.christmas); applyData(d); st.lastOk = Date.now(); st.stale = !!d.stale; fails = 0;
       setTimeout(poll, 2000);
     }).catch(function () {
       fails++;
@@ -1116,6 +1126,273 @@
     });
     return { updatedAt: new Date(now).toISOString(), source: 'demo', stale: false,
       bots: demo.map(function (b) { return { id: b.id, name: b.name, state: b.state, label: b.label, since: new Date(b.since).toISOString() }; }) };
+  }
+
+  // ---------- Christmas (1-25 December): Octet, AKAB's comic elf ----------
+  // The server sends christmas: null outside the window, else { day, shirt, aubaine }. Outside it nothing below runs.
+  var xmas = null;
+  var PRANKS = ['cable', 'logo', 'swap', 'clock', 'chair', 'rack', 'plant', 'tuque'];
+  var OC = { skin: '#f2b88f', hair: '#3a2212', green: '#1f8a45', red: '#e63946', gold: '#FFD700', yellow: '#FFF200', brown: '#8a5a2b', cheek: '#ff8f8f', shirt: '#2c2c3a' };
+  var SHELF_Y = 46, HOME = { x: 22, y: 106 };
+  var oct = { mode: 'sleep', x: 22, y: SHELF_Y, t: 0, tot: 0, wake: 25, face: 1, path: [], type: '', dur: 8, hop: false, rackOff: false, clockOff: false, wrap: null, swap: null, tuque: null, tuqueUntil: 0, target: null };
+
+  function setXmas(c) {
+    var nx = null;
+    if (c && typeof c === 'object') {
+      var day = Math.floor(Number(c.day));
+      if (day >= 1 && day <= 25) nx = { day: day, shirt: !!c.shirt, aubaine: (typeof c.aubaine === 'string' && c.aubaine.trim()) ? c.aubaine.trim().slice(0, 80) : null };
+    }
+    var changed = JSON.stringify(nx) !== JSON.stringify(xmas);
+    xmas = nx;
+    if (changed) { xmasReset(); xmasCard(); }
+  }
+  function xmasReset() {
+    oct.mode = 'sleep'; oct.x = HOME.x; oct.y = SHELF_Y; oct.path = []; oct.rackOff = false; oct.clockOff = false; oct.wrap = null; oct.swap = null; oct.tuque = null;
+    oct.wake = 25 + Math.random() * 10; oct.t = 0; oct.tot = 0;
+  }
+  // The corner card: the real Octet picture (one of four by day), the title and the day's aubaine
+  var CARD_IMGS = ['vue-trois-quarts', 'expr-clin-doeil', 'expr-rieur', 'expr-fier-b'];
+  function xmasCard() {
+    var el = document.getElementById('xmas');
+    if (!el) return;
+    if (!xmas) { el.hidden = true; return; }
+    document.getElementById('xmas-img').src = 'assets/octet/' + CARD_IMGS[xmas.day % CARD_IMGS.length] + '-transparent.png';
+    document.getElementById('xmas-a').textContent = xmas.aubaine || 'Des aubaines tous les jours !';
+    el.hidden = false;
+  }
+
+  function pickBot(skipHostage) {
+    var c = order.filter(function (b) { return !b.leaving && b.state !== 'leaving' && !(skipHostage && isHostage(b)); });
+    if (!c.length) return null;
+    var seated = c.filter(function (b) { return b.mode === 'seat' && !b.path.length; });
+    return pick(seated.length ? seated : c);
+  }
+  function isHostage(b) { return normName(b.name) === 'facebook'; }
+
+  function beginPrank() {
+    var ty = PRANKS[(xmas.day - 1) % PRANKS.length], b = null;
+    if (ty === 'cable') b = pickBot(true);
+    if (ty === 'tuque') b = bossBot || pickBot(true);
+    if ((ty === 'cable' || ty === 'tuque') && !b) ty = 'rack';
+    if (ty === 'swap' && (order.length < 2 || !botAt(0) || !botAt(1))) ty = 'rack';
+    oct.type = ty; oct.mode = 'wake'; oct.t = 0; oct.tot = 0; oct.target = b;
+    oct.dur = { cable: 7, logo: 7, swap: 8, clock: 8, chair: 10, rack: 6.5, plant: 7, tuque: 9 }[ty];
+  }
+  function spotFor() {
+    var ty = oct.type, b = oct.target, d0 = lay.desks[0];
+    if (ty === 'cable' || ty === 'tuque') return b ? { x: Math.round(b.x - 15), y: Math.round(b.y + 5) } : HOME;
+    if (ty === 'logo') return { x: 352, y: 66 };
+    if (ty === 'swap') return { x: d0.cx + 34, y: d0.dy + 30 };
+    if (ty === 'clock') return { x: 426, y: 62 };
+    if (ty === 'chair') return { x: 60, y: lay.laneB };
+    if (ty === 'rack') return { x: 52, y: 110 };
+    return { x: 12, y: 207 }; // plant
+  }
+  function xmasUpdate(dt) {
+    if (!xmas) { if (oct.mode !== 'sleep') xmasReset(); return; }
+    if (REDUCED) return;
+    oct.t += dt;
+    if (oct.mode !== 'sleep') { oct.tot += dt; if (oct.tot > 70) { xmasReset(); oct.wake = rnd(150, 240); return; } }
+    var u;
+    if (oct.mode === 'sleep') { oct.wake -= dt; if (oct.wake <= 0) beginPrank(); }
+    else if (oct.mode === 'wake') { if (oct.t > 1.5) { oct.mode = 'drop'; oct.t = 0; } }
+    else if (oct.mode === 'drop') {
+      u = Math.min(1, oct.t / 0.7); oct.x = HOME.x; oct.y = SHELF_Y + (HOME.y - SHELF_Y) * u - Math.sin(Math.PI * u) * 12;
+      if (u >= 1) { oct.mode = 'go'; oct.t = 0; oct.path = [spotFor()]; }
+    } else if (oct.mode === 'go' || oct.mode === 'back') {
+      var p = oct.path[0];
+      if (!p) { oct.mode = oct.mode === 'go' ? 'act' : 'climb'; oct.t = 0; oct.hop = false; if (oct.mode === 'act') actStart(); return; }
+      var dx = p.x - oct.x, dy = p.y - oct.y, dist = Math.sqrt(dx * dx + dy * dy), step = 80 * dt;
+      if (Math.abs(dx) > 0.5) oct.face = dx > 0 ? 1 : -1;
+      oct.hop = true;
+      if (dist <= step) { oct.x = p.x; oct.y = p.y; oct.path.shift(); } else { oct.x += dx / dist * step; oct.y += dy / dist * step; }
+    } else if (oct.mode === 'act') {
+      actUpdate();
+      if (oct.t >= oct.dur) { actEnd(); oct.mode = 'back'; oct.t = 0; oct.path = [HOME]; }
+    } else if (oct.mode === 'climb') {
+      u = Math.min(1, oct.t / 1.1); oct.x = HOME.x; oct.y = HOME.y + (SHELF_Y - HOME.y) * u - Math.sin(Math.PI * u) * 12; oct.face = 1;
+      if (u >= 1) { oct.mode = 'sleep'; oct.y = SHELF_Y; oct.wake = rnd(150, 240); oct.tot = 0; }
+    }
+  }
+  function actStart() {
+    var ty = oct.type;
+    if (ty === 'cable') oct.wrap = oct.target;
+    if (ty === 'swap') oct.swap = { a: botAt(0), b: botAt(1) };
+    if (ty === 'clock') oct.clockOff = true;
+    if (ty === 'tuque') oct.tuque = oct.target;
+    if (ty === 'chair') oct.x = 60;
+    if (ty !== 'chair') oct.face = 1;
+  }
+  function actUpdate() {
+    var ty = oct.type, t = oct.t;
+    if (ty === 'chair') { oct.x = 60 + 320 * (0.5 - 0.5 * Math.cos(2 * Math.PI * t / oct.dur)); oct.face = Math.sin(2 * Math.PI * t / oct.dur) > 0 ? 1 : -1; }
+    if (ty === 'rack') oct.rackOff = t > 0.9 && (t < oct.dur - 1.4 || (Math.floor(t * 8) & 1) === 0);
+    if (ty === 'cable' && (!oct.wrap || oct.wrap.leaving || bots.get(oct.wrap.id) !== oct.wrap)) oct.wrap = null;
+    if (ty === 'swap' && oct.swap && (!oct.swap.a || !oct.swap.b || bots.get(oct.swap.a.id) !== oct.swap.a || bots.get(oct.swap.b.id) !== oct.swap.b)) oct.swap = null;
+  }
+  function actEnd() {
+    oct.rackOff = false; oct.clockOff = false; oct.wrap = null; oct.swap = null;
+    if (oct.tuque) oct.tuqueUntil = Date.now() + 15000;
+  }
+  function plaqueBot(b) {
+    if (xmas && oct.swap) { if (oct.swap.a === b) return oct.swap.b; if (oct.swap.b === b) return oct.swap.a; }
+    return b;
+  }
+
+  // Same drawing convention as the robots: a list of rects, each outlined with DARK, then the fills, then the face details
+  function drawSet(x, y, P, D, f) {
+    var i, r, rx;
+    for (i = 0; i < P.length; i++) { r = P[i]; rx = f < 0 ? -r[0] - r[2] : r[0]; R(x + rx - 1, y + r[1] - 1, r[2] + 2, r[3] + 2, DARK); }
+    for (i = 0; i < P.length; i++) { r = P[i]; rx = f < 0 ? -r[0] - r[2] : r[0]; R(x + rx, y + r[1], r[2], r[3], r[4]); }
+    for (i = 0; i < D.length; i++) { r = D[i]; rx = f < 0 ? -r[0] - r[2] : r[0]; R(x + rx, y + r[1], r[2], r[3], r[4]); }
+  }
+  // Octet standing (feet at x,y), robot proportions: legs 4, body 8, chunky 14x10 head, hat on top. o.arms: 'down' | 'up'
+  function drawOctet(x, y, t, o) {
+    x = Math.round(x); y = Math.round(y);
+    var shirt = xmas && xmas.shirt, up = o.arms === 'up', f = o.face || 1, walk = o.hop, fr = walk ? (Math.floor(t * 8) & 3) : 0;
+    var bob = walk ? ((fr & 1) ? -1 : 0) : (o.still ? 0 : ((Math.floor(t * 1.3) & 1) ? -1 : 0));
+    var ll = (walk && fr === 1) ? 1 : 0, rl = (walk && fr === 3) ? 1 : 0, la = walk ? (fr === 1 ? -1 : (fr === 3 ? 1 : 0)) : 0;
+    var blink = !o.still && (Math.floor(t * 2) % 9 === 0) && (t * 7 % 1) < 0.5;
+    var P = [[-5, -2 - ll, 4, 2, OC.brown], [1, -2 - rl, 4, 2, OC.brown], [-6, -3 - ll, 1, 1, OC.brown], [5, -3 - rl, 1, 1, OC.brown], [-4, -6, 2, 4, '#ffffff'], [2, -6, 2, 4, '#ffffff']], D = [], i;
+    for (i = 0; i < 2; i++) { var x0 = i ? 2 : -4; D.push([x0, -6, 2, 1, OC.red], [x0, -5, 2, 1, OC.green], [x0, -4, 2, 1, OC.red], [x0, -3, 2, 1, OC.green]); }
+    if (shirt) {
+      P.push([-7, -14 + bob, 14, 10, OC.shirt]);
+      if (up) P.push([-10, -24 + bob, 3, 11, OC.shirt], [7, -24 + bob, 3, 11, OC.shirt]); else P.push([-10, -13 + bob + la, 3, 10, OC.shirt], [7, -13 + bob - la, 3, 10, OC.shirt]);
+      D.push([-3, -14 + bob, 6, 1, '#e8e8f0'], [-6, -11 + bob, 5, 1, OC.yellow], [-6, -9 + bob, 6, 1, OC.yellow], [-6, -7 + bob, 5, 1, OC.yellow], [1, -11 + bob, 3, 5, OC.gold], [2, -10 + bob, 1, 3, OC.shirt]);
+      D.push([5, -13 + bob, 1, 4, OC.gold], [4, -10 + bob, 3, 2, OC.yellow]);
+    } else {
+      P.push([-5, -13 + bob, 10, 6, OC.green], [-5, -7 + bob, 10, 2, OC.red]);
+      if (up) P.push([-8, -23 + bob, 2, 10, OC.green], [6, -23 + bob, 2, 10, OC.green]); else P.push([-8, -12 + bob + la, 2, 6, OC.green], [6, -12 + bob - la, 2, 6, OC.green]);
+      D.push([-3, -14 + bob, 6, 2, OC.red], [-5, -9 + bob, 10, 1, OC.yellow], [-5, -7 + bob, 10, 1, OC.gold], [3, -12 + bob, 1, 3, OC.gold], [2, -10 + bob, 3, 2, OC.yellow]);
+      if (up) D.push([-8, -25 + bob, 2, 2, OC.skin], [6, -25 + bob, 2, 2, OC.skin]); else D.push([-8, -7 + bob + la, 2, 2, OC.skin], [6, -7 + bob - la, 2, 2, OC.skin], [-8, -8 + bob + la, 2, 1, OC.red], [6, -8 + bob - la, 2, 1, OC.red]);
+    }
+    // head 14x10 like the robots', pointed ears, dark curly hair, tuque: green, red band, golden bell (never a lamp)
+    P.push([-7, -24 + bob, 14, 10, OC.skin], [-9, -21 + bob, 2, 3, OC.skin], [7, -21 + bob, 2, 3, OC.skin], [-7, -27 + bob, 14, 3, OC.red], [-5, -31 + bob, 10, 4, OC.green], [-3, -34 + bob, 6, 3, OC.green], [-7, -36 + bob, 4, 3, OC.green]);
+    D.push([-10, -22 + bob, 1, 1, OC.skin], [9, -22 + bob, 1, 1, OC.skin], [-9, -36 + bob, 3, 3, OC.gold]);
+    D.push([-7, -24 + bob, 3, 4, OC.hair], [4, -24 + bob, 3, 4, OC.hair], [-7, -24 + bob, 14, 1, OC.hair], [-1, -23 + bob, 3, 1, OC.hair], [-3, -23 + bob, 1, 1, OC.hair], [2, -23 + bob, 1, 1, OC.hair]);
+    D.push([-4, -21 + bob, 2, blink ? 1 : 3, '#2a1608'], [2, -21 + bob, 2, blink ? 1 : 3, '#2a1608'], [-5, -18 + bob, 2, 1, OC.cheek], [3, -18 + bob, 2, 1, OC.cheek], [-1, -17 + bob, 2, 1, '#a0402f']);
+    drawSet(x, y, P, D, f);
+  }
+  // Octet asleep (or just waking) on his shelf, lying on his back; head to the left
+  function drawOctetLying(x, y, t, awake) {
+    x = Math.round(x); y = Math.round(y);
+    var shirt = xmas && xmas.shirt, P = [], D = [], i;
+    // lying on his back, head to the left, about 40 px long like a robot is 33 tall
+    P.push([19, -6, 4, 6, OC.brown], [22, -7, 1, 1, OC.brown], [12, -5, 7, 5, '#ffffff']);
+    for (i = 0; i < 7; i++) D.push([12 + i, -5, 1, 5, i & 1 ? OC.green : OC.red]);
+    if (shirt) { P.push([-5, -9, 17, 9, OC.shirt]); D.push([-4, -9, 2, 1, '#e8e8f0'], [1, -7, 5, 1, OC.yellow], [0, -5, 6, 1, OC.yellow], [0, -3, 5, 1, OC.yellow], [7, -7, 3, 5, OC.gold], [8, -6, 1, 3, OC.shirt]); }
+    else { P.push([-5, -9, 12, 9, OC.green], [7, -8, 5, 8, OC.red]); D.push([-5, -9, 2, 9, OC.red], [-3, -5, 10, 1, OC.yellow], [0, -8, 3, 2, OC.gold], [1, -7, 1, 1, DARK]); }
+    P.push([-15, -10, 10, 10, OC.skin], [-14, -18, 8, 6, OC.green], [-12, -21, 5, 4, OC.green], [-16, -13, 12, 3, OC.red], [-18, -22, 4, 3, OC.green]);
+    D.push([-20, -21, 3, 3, OC.gold], [-17, -9, 2, 3, OC.skin], [-15, -10, 3, 5, OC.hair], [-15, -10, 10, 1, OC.hair], [-11, -7, 3, awake ? 3 : 1, '#2a1608'], [-8, -4, 2, 1, OC.cheek], [-11, -3, 2, 1, '#a0402f']);
+    drawSet(x, y, P, D, 1);
+  }
+  function drawShelf() {
+    // small wooden shelf on the left wall, above the rack
+    RO(4, 46, 40, 3, '#8a5a2b'); R(4, 46, 40, 1, '#b07a3f'); R(8, 49, 2, 6, '#5a3a1c'); R(38, 49, 2, 6, '#5a3a1c'); R(8, 54, 4, 1, '#5a3a1c'); R(36, 54, 4, 1, '#5a3a1c');
+  }
+
+  function drawGarland(t) {
+    var i, x, y, per = 48, cols = ['#ff3b30', '#FFF200', '#62ff7a', '#4aa8ff'];
+    for (x = 0; x < W; x++) {
+      y = 5 + Math.round(Math.sin(Math.PI * ((x % per) / per)) * 5);
+      R(x, y, 1, 2, '#1c6b34'); if (x % 3 === 0) R(x, y + 2, 1, 1, '#2fa04c'); if (x % 3 === 1) R(x, y - 1, 1, 1, '#2fa04c');
+    }
+    for (i = 0, x = 5; x < W; x += 8, i++) {
+      y = 5 + Math.round(Math.sin(Math.PI * ((x % per) / per)) * 5) + 3;
+      var on = REDUCED ? true : ((i + Math.floor(t * 2.2)) % 3) !== 0, c = cols[(i + (REDUCED ? 0 : Math.floor(t * 0.7))) % 4];
+      R(x - 1, y - 1, 4, 5, DARK); R(x, y, 2, 3, on ? c : shade(c, -0.6));
+      if (on) { g.globalAlpha = 0.25; R(x - 2, y - 1, 6, 6, c); g.globalAlpha = 1; }
+    }
+  }
+  function gift(x, y, w, h, c, r) { RO(x, y, w, h, c); R(x + Math.floor(w / 2), y, 1, h, r); R(x, y + Math.floor(h / 2), w, 1, r); R(x + Math.floor(w / 2) - 1, y - 2, 3, 2, r); }
+  function drawTree(t) {
+    var cx = 106, y, w, l, layers = [[76, 86, 3, 12], [84, 94, 6, 16], [92, 102, 9, 20]];
+    R(cx - 2, 100, 5, 5, '#6b4423');
+    for (l = 0; l < layers.length; l++) {
+      var L = layers[l];
+      for (y = L[0]; y < L[1]; y++) {
+        w = Math.round(L[2] + (L[3] - L[2]) * (y - L[0]) / (L[1] - L[0] - 1));
+        R(cx - Math.floor(w / 2) - 1, y, w + 2, 1, DARK); R(cx - Math.floor(w / 2), y, w, 1, (y - L[0]) & 1 ? '#1d7a3a' : '#2a9a4c');
+      }
+    }
+    var bulbs = [[0, 80], [-4, 88], [5, 91], [-8, 98], [1, 96], [9, 100], [-3, 84]], cols = ['#ff3b30', '#FFF200', '#4aa8ff', '#ff8fd0'];
+    for (var i = 0; i < bulbs.length; i++) {
+      var on = REDUCED ? true : ((i + Math.floor(t * 2)) % 2) === 0;
+      R(cx + bulbs[i][0], bulbs[i][1], 2, 2, on ? cols[i % 4] : shade(cols[i % 4], -0.55));
+    }
+    var tw = REDUCED || (Math.floor(t * 3) & 1);
+    R(cx - 1, 72, 3, 3, '#FFF200'); if (tw) { R(cx - 3, 73, 7, 1, '#FFF200'); R(cx, 70, 1, 7, '#FFF200'); }
+    gift(84, 98, 9, 7, '#d1242f', '#FFD700'); gift(118, 99, 8, 6, '#2f8a4c', '#ffffff'); gift(94, 101, 7, 5, '#4aa8ff', '#FFF200'); gift(110, 102, 6, 4, '#FFD700', '#d1242f');
+  }
+  function drawSnowWindow(x, y, w, h, t) {
+    var tt = REDUCED ? 0 : t;
+    for (var k = 0; k < 36; k++) {
+      var fx = x + 3 + (hash(k, 11) % (w - 8)) + Math.round(Math.sin(tt * 0.8 + k) * 2), sp = 7 + (hash(k, 5) % 9);
+      var fy = y + 3 + ((tt * sp + (hash(k, 9) % h)) % (h - 6)), big = k % 5 === 0 ? 2 : 1;
+      R(fx, Math.round(fy), big, big, k % 3 === 0 ? '#ffffff' : '#cfe4ff');
+    }
+  }
+  function drawHostage(b) {
+    var x = Math.round(b.x), y = Math.round(b.y), k;
+    for (k = 0; k < 5; k++) { R(x - 8, y - 22 + k * 5, 16, 2, '#FFF200'); R(x - 8, y - 20 + k * 5, 16, 1, '#a08000'); }
+    R(x - 8, y - 23, 2, 22, '#FFF200'); R(x + 6, y - 23, 2, 22, '#FFF200'); R(x - 10, y - 12, 2, 13, '#FFF200'); R(x + 8, y - 12, 2, 13, '#FFF200'); R(x - 10, y - 4, 20, 2, '#FFF200'); R(x - 10, y - 2, 20, 1, '#a08000'); R(x - 1, y - 9, 3, 3, '#FFD700');
+  }
+  function drawHostageSign(dk, t) {
+    // two small placards under Facebook's own desk, clear of every other bot's plate
+    var x = dk.cx - 30, y = dk.dy + 22, blink = REDUCED || (Math.floor(t * 2) & 1), aw = PX.measure('AUBAINE', 1) + 4;
+    R(x - 1, y - 1, 35, 11, DARK); R(x, y, 33, 9, blink ? '#d1242f' : '#8a1a22'); T('OTAGE', x + 16, y + 1, '#ffffff', 1, null, 'center');
+    R(x + 36, y - 1, aw + 2, 11, DARK); R(x + 37, y, aw, 9, '#FFD700'); T('AUBAINE', x + 37 + Math.floor(aw / 2), y + 1, DARK, 1, null, 'center');
+  }
+  function drawXmasBack(t) {
+    drawShelf(); drawTree(t);
+    if (oct.mode === 'sleep' || oct.mode === 'wake') drawOctetLying(HOME.x, SHELF_Y, t, oct.mode === 'wake');
+  }
+  function xmasEnts(ents, t) {
+    if (oct.mode === 'sleep' || oct.mode === 'wake') return;
+    var ty = oct.type, act = oct.mode === 'act';
+    ents.push({ k: ty === 'plant' && act ? 206 : oct.y, f: function () {
+      var o = { face: oct.face, hop: oct.hop && oct.mode !== 'act', arms: 'down' };
+      if (act && (ty === 'chair' || ty === 'clock' || ty === 'logo')) o.arms = 'up';
+      if (act && ty === 'chair') {
+        RO(oct.x - 7, oct.y - 8, 14, 3, '#2a2a38'); R(oct.x - 1, oct.y - 5, 2, 4, '#7d849c');
+        for (var w = -1; w <= 1; w += 2) R(oct.x + w * 6, oct.y - 2, 2, 2, '#cfd3dd');
+        drawOctet(oct.x, oct.y - 4, t, o);
+      } else if (act && ty === 'logo') {
+        g.save(); g.beginPath(); g.rect(351, 0, W - 351, H); g.clip(); drawOctet(oct.x, oct.y, t, o); g.restore();
+      } else drawOctet(oct.x, oct.y, t, o);
+      if (act && ty === 'plant') plant(12, 196);
+      if (act && ty === 'clock') {
+        var s = pad2(new Date().getHours()) + ':' + pad2(new Date().getMinutes());
+        T(s, oct.x, oct.y - 52, '#FFF200', 1, DARK, 'center');
+      }
+    } });
+  }
+  function xmasOverlay(t) {
+    var i, z, ph;
+    if (oct.mode === 'sleep' || oct.mode === 'wake') {
+      for (z = 0; z < 2; z++) {
+        ph = (t * 0.4 + z / 2) % 1; g.globalAlpha = 1 - ph;
+        T(z ? 'z' : 'Z', HOME.x - 16 + ph * 14 + z * 3, SHELF_Y - 24 - ph * 14, '#bfe9ff', z ? 1 : 2, DARK); g.globalAlpha = 1;
+      }
+      if (oct.mode === 'wake') iconBubble(HOME.x + 4, SHELF_Y - 26, '_!', t);
+    }
+    if (oct.type === 'cable' && oct.wrap && oct.mode === 'act') {
+      var b = oct.wrap, n = Math.min(5, 1 + Math.floor(oct.t / 0.6)), bx = Math.round(b.x), by = Math.round(b.y);
+      for (i = 0; i < n; i++) { R(bx - 8, by - 22 + i * 5, 16, 2, '#FFF200'); R(bx - 8, by - 20 + i * 5, 16, 1, '#a08000'); }
+    }
+    var tq = oct.tuque;
+    if (tq && (oct.mode === 'act' || Date.now() < oct.tuqueUntil) && bots.get(tq.id) === tq) {
+      var tx = Math.round(tq.x), tyy = Math.round(tq.y);
+      R(tx - 7, tyy - 30, 14, 6, DARK); R(tx - 6, tyy - 29, 12, 5, OC.green); R(tx - 6, tyy - 26, 12, 2, OC.red); R(tx + 5, tyy - 32, 4, 4, OC.gold);
+    } else if (tq && oct.mode !== 'act') oct.tuque = null;
+    if (oct.type === 'rack' && oct.mode === 'act') {
+      for (i = 0; i < 12; i++) R(Math.round(oct.x - 6 - i * 1.2), Math.round(oct.y - 12 + i * 0.1 + Math.sin(i + t * 3)), 2, 1, '#FFF200');
+      R(Math.round(oct.x - 8), Math.round(oct.y - 14), 3, 4, '#FFD700');
+    }
+    if (oct.mode === 'act' && oct.type !== 'clock') {
+      var say = { cable: 'HIHI !', logo: 'COUCOU !', swap: 'OUPS...', chair: 'WOOOO !', rack: oct.rackOff ? 'ZZZT' : 'PRIX BRISES', plant: 'COUCOU !', tuque: 'UNE TUQUE !' }[oct.type];
+      if (say && oct.t > 0.5 && oct.t < oct.dur - 0.5) drawBubble(oct.x, oct.y - 42 - (oct.type === 'chair' ? 2 : 0), [say], '#FFF200', DARK);
+    }
   }
 
   // ---------- main loop ----------

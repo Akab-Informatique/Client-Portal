@@ -5663,6 +5663,17 @@ const en: Dict = {
       rotateText: "This bot's old report links will stop working: replace them wherever they are used.",
     },
     links: { title: "Report links", label: "Task shown" },
+    xmas: {
+      title: "Christmas — Octet",
+      hint: "From December 1 to 25 the TV office is decorated and Octet, AKAB's elf, is breaking prices. Write each day's aubaine (80 characters at most).",
+      day: "Day {{day}}",
+      placeholder: "Aubaine of the day…",
+      save: "Save the aubaines",
+      saved: "Aubaines saved",
+      preview: "Preview the day",
+      previewOff: "Today (no preview)",
+      previewDay: "December {{day}}",
+    },
     override: { title: "Set status", apply: "Apply", hint: "To test the screen." },
   },
   breakroom: {

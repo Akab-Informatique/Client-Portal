@@ -493,3 +493,52 @@ describe("Dashboard TV: logs", () => {
     expect(logPath("/api/tv/state")).toBe("/api/tv/state");
   });
 });
+
+describe("Dashboard TV: Christmas, Octet", () => {
+  it("computes the Christmas day in Québec time: null outside 1-25 December", async () => {
+    expect(tv.quebecChristmasDay(new Date("2026-11-30T12:00:00Z"))).toBeNull();
+    expect(tv.quebecChristmasDay(new Date("2026-12-01T12:00:00Z"))).toBe(1);
+    expect(tv.quebecChristmasDay(new Date("2026-12-01T03:00:00Z"))).toBeNull(); // still 30 November evening in Québec
+    expect(tv.quebecChristmasDay(new Date("2026-12-25T20:00:00Z"))).toBe(25);
+    expect(tv.quebecChristmasDay(new Date("2026-12-26T12:00:00Z"))).toBeNull();
+    expect(await tv.christmasOf(new Date("2026-06-15T12:00:00Z"))).toBeNull();
+    const c = await tv.christmasOf(new Date("2026-12-08T15:00:00Z"));
+    expect(c).toMatchObject({ day: 8, shirt: true });
+    expect((await tv.christmasOf(new Date("2026-12-07T15:00:00Z")))?.shirt).toBe(false);
+  });
+
+  it("the feeds carry christmas: null today (outside the window) and the preview works for staff only", async () => {
+    resetLimits();
+    const key = (await manage()).displayKey;
+    const inWindow = tv.quebecChristmasDay() != null;
+    const signed = await call("GET", "/api/tv/state", { cookie: tech });
+    expect(signed.json).toHaveProperty("christmas");
+    if (!inWindow) expect(signed.json.christmas).toBeNull();
+    const preview = await call("GET", "/api/tv/state?xmas=12", { cookie: tech });
+    expect(preview.json.christmas).toMatchObject({ day: 12, shirt: true });
+    expect((await call("GET", "/api/tv/state?xmas=26", { cookie: tech })).json.christmas?.day ?? null).toBe(inWindow ? tv.quebecChristmasDay() : null);
+    const display = await call("GET", `/api/tv/display/state?key=${encodeURIComponent(key)}&xmas=12`);
+    expect(display.status).toBe(200);
+    expect(display.json).toHaveProperty("christmas");
+    if (!inWindow) expect(display.json.christmas).toBeNull(); // the public screen ignores the preview
+  });
+
+  it("aubaines: managers only, trimmed, capped at 80, shown for their day", async () => {
+    expect((await call("GET", "/api/tv/aubaines", { cookie: tech })).status).toBe(403);
+    expect((await call("PUT", "/api/tv/aubaines", { cookie: tech, body: { aubaines: { "1": "x" } } })).status).toBe(403);
+    const long = "A".repeat(120);
+    const put = await call("PUT", "/api/tv/aubaines", { cookie: admin, body: { aubaines: { "5": "   -20 % sur les portables   ", "6": long, "7": "   ", "30": "hors fenetre" } } });
+    expect(put.status).toBe(200);
+    expect(put.json.aubaines["5"]).toBe("-20 % sur les portables");
+    expect(put.json.aubaines["6"]).toHaveLength(80);
+    expect(put.json.aubaines["7"]).toBeUndefined();
+    expect(put.json.aubaines["30"]).toBeUndefined();
+    expect((await call("GET", "/api/tv/aubaines", { cookie: admin })).json.aubaines["5"]).toBe("-20 % sur les portables");
+    expect((await call("GET", "/api/tv/state?xmas=5", { cookie: tech })).json.christmas).toEqual({ day: 5, shirt: false, aubaine: "-20 % sur les portables" });
+    expect((await call("GET", "/api/tv/state?xmas=9", { cookie: tech })).json.christmas.aubaine).toBeNull();
+    // the display key still works after the settings row was updated
+    resetLimits();
+    const k = (await manage()).displayKey;
+    expect((await call("GET", `/api/tv/display/state?key=${encodeURIComponent(k)}`)).status).toBe(200);
+  });
+});

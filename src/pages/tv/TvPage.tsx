@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Maximize2, Tv } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
@@ -11,6 +11,8 @@ export function TvPage() {
   const { t } = useTranslation();
   const can = useCan();
   const frame = useRef<HTMLIFrameElement>(null);
+  const [xmasDay, setXmasDay] = useState(0); // staff preview of a day of the Christmas scene (0 = none)
+  const feed = xmasDay ? `/api/tv/state?xmas=${xmasDay}` : "/api/tv/state";
 
   const fullscreen = () => {
     void frame.current?.requestFullscreen?.().catch(() => undefined);
@@ -38,13 +40,13 @@ export function TvPage() {
         <iframe
           ref={frame}
           title={t("tv.title")}
-          src="/tv/index.html?feed=/api/tv/state"
+          src={`/tv/index.html?feed=${encodeURIComponent(feed)}`}
           allow="fullscreen"
           className="aspect-video w-full border-0"
         />
       </div>
 
-      {can("tv.manage") && <TvManage />}
+      {can("tv.manage") && <TvManage xmasDay={xmasDay} onXmasDay={setXmasDay} />}
     </div>
   );
 }
