@@ -4754,6 +4754,7 @@ const en: Dict = {
         meetings_week: "Meeting: week ahead summary",
         pipeline_day: "Operations: the morning day plan",
         text_polish: "Texts: correction (language and structure)",
+        assistant_chat: "Portal assistant (questions)",
       },
       usage: {
         title: "Usage (US dollars)",
@@ -5877,6 +5878,9 @@ const en: Dict = {
   viewAs: {
     staff: "Technician",
     client: "Client",
+    menuTitle: "View",
+    pickMenu: "View as a client…",
+    switchView: "Switch view",
     pickTitle: "View the portal as a client",
     pickText: "Choose the client: you will see exactly their portal, read only.",
     none: "No active clients.",

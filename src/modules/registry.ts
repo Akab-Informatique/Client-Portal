@@ -65,7 +65,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
   { key: "projects", path: "/projects", labelKey: "nav.projects", icon: FolderKanban, section: "command", permission: "projects.view", hideInNav: true },
   { key: "passbolt", path: "/security/passbolt", labelKey: "nav.passbolt", icon: KeyRound, section: "command", group: "security", permission: "passbolt.use", rule: "passbolt" },
-  { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", upcoming: true },
+  { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", permission: "reports.view" },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "breakroom", path: "/breakroom", labelKey: "nav.breakroom", icon: Coffee, section: "team", permission: "breakroom.use" },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", upcoming: true },

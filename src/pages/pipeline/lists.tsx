@@ -86,7 +86,7 @@ export function ListSelect({ value, onChange, lists, all, disabled, className, l
 }
 
 /** Make, rename and delete lists (a list that still has tasks is not deleted) */
-export function ManageLists({ onClose }: { onClose: () => void }) {
+export function ManageLists({ onClose, onCreated }: { onClose: () => void; onCreated?: (id: string) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const can = useCan();
@@ -96,8 +96,9 @@ export function ManageLists({ onClose }: { onClose: () => void }) {
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
   const make = useMutation({
-    mutationFn: () => api.post("/pipeline/lists", { name: name.trim(), shared }),
-    onSuccess: () => {
+    mutationFn: () => api.post<TaskList>("/pipeline/lists", { name: name.trim(), shared }),
+    onSuccess: (made) => {
+      onCreated?.(made.id);
       setName("");
       toast.success(t("pipeline.lists.created"));
       refresh();

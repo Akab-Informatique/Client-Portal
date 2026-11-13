@@ -22,11 +22,10 @@ import {
 import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { CommandPalette } from "@/components/CommandPalette";
-import { ViewSwitcher } from "@/components/ViewSwitcher";
+import { AssistantButton } from "@/components/assistant/AssistantButton";
+import { ViewClientPicker, ViewMenuItems } from "@/components/ViewSwitcher";
 import { NotificationBell } from "@/components/NotificationBell";
-import { SyncBadge } from "@/components/SyncBadge";
 import { QuickAdd } from "@/components/QuickAdd";
-import { TopSearch } from "@/components/TopSearch";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -417,17 +416,14 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
 }
 
 function TopBar({ onMenu }: { onMenu: () => void }) {
-  const can = useCan();
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b bg-background/75 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
       <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenu} aria-label="Menu">
         <Menu className="size-5" />
       </Button>
-      {can("clientview.use") && <ViewSwitcher />}
+      <AssistantButton />
       <div className="ml-auto flex items-center gap-3">
-        <TopSearch />
         <QuickAdd />
-        <SyncBadge />
         <NotificationBell />
         <LanguageToggle persist className="hidden sm:flex" />
         <UserMenu />
@@ -443,7 +439,9 @@ function UserMenu() {
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
   const { theme, setTheme } = useTheme();
+  const can = useCan();
   const [profileOpen, setProfileOpen] = useState(false);
+  const [viewPickerOpen, setViewPickerOpen] = useState(false);
   // back from the Microsoft sign-in (/?microsoft=connected|cancelled|error): the profile, where it is
   useEffect(() => {
     const r = params.get("microsoft");
@@ -504,6 +502,12 @@ function UserMenu() {
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          {can("clientview.use") && (
+            <>
+              <DropdownMenuSeparator />
+              <ViewMenuItems onPickClient={() => setViewPickerOpen(true)} />
+            </>
+          )}
           {me.isAdmin && (
             <>
               <DropdownMenuSeparator />
@@ -530,6 +534,7 @@ function UserMenu() {
         </DropdownMenuContent>
       </DropdownMenu>
       <ProfileDialog open={profileOpen} onOpenChange={setProfileOpen} />
+      {can("clientview.use") && <ViewClientPicker open={viewPickerOpen} onOpenChange={setViewPickerOpen} />}
     </>
   );
 }

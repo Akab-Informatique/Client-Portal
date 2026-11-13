@@ -4752,6 +4752,7 @@ const fr = {
         meetings_week: "Réunion : résumé de la semaine",
         pipeline_day: "Opérations : plan du matin",
         text_polish: "Textes : correction (langue et structure)",
+        assistant_chat: "Assistant du portail (questions)",
       },
       usage: {
         title: "Utilisation (dollars US)",
@@ -5875,6 +5876,9 @@ const fr = {
   viewAs: {
     staff: "Technicien",
     client: "Client",
+    menuTitle: "Vue",
+    pickMenu: "Voir comme un client…",
+    switchView: "Changer de vue",
     pickTitle: "Voir le portail comme un client",
     pickText: "Choisissez le client : vous verrez exactement son portail, en lecture seule.",
     none: "Aucun client actif.",

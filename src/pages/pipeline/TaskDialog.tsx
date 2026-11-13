@@ -88,7 +88,7 @@ function Heading({ icon: Icon, children, extra }: { icon: typeof Clock3; childre
  * inside this one window), the files and the team's notes. Right: how it is planned (simple, recurring or
  * continuous), who has it, who sees it. Open, everything saves as it is changed; with no id it is the form of a new task.
  */
-export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: string | null; defaults?: { assigneeId?: string | null; dueDate?: string | null; parentId?: string | null }; onClose: () => void; onOpenTask?: (id: string) => void }) {
+export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: string | null; defaults?: { assigneeId?: string | null; dueDate?: string | null; parentId?: string | null; listId?: string | null }; onClose: () => void; onOpenTask?: (id: string) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const me = useMe();
@@ -146,7 +146,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
 
   // ── a new task: its values and steps stay here until "Create" ──
   const lists = useTaskLists();
-  const [f, setF] = useState<Values & { waitsOn: string }>({ listId: "", kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
+  const [f, setF] = useState<Values & { waitsOn: string }>({ listId: defaults?.listId ?? "", kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
   const [newSteps, setNewSteps] = useState<Step[]>([]);
   const [staged, setStaged] = useState<File[]>([]);
   const [counter, setCounter] = useState(0);

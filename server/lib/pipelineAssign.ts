@@ -9,6 +9,14 @@ import { db, schema } from "../db/index.ts";
 export const assignedTo = (userId: string) =>
   sql<boolean>`(${schema.pipelineTasks.assigneeId} = ${userId} or exists (select 1 from pipeline_task_assignees x where x.task_id = ${schema.pipelineTasks.id} and x.user_id = ${userId}))`;
 
+/**
+ * Who sees a task: everyone when it is a team task; otherwise the one who made it, the one it is assigned to,
+ * and (when "selected") the people chosen. Not even a manager sees a private one. Shared by the task routes
+ * and the portal assistant, so both apply the same rule.
+ */
+export const seenBy = (userId: string) =>
+  sql<boolean>`(${schema.pipelineTasks.visibility} = 'team' or ${schema.pipelineTasks.createdBy} = ${userId} or ${assignedTo(userId)} or (${schema.pipelineTasks.visibility} = 'selected' and exists (select 1 from pipeline_task_viewers v where v.task_id = ${schema.pipelineTasks.id} and v.user_id = ${userId})))`;
+
 /** The other people of each task (not the main one) */
 export async function coAssignees(taskIds: string[]): Promise<Map<string, string[]>> {
   const out = new Map<string, string[]>();

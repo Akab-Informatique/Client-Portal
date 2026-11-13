@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { motion } from "motion/react";
 import { toast } from "sonner";
 import { Building2, Check, Eye, Loader2, Search, Wrench } from "lucide-react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import { useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
@@ -33,15 +33,13 @@ function useSwitch() {
 }
 
 /**
- * Technician / Client view toggle. Choosing "Client" opens a searchable list;
- * the server then answers as that client (read only) until switched back.
- * Shown only to technicians holding clientview.use (or while viewing as a client).
+ * Searchable list of the clients to view the portal as. Rendered outside the
+ * dropdown (it stays open when the menu closes). The server then answers as
+ * that client (read only) until switched back.
  */
-export function ViewSwitcher({ className }: { className?: string }) {
+export function ViewClientPicker({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation();
   const me = useMe();
-  const inClientView = Boolean(me.viewAs);
-  const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const { busy, run } = useSwitch();
   const { data: clients, isLoading } = useQuery({
@@ -52,83 +50,106 @@ export function ViewSwitcher({ className }: { className?: string }) {
   const list = (clients ?? []).filter((c) => `${c.name} ${c.code ?? ""}`.toLowerCase().includes(q.toLowerCase()));
 
   const choose = (id: string) => {
-    setOpen(false);
+    onOpenChange(false);
     void run(() => api.post("/view-as", { clientId: id }));
   };
-  const backToStaff = () => void run(() => api.del("/view-as"));
 
   return (
-    <div className={cn("relative flex items-center rounded-full border bg-card/60 p-0.5 text-xs font-semibold backdrop-blur", className)}>
-      <button
-        type="button"
-        onClick={() => inClientView && backToStaff()}
-        disabled={busy}
-        className={cn(
-          "relative z-10 flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors",
-          !inClientView ? "text-[#1a1204]" : "text-muted-foreground hover:text-foreground",
-        )}
-        aria-pressed={!inClientView}
-      >
-        {!inClientView && <motion.span layoutId="view-pill" className="absolute inset-0 -z-10 rounded-full bg-grad-gold" />}
-        <Wrench className="size-3.5" /> {t("viewAs.staff")}
-      </button>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b p-4 text-left">
+          <DialogTitle>{t("viewAs.pickTitle")}</DialogTitle>
+          <DialogDescription>{t("viewAs.pickText")}</DialogDescription>
+        </DialogHeader>
+        <div className="flex items-center gap-2 border-b px-4">
+          <Search className="size-4 text-muted-foreground" />
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t("common.search")}
+            className="h-10 flex-1 bg-transparent text-sm outline-none"
+          />
+        </div>
+        <ul className="max-h-72 overflow-y-auto p-1 scrollbar-thin">
+          {isLoading && (
+            <li className="flex justify-center p-4">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            </li>
+          )}
+          {list.map((c) => (
+            <li key={c.id}>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => choose(c.id)}
+                className={cn("flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-accent")}
+              >
+                <span className="flex size-8 items-center justify-center rounded-md bg-muted font-mono text-[10px] font-semibold">
+                  {c.code?.slice(0, 4) || <Building2 className="size-4" />}
+                </span>
+                <span className="flex-1 truncate">{c.name}</span>
+                {me.viewAs?.clientId === c.id && <Check className="size-4 text-primary" />}
+              </button>
+            </li>
+          ))}
+          {!isLoading && !list.length && <li className="p-4 text-center text-xs text-muted-foreground">{t("viewAs.none")}</li>}
+        </ul>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * The technician / client choice, as entries of a dropdown menu. Choosing
+ * "Client" calls onPickClient (the caller opens ViewClientPicker); choosing
+ * "Technicien" while viewing as a client gets back to the technician view.
+ * Render it inside a DropdownMenuContent.
+ */
+export function ViewMenuItems({ onPickClient }: { onPickClient: () => void }) {
+  const { t } = useTranslation();
+  const me = useMe();
+  const inClientView = Boolean(me.viewAs);
+  const { busy, run } = useSwitch();
+  return (
+    <>
+      <DropdownMenuLabel className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{t("viewAs.menuTitle")}</DropdownMenuLabel>
+      <DropdownMenuItem disabled={busy} onSelect={() => inClientView && void run(() => api.del("/view-as"))}>
+        <Wrench className="size-4" /> {t("viewAs.staff")}
+        {!inClientView && <Check className="ml-auto size-4 text-primary" />}
+      </DropdownMenuItem>
+      <DropdownMenuItem disabled={busy} onSelect={onPickClient}>
+        <Eye className="size-4" /> {inClientView ? me.viewAs!.clientName : t("viewAs.pickMenu")}
+        {inClientView && <Check className="ml-auto size-4 text-primary" />}
+      </DropdownMenuItem>
+    </>
+  );
+}
+
+/**
+ * Client view only: a button in the client top bar (shown while viewing as a
+ * client) that opens the same technician / client choice.
+ */
+export function ViewSwitchButton() {
+  const { t } = useTranslation();
+  const [pickOpen, setPickOpen] = useState(false);
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
           <button
             type="button"
-            disabled={busy}
-            className={cn(
-              "relative z-10 flex items-center gap-1.5 rounded-full px-3 py-1.5 transition-colors",
-              inClientView ? "text-[#1a1204]" : "text-muted-foreground hover:text-foreground",
-            )}
-            aria-pressed={inClientView}
+            className="flex items-center gap-1.5 rounded-full border border-[color:var(--glass-border)] px-3 py-1.5 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground data-[state=open]:text-foreground"
           >
-            {inClientView && <motion.span layoutId="view-pill" className="absolute inset-0 -z-10 rounded-full bg-grad-gold" />}
-            {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Eye className="size-3.5" />}
-            <span className="max-w-40 truncate">{inClientView ? me.viewAs!.clientName : t("viewAs.client")}</span>
+            <Eye className="size-3.5" /> {t("viewAs.switchView")}
           </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-80 p-0">
-          <div className="border-b p-3">
-            <p className="text-sm font-semibold">{t("viewAs.pickTitle")}</p>
-            <p className="text-xs text-muted-foreground">{t("viewAs.pickText")}</p>
-          </div>
-          <div className="flex items-center gap-2 border-b px-3">
-            <Search className="size-4 text-muted-foreground" />
-            <input
-              autoFocus
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder={t("common.search")}
-              className="h-10 flex-1 bg-transparent text-sm outline-none"
-            />
-          </div>
-          <ul className="max-h-72 overflow-y-auto p-1 scrollbar-thin">
-            {isLoading && (
-              <li className="flex justify-center p-4">
-                <Loader2 className="size-4 animate-spin text-muted-foreground" />
-              </li>
-            )}
-            {list.map((c) => (
-              <li key={c.id}>
-                <button
-                  type="button"
-                  onClick={() => choose(c.id)}
-                  className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-accent"
-                >
-                  <span className="flex size-8 items-center justify-center rounded-md bg-muted font-mono text-[10px] font-semibold">
-                    {c.code?.slice(0, 4) || <Building2 className="size-4" />}
-                  </span>
-                  <span className="flex-1 truncate">{c.name}</span>
-                  {me.viewAs?.clientId === c.id && <Check className="size-4 text-primary" />}
-                </button>
-              </li>
-            ))}
-            {!isLoading && !list.length && <li className="p-4 text-center text-xs text-muted-foreground">{t("viewAs.none")}</li>}
-          </ul>
-        </PopoverContent>
-      </Popover>
-    </div>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="glass-strong w-64">
+          <ViewMenuItems onPickClient={() => setPickOpen(true)} />
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ViewClientPicker open={pickOpen} onOpenChange={setPickOpen} />
+    </>
   );
 }
 

@@ -34,6 +34,18 @@ export function PipelinePage() {
   const setTab = (k: Tab) => setParams(k === "day" ? {} : { section: k });
   // a task: opened from the lists, or from a link (/pipeline?task=<id>, e.g. the notification)
   const [open, setOpen] = useState<string | "new" | null>(params.get("task"));
+  // a new to-do starts on the list being looked at in the "À faire" tab
+  const [newList, setNewList] = useState<string | null>(null);
+  const startTask = () => {
+    let id = "";
+    try {
+      id = sessionStorage.getItem("akab.pipeline.todoList") ?? "";
+    } catch {
+      /* none */
+    }
+    setNewList(id && id !== "all" ? id : null);
+    setOpen("new");
+  };
   useEffect(() => {
     const id = params.get("task");
     if (!id) return;
@@ -60,7 +72,7 @@ export function PipelinePage() {
             </Button>
           )}
           {can("pipeline.edit") && tab === "todo" && (
-            <Button size="sm" className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105" onClick={() => setOpen("new")}>
+            <Button size="sm" className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105" onClick={startTask}>
               <Plus className="size-4" /> {t("pipeline.newTask")}
             </Button>
           )}
@@ -88,7 +100,7 @@ export function PipelinePage() {
         <Suspense fallback={<Loader2 className="mx-auto mt-12 size-6 animate-spin text-muted-foreground" />}>{tab === "tickets" ? <TicketsPage /> : <ProjectsPage />}</Suspense>
       )}
 
-      {open && <TaskDialog key={open} taskId={open === "new" ? null : open} onClose={() => setOpen(null)} onOpenTask={(id) => setOpen(id)} />}
+      {open && <TaskDialog key={open} taskId={open === "new" ? null : open} defaults={open === "new" && newList ? { listId: newList } : undefined} onClose={() => setOpen(null)} onOpenTask={(id) => setOpen(id)} />}
     </div>
   );
 }

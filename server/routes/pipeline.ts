@@ -26,7 +26,7 @@ async function itemOf(taskId: string, itemId: string) {
 }
 import { body, zUuid } from "../lib/validate.ts";
 import { nextAfter, type Recurrence } from "../../shared/recurrence.ts";
-import { assignedTo, coAssignees, isAssigned, setAssignees } from "../lib/pipelineAssign.ts";
+import { assignedTo, coAssignees, isAssigned, seenBy, setAssignees } from "../lib/pipelineAssign.ts";
 import { listsFor, resolveList, teamListId, visibilityFor } from "../lib/pipelineLists.ts";
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
@@ -51,12 +51,6 @@ const MAX_FILES = 20;
 
 type Task = typeof schema.pipelineTasks.$inferSelect;
 
-/**
- * Who sees a task: everyone when it is a team task; otherwise the one who made it, the one it is assigned to,
- * and (when "selected") the people chosen. Not even a manager sees a private one.
- */
-const seenBy = (userId: string) =>
-  sql<boolean>`(${schema.pipelineTasks.visibility} = 'team' or ${schema.pipelineTasks.createdBy} = ${userId} or ${assignedTo(userId)} or (${schema.pipelineTasks.visibility} = 'selected' and exists (select 1 from pipeline_task_viewers v where v.task_id = ${schema.pipelineTasks.id} and v.user_id = ${userId})))`;
 
 /** Whose day it is about: one's own, or (pipeline.manage) another active staff member's. */
 async function dayTarget(a: ReturnType<typeof auth>, asked?: string | null): Promise<string> {

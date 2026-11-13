@@ -3570,3 +3570,71 @@ export const clientUserGrants = pgTable(
   },
   (t) => [primaryKey({ columns: [t.userId, t.clientId] })],
 );
+
+/** Reports: the built-in ones (key set, made at startup) and the custom ones (name, sources, period). */
+export type ReportConfig = { sources?: string[]; period?: 7 | 30 | 90; aiSummary?: boolean };
+export const reportDefinitions = pgTable(
+  "report_definitions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key"),
+    kind: text("kind", { enum: ["builtin", "custom"] }).notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    config: jsonb("config").$type<ReportConfig>().notNull().default({}),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("report_definitions_key_unique").on(t.key)],
+);
+
+/** Channels a scheduled run is sent to (each optional). */
+export type ReportChannels = { email: string[]; sms: string[]; teams: boolean };
+export const reportSchedules = pgTable(
+  "report_schedules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => reportDefinitions.id, { onDelete: "cascade" }),
+    frequency: text("frequency", { enum: ["daily", "weekly", "monthly"] }).notNull(),
+    /** HH:MM, Québec time */
+    time: text("time").notNull(),
+    /** 0 (Sunday) to 6, for a weekly schedule */
+    weekday: integer("weekday"),
+    /** 1 to 28, for a monthly schedule */
+    dayOfMonth: integer("day_of_month"),
+    enabled: boolean("enabled").notNull().default(true),
+    channels: jsonb("channels").$type<ReportChannels>().notNull().default({ email: [], sms: [], teams: false }),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("report_schedules_next_idx").on(t.enabled, t.nextRunAt)],
+);
+
+/** One run of a report: its markdown, the small data behind it, and what each delivery channel answered. */
+export const reportRuns = pgTable(
+  "report_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => reportDefinitions.id, { onDelete: "cascade" }),
+    scheduleId: uuid("schedule_id").references(() => reportSchedules.id, { onDelete: "set null" }),
+    trigger: text("trigger", { enum: ["manual", "schedule"] }).notNull(),
+    status: text("status", { enum: ["running", "ok", "failed"] }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    summary: text("summary").notNull().default(""),
+    body: text("body").notNull().default(""),
+    data: jsonb("data"),
+    error: text("error"),
+    delivered: jsonb("delivered"),
+    startedBy: uuid("started_by").references(() => users.id, { onDelete: "set null" }),
+  },
+  (t) => [index("report_runs_report_idx").on(t.reportId, t.startedAt)],
+);

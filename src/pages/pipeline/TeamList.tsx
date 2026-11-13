@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ArrowLeft, Folder, FolderOpen, Plus, Users } from "lucide-react";
 import { CalendarClock, Check, CheckCircle2, Columns3, Eye, ListChecks, Lock, Paperclip, Repeat, Rows3, Search, Ticket as TicketIcon, UserRound, Workflow } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -12,9 +13,11 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, hm, todayYmd, type TaskCard, type TaskStatus } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
-import { ListBadge, ListSelect, ManageLists, rememberList, useTaskLists } from "./lists";
+import { ListBadge, ManageLists, listError, rememberList, useTaskLists } from "./lists";
 
 type Scope = "all" | "mine" | "none";
+/** "Every task" as a folder of its own (a real list id otherwise; empty = the page of all the lists) */
+const ALL_LISTS = "all";
 
 const initials = (n: string) =>
   n
@@ -79,9 +82,86 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
 
   const Row = ({ task, child }: { task: TaskCard; child?: boolean }) => <TaskRow task={task} child={child} editable={editable} onOpen={() => onOpenTask(task.id)} onPatch={(p) => patch.mutate({ id: task.id, patch: p })} people={people.data ?? []} />;
 
+  const pick = (id: string) => {
+    setList(id);
+    if (id) rememberList(id);
+    try {
+      sessionStorage.setItem("akab.pipeline.todoList", id);
+    } catch {
+      /* kept for this page only */
+    }
+  };
+  // add a to-do straight onto the list being looked at (the usual list when all are shown)
+  const [quick, setQuick] = useState("");
+  const addQuick = useMutation({
+    mutationFn: (title: string) => api.post("/pipeline/tasks", { title, assigneeId: me.id, listId: list && list !== ALL_LISTS ? list : undefined }),
+    onSuccess: () => {
+      setQuick("");
+      refresh();
+    },
+    onError: (e) => toast.error(listError(t, e) === t("common.error") ? taskError(t, e) : listError(t, e)),
+  });
+  const current = lists.data?.find((l) => l.id === list);
+  // nothing picked yet: the folders, one per list
+  if (!list || (list !== ALL_LISTS && lists.data && !current)) {
+    const folder = (key: string, name: string, sub: string, count: number | null, tone: string, Icon: typeof Folder, onClick: () => void) => (
+      <button key={key} type="button" onClick={onClick} className="glass group flex items-center gap-3 rounded-2xl border p-4 text-left transition-colors hover:border-[color:var(--gold)]/50">
+        <span className={cn("flex size-11 shrink-0 items-center justify-center rounded-xl border", tone)}>
+          <Icon className="size-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate font-semibold">{name}</span>
+          <span className="block truncate text-xs text-muted-foreground">{sub}</span>
+        </span>
+        {count !== null && <span className="shrink-0 rounded-full bg-foreground/10 px-2 py-0.5 font-mono text-xs">{count}</span>}
+      </button>
+    );
+    return (
+      <div className="space-y-3">
+        {manage && <ManageLists onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            <Folder className="size-5 text-primary" /> {t("pipeline.lists.title")}
+          </h2>
+          {editable && (
+            <button type="button" onClick={() => setManage(true)} className="flex h-9 items-center gap-1.5 rounded-xl bg-grad-gold px-4 text-sm font-semibold text-[#1a1204]">
+              <Plus className="size-4" /> {t("pipeline.lists.new")}
+            </button>
+          )}
+        </div>
+        {lists.isLoading ? (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-20 rounded-2xl" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {folder(ALL_LISTS, t("pipeline.lists.everyTask"), t("pipeline.lists.everyTaskHint"), (lists.data ?? []).reduce((n, l) => n + l.open, 0), "border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 text-primary", ListChecks, () => pick(ALL_LISTS))}
+            {(lists.data ?? []).map((l) =>
+              folder(l.id, l.name, l.shared ? t("pipeline.lists.shared") : l.owner && !l.mine ? t("pipeline.lists.personalOf", { name: l.owner }) : t("pipeline.lists.personal"), l.open, l.shared ? "border-sky-400/40 bg-sky-500/10 text-sky-300" : "border-violet-400/40 bg-violet-500/10 text-violet-300", l.shared ? Folder : Lock, () => pick(l.id)),
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="space-y-3">
-      {manage && <ManageLists onClose={() => setManage(false)} />}
+      {manage && <ManageLists onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
+      {/* an opened list: a little arrow goes back to all the lists */}
+      <div className="flex items-center gap-2">
+        <button type="button" onClick={() => pick("")} aria-label={t("pipeline.lists.back")} title={t("pipeline.lists.back")} className="flex size-9 items-center justify-center rounded-xl border text-muted-foreground transition-colors hover:border-[color:var(--gold)]/50 hover:text-foreground">
+          <ArrowLeft className="size-4" />
+        </button>
+        <FolderOpen className={cn("size-5", !current || current.shared ? "text-sky-300" : "text-violet-300")} />
+        <h2 className="text-lg font-semibold">{current ? current.name : t("pipeline.lists.everyTask")}</h2>
+        {current && (
+          <span className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground">
+            {current.shared ? <Users className="size-3" /> : <Lock className="size-3" />} {t(current.shared ? "pipeline.lists.shared" : "pipeline.lists.personal")}
+          </span>
+        )}
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-0.5 rounded-xl border bg-background/40 p-0.5">
           {(
@@ -112,20 +192,6 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             </option>
           ))}
         </select>
-        <ListSelect
-          value={list}
-          onChange={(id) => {
-            setList(id);
-            rememberList(id);
-            try {
-              sessionStorage.setItem("akab.pipeline.todoList", id);
-            } catch {
-              /* kept for this page only */
-            }
-          }}
-          lists={lists.data}
-          all={t("pipeline.lists.all")}
-        />
         <button type="button" onClick={() => setManage(true)} className="h-9 rounded-xl border px-3 text-xs font-medium text-muted-foreground hover:text-foreground">
           {t("pipeline.lists.manage")}
         </button>
@@ -195,6 +261,21 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             </section>
           ))}
         </div>
+      )}
+      {editable && (
+        <form
+          className="glass flex gap-2 rounded-2xl border p-2.5"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (quick.trim()) addQuick.mutate(quick.trim());
+          }}
+        >
+          <Plus className="my-auto ml-2 size-4 shrink-0 text-primary" />
+          <Input value={quick} onChange={(e) => setQuick(e.target.value)} placeholder={current ? t("pipeline.lists.addTo", { name: current.name }) : t("pipeline.lists.addToDefault")} className="h-9 border-transparent bg-transparent shadow-none focus-visible:border-input" maxLength={200} />
+          <button type="submit" disabled={!quick.trim() || addQuick.isPending} className="h-9 rounded-md bg-grad-gold px-4 text-sm font-semibold text-[#1a1204] disabled:opacity-50">
+            {t("pipeline.add")}
+          </button>
+        </form>
       )}
     </div>
   );

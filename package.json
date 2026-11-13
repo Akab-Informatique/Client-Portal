@@ -15,7 +15,8 @@
     "start": "node --import tsx server/index.ts",
     "typecheck": "tsc -p tsconfig.json --pretty false && tsc -p tsconfig.server.json --pretty false",
     "test": "vitest run",
-    "db:generate": "drizzle-kit generate"
+    "db:generate": "drizzle-kit generate",
+    "knowledge": "node --import tsx scripts/build-knowledge.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

@@ -22,6 +22,7 @@ import { vendorRoutes } from "./routes/vendors.ts";
 import { apiKeyRoutes } from "./routes/apiKeys.ts";
 import { openApiRoutes } from "./routes/openapi.ts";
 import { newsletterRoutes } from "./routes/newsletter.ts";
+import { reportRoutes } from "./routes/reports.ts";
 import { passboltRoutes } from "./routes/passbolt.ts";
 import { serviceRoutes } from "./routes/services.ts";
 import { itcloudRoutes } from "./routes/itcloud.ts";
@@ -65,6 +66,7 @@ import { billablesRoutes } from "./routes/billables.ts";
 import { timeRoutes } from "./routes/time.ts";
 import { hrRoutes } from "./routes/hr.ts";
 import { chatRoutes } from "./routes/chat.ts";
+import { assistantRoutes } from "./routes/assistant.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -135,6 +137,7 @@ export function createApp() {
   api.route("/admin/api-keys", apiKeyRoutes);
   api.route("/openapi.json", openApiRoutes);
   api.route("/newsletter", newsletterRoutes);
+  api.route("/reports", reportRoutes);
   api.route("/admin/itcloud", itcloudRoutes);
   api.route("/admin/rmm-datto", dattoAdminRoutes);
   api.route("/rmm", rmmDeviceRoutes);
@@ -179,6 +182,7 @@ export function createApp() {
   api.route("/time", timeRoutes);
   api.route("/hr", hrRoutes);
   api.route("/chat", chatRoutes);
+  api.route("/assistant", assistantRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.route("/portal", portalRoutes);
