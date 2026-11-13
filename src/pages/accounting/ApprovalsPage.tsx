@@ -217,44 +217,25 @@ export function ApprovalsPage() {
               <TabsList className="h-auto flex-wrap justify-start">
                 {tabs.map((k) => {
                   const Icon = TAB_ICON[k];
-                  const soon = k === "project";
                   return (
-                    <TabsTrigger key={k} value={k} className={soon ? "opacity-70" : undefined}>
+                    <TabsTrigger key={k} value={k}>
                       <Icon className="size-4" /> {t(`approvals.tabs.${k}`)}
-                      {!soon && count(k as Kind, "pending") > 0 && (
+                      {count(k as Kind, "pending") > 0 && (
                         <span className="rounded-full bg-sky-500/20 px-1.5 font-mono text-[10px] text-sky-300">{count(k as Kind, "pending")}</span>
                       )}
-                      {soon && <span className="rounded-full border border-dashed px-1.5 text-[9px] text-muted-foreground">{t("common.comingSoon")}</span>}
                     </TabsTrigger>
                   );
                 })}
               </TabsList>
               {tabs.map((k) => (
                 <TabsContent key={k} value={k} className="mt-4">
-                  {k === "project" ? (
-                    <Placeholder kind={k} />
-                  ) : (
-                    <KindTab kind={k} counts={(s) => count(k, s)} lang={i18n.language} pq={pq} />
-                  )}
+                  <KindTab kind={k} counts={(s) => count(k, s)} lang={i18n.language} pq={pq} />
                 </TabsContent>
               ))}
             </Tabs>
           }
         </div>
       </div>
-    </div>
-  );
-}
-
-function Placeholder({ kind }: { kind: "project" }) {
-  const { t } = useTranslation();
-  const Icon = TAB_ICON[kind];
-  return (
-    <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed px-6 py-14 text-center">
-      <Icon className="size-8 text-primary" />
-      <p className="font-semibold">{t(`approvals.empty.${kind}.title`)}</p>
-      <p className="max-w-lg text-sm text-muted-foreground">{t(`approvals.empty.${kind}.text`)}</p>
-      <span className="rounded-full border border-dashed px-2.5 py-0.5 text-[11px] text-muted-foreground">{t("common.comingSoon")}</span>
     </div>
   );
 }
