@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, ChevronDown, Copy, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronDown, ClipboardList, Copy, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,21 @@ const NAME_RE = /^[\p{L}\p{N}][\p{L}\p{N} '’-]{0,11}$/u;
 const STATE_DOT: Record<BotState, string> = { idle: "bg-muted-foreground", working: "bg-emerald-500", needs_human: "bg-amber-500" };
 
 type Confirm = { title: string; text: string; action: string; run: () => void };
+
+/** Every bot's own links and what to do with them, in one text to paste into each bot's instructions */
+function botInstructions(bots: Bot[], labels: string[], origin: string, t: (k: string, o?: Record<string, unknown>) => string) {
+  const lines = [t("tv.instructions.head"), "", t("tv.instructions.secret"), "", t("tv.instructions.how"), `- ${t("tv.instructions.working")}`, `- ${t("tv.instructions.idle")}`, `- ${t("tv.instructions.help")}`, t("tv.instructions.answer"), t("tv.instructions.limits"), ""];
+  if (labels.length) {
+    lines.push(t("tv.instructions.labels"));
+    labels.forEach((l, i) => lines.push(`  ${i} = ${l}`));
+    lines.push("");
+  }
+  for (const b of bots) {
+    const base = `${origin}/api/tv/r/${b.key}`;
+    lines.push(`=== ${b.name} ===`, `${t("tv.instructions.start")} ${base}/working/0`, `${t("tv.instructions.done")} ${base}/idle`, `${t("tv.instructions.needHelp")} ${base}/needs_human`, "");
+  }
+  return lines.join("\n");
+}
 
 function copy(text: string, ok: string, bad: string) {
   void navigator.clipboard.writeText(text).then(
@@ -99,9 +114,14 @@ export function TvManage() {
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-2">
               <h3 className="text-sm font-medium">{t("tv.bots.title", { count: bots.length })}</h3>
-              <Button size="sm" onClick={() => setAdding(true)}>
-                <Plus /> {t("tv.bots.add")}
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" variant="outline" disabled={!bots.length} onClick={() => copy(botInstructions(bots, data.labels, origin, t), t("tv.instructions.copied"), t("tv.error"))}>
+                  <ClipboardList /> {t("tv.instructions.button")}
+                </Button>
+                <Button size="sm" onClick={() => setAdding(true)}>
+                  <Plus /> {t("tv.bots.add")}
+                </Button>
+              </div>
             </div>
             {bots.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{t("tv.bots.empty")}</p>
