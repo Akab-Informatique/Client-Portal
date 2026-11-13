@@ -1,10 +1,12 @@
 /** Texts of the to-do lists (shared / personal) and of the Tasks section: their own file, keys under `pipeline.lists` and `pipeline.tasksSection`. */
 export const fr = {
   pipeline: {
+    notes: { title: "Notes", hint: "Notes et rappels rapides : privés, vous seul les voyez. Un rappel sonne dans la cloche à l'heure choisie.", placeholder: "Écrire une note ou un rappel…", remind: "Rappel", remindAt: "Heure du rappel", none: "Aucune note pour l'instant.", empty: "Écrivez quelque chose.", done: "Fait", delete: "Supprimer" },
     tabs: { tasks: "Tâches", todo: "To do" },
     quick: { task: "Ajouter une tâche…", todo: "Ajouter un to do…", list: "Liste", who: "Assignée à", due: "Échéance" },
     todo: {
       title: "To do",
+      drag: "To do (glissez pour changer la hauteur)",
       myLists: "Mes listes",
       private: "Privé : vous seul le voyez, sans minuterie",
       back: "Retour à mes to do",
@@ -23,6 +25,8 @@ export const fr = {
       noList: "Sans liste (à faire privé)",
       noListHint: "Une tâche à faire privée, sans liste : vous seul la voyez, sans minuterie.",
       chosenHint: "Seules les personnes choisies voient cette liste.",
+      viewTitle: "Affichage",
+      byList: "Par liste",
       forEveryone: "Toute l'équipe",
       forChosen: "Personnes choisies",
       people: "{{count}} personne(s)",
@@ -52,6 +56,8 @@ export const fr = {
     },
     tasksSection: {
       title: "Tâches",
+      task: "Tâche",
+      assigned: "Assignée à",
       all: "Toutes",
       mine: "Mes tâches",
       person: "Les tâches de…",
@@ -65,10 +71,12 @@ export const fr = {
 };
 export const en = {
   pipeline: {
+    notes: { title: "Notes", hint: "Quick notes and reminders: private, only you see them. A reminder rings your bell at the time you pick.", placeholder: "Write a note or a reminder…", remind: "Reminder", remindAt: "Reminder time", none: "No notes yet.", empty: "Write something.", done: "Done", delete: "Delete" },
     tabs: { tasks: "Tasks", todo: "To do" },
     quick: { task: "Add a task…", todo: "Add something to do…", list: "List", who: "Assigned to", due: "Due" },
     todo: {
       title: "To do",
+      drag: "To do (drag to change the height)",
       myLists: "My lists",
       private: "Private: only you see it, no timer",
       back: "Back to my to-dos",
@@ -87,6 +95,8 @@ export const en = {
       noList: "No list (private to-do)",
       noListHint: "A private to-do on its own: only you see it, no timer.",
       chosenHint: "Only the chosen people see this list.",
+      viewTitle: "View",
+      byList: "By list",
       forEveryone: "The whole team",
       forChosen: "Chosen people",
       people: "{{count}} people",
@@ -116,6 +126,8 @@ export const en = {
     },
     tasksSection: {
       title: "Tasks",
+      task: "Task",
+      assigned: "Assigned to",
       all: "All",
       mine: "My tasks",
       person: "Tasks of…",

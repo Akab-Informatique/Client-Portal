@@ -226,8 +226,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       {blockDraft && <DayBlockDialog key={blockDraft.id ?? "new"} draft={blockDraft} date={date} forUser={userId === me.id ? undefined : userId} onClose={() => setBlockDraft(null)} onSaved={refresh} />}
       {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
-        <div className="min-w-0 space-y-4">
-          <section className="glass h-fit rounded-2xl border border-[color:var(--gold)]/30 p-4 shadow-[0_0_30px_-12px_rgba(255,206,26,0.35)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <section className="glass flex-1 rounded-2xl border border-[color:var(--gold)]/30 p-4 shadow-[0_0_30px_-12px_rgba(255,206,26,0.35)]">
             <div className="relative mb-3 flex items-center justify-center">
               <h3 className="flex items-center gap-2 text-center text-base font-bold tracking-wide text-primary">
                 <CalendarClock className="size-5" /> {t("pipeline.day.timeline")}
@@ -301,10 +301,9 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
           {userId === me.id && can("projects.view") && <DayProjects />}
           {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" sortView="projectTasks" />}
+          <DayTasks userId={userId} onOpenTask={onOpenTask} />
         </div>
       </div>
-      {/* the two kinds of task, side by side, across the whole page */}
-      <DayTasks userId={userId} onOpenTask={onOpenTask} />
     </div>
   );
 }

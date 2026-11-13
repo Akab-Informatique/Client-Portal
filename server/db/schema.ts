@@ -3654,3 +3654,23 @@ export const reportRuns = pgTable(
   },
   (t) => [index("report_runs_report_idx").on(t.reportId, t.startedAt)],
 );
+
+/** A staff member's private notes and quick reminders (only its owner ever reads or changes them); a reminder rings the bell once at its time */
+export const personalNotes = pgTable(
+  "personal_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["note", "reminder"] }).notNull().default("note"),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    remindAt: timestamp("remind_at", { withTimezone: true }),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("personal_notes_user_idx").on(t.userId, t.kind)],
+);

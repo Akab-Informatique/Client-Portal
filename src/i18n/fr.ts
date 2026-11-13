@@ -5850,6 +5850,7 @@ const fr = {
     projectNote: "{{by}} vous signale une note de projet",
     projectReminder: "Rappel de projet",
     projectFollowup: "C'est le temps de faire le suivi du projet",
+    noteReminder: "Rappel",
     pipelineDayAdded: "{{by}} a ajouté un élément à votre journée",
     pipelineComment: "{{by}} a commenté une de vos tâches",
     workDone: "{{from}} a travaillé sur votre billet",

@@ -10,6 +10,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { DayEdge } from "./DayEdge";
 import { ListBadge, ListSelect, ManageLists, inSpace, useTaskLists } from "./lists";
+import { ColumnHeader, useColumns } from "@/pages/tickets/Layouts";
 import { PRIORITY_STYLE, STATUS_STYLE, dayLabel, todayYmd, type TaskCard } from "./shared";
 import { TaskQuickAdd } from "./TaskQuickAdd";
 import { taskError, usePeople } from "./TaskDialog";
@@ -22,6 +23,8 @@ const initials = (n: string) =>
     .slice(0, 2)
     .join("")
     .toUpperCase();
+const TASK_COLUMNS = ["task", "list", "due", "assigned", "status"] as const;
+const TASK_WIDTHS = { task: 320, list: 170, due: 110, assigned: 120, status: 110 };
 const byDue = (a: TaskCard, b: TaskCard) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || (a.dueTime ?? "").localeCompare(b.dueTime ?? "") || a.title.localeCompare(b.title);
 
 /**
@@ -40,6 +43,10 @@ export function DayTasks({ userId, onOpenTask }: { userId: string; onOpenTask: (
   const [scope, setScope] = useState<string>("all");
   const [list, setList] = useState("");
   const [manage, setManage] = useState(false);
+  // the columns are moved and resized from their titles, like the tickets' and the projects', and kept on this computer
+  const cols = useColumns("akab.pipeline.tasks.columns.v1", TASK_COLUMNS, TASK_WIDTHS, "task");
+  const grid = { gridTemplateColumns: cols.template };
+  const labels = { task: t("pipeline.tasksSection.task"), list: t("pipeline.tasksSection.list"), due: t("pipeline.tasksSection.due"), assigned: t("pipeline.tasksSection.assigned"), status: t("pipeline.tasksSection.status") };
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
 
   const tasks = useQuery({
@@ -107,31 +114,52 @@ export function DayTasks({ userId, onOpenTask }: { userId: string; onOpenTask: (
       ) : rows.length === 0 ? (
         <p className="py-3 text-sm text-muted-foreground">{t("pipeline.tasksSection.none")}</p>
       ) : (
-        <ul className="divide-y divide-[color:var(--glass-border)]">
-          {rows.map((k) => {
-            const late = k.dueDate && k.dueDate < today;
-            return (
-              <li key={k.id} className="flex items-center gap-2 py-1.5">
-                <DayEdge kind="task" id={k.id} number={null} title={k.title} urgent={k.priority === "urgent"} onOpen={() => onOpenTask(k.id)} />
-                {editable && <Checkbox disabled={k.waiting} onCheckedChange={() => done.mutate(k.id)} aria-label={t("pipeline.complete")} />}
-                <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[k.priority].dot)} title={t(`pipeline.priority.${k.priority}`)} />
-                <button type="button" onClick={() => onOpenTask(k.id)} className="min-w-0 flex-1 truncate text-left text-sm font-medium">
-                  {k.title}
-                </button>
-                <ListBadge name={k.listName} shared={k.listShared} className="hidden max-w-44 shrink-0 md:inline-flex" />
-                <span className={cn("hidden w-24 shrink-0 text-right font-mono text-[11px] sm:block", late ? "text-red-300" : "text-muted-foreground")}>{k.dueDate ? dayLabel(k.dueDate) : "—"}</span>
-                <span className="hidden w-16 shrink-0 -space-x-1.5 lg:flex" title={k.assignees.map((a) => a.name).join(", ")}>
-                  {k.assignees.slice(0, 2).map((a) => (
-                    <span key={a.id} className="flex size-5 items-center justify-center rounded-full bg-grad-gold text-[9px] font-bold text-[#1a1204] ring-2 ring-background">
-                      {initials(a.name)}
+        <div className="overflow-x-auto">
+          <div style={{ minWidth: cols.minWidth }}>
+            <ColumnHeader cols={cols} labels={labels} style={grid} />
+            <ul className="divide-y divide-[color:var(--glass-border)]">
+              {rows.map((k) => {
+                const late = k.dueDate && k.dueDate < today;
+                const cell: Record<(typeof TASK_COLUMNS)[number], React.ReactNode> = {
+                  task: (
+                    <span className="flex min-w-0 items-center gap-2">
+                      <DayEdge kind="task" id={k.id} number={null} title={k.title} urgent={k.priority === "urgent"} onOpen={() => onOpenTask(k.id)} />
+                      {editable && <Checkbox disabled={k.waiting} onCheckedChange={() => done.mutate(k.id)} aria-label={t("pipeline.complete")} />}
+                      <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[k.priority].dot)} title={t(`pipeline.priority.${k.priority}`)} />
+                      <button type="button" onClick={() => onOpenTask(k.id)} className="min-w-0 flex-1 truncate text-left text-sm font-medium" title={k.title}>
+                        {k.title}
+                      </button>
                     </span>
-                  ))}
-                </span>
-                <span className={cn("hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium sm:inline", STATUS_STYLE[k.status])}>{t(`pipeline.status.${k.status}`)}</span>
-              </li>
-            );
-          })}
-        </ul>
+                  ),
+                  list: <ListBadge name={k.listName} shared={k.listShared} className="max-w-full" />,
+                  due: <span className={cn("whitespace-nowrap font-mono text-xs tabular-nums", late ? "text-red-300" : "text-muted-foreground")}>{k.dueDate ? dayLabel(k.dueDate) : "—"}</span>,
+                  assigned: (
+                    <span className="flex min-w-0 items-center gap-1.5" title={k.assignees.map((a) => a.name).join(", ")}>
+                      <span className="flex -space-x-1.5">
+                        {k.assignees.slice(0, 2).map((a) => (
+                          <span key={a.id} className="flex size-5 items-center justify-center rounded-full bg-grad-gold text-[9px] font-bold text-[#1a1204] ring-2 ring-background">
+                            {initials(a.name)}
+                          </span>
+                        ))}
+                      </span>
+                      <span className="truncate text-xs text-muted-foreground">{k.assignees[0]?.name.split(/\s+/)[0] ?? "—"}</span>
+                    </span>
+                  ),
+                  status: <span className={cn("inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium", STATUS_STYLE[k.status])}>{t(`pipeline.status.${k.status}`)}</span>,
+                };
+                return (
+                  <li key={k.id} style={grid} className="grid items-center gap-x-3 px-1 py-1.5">
+                    {cols.order.map((c) => (
+                      <span key={c} className="min-w-0">
+                        {cell[c]}
+                      </span>
+                    ))}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
       )}
       {editable && own && <TaskQuickAdd space="tasks" defaultDue={todayYmd()} className="mt-3 border-0 bg-transparent p-0" />}
     </section>

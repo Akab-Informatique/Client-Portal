@@ -51,6 +51,7 @@ import { kbRoutes } from "./routes/kb.ts";
 import { searchRoutes } from "./routes/search.ts";
 import { dattoAdminRoutes, rmmDeviceRoutes } from "./routes/rmmDatto.ts";
 import { projectsRoutes } from "./routes/projects.ts";
+import { myNotesRoutes } from "./routes/myNotes.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
@@ -157,6 +158,7 @@ export function createApp() {
   api.use("/search", requireStaff);
   api.route("/search", searchRoutes);
   api.route("/projects", projectsRoutes);
+  api.route("/my-notes", myNotesRoutes);
   api.route("/services", serviceRoutes);
   api.route("/passbolt", passboltRoutes);
   api.route("/planning", planningRoutes);

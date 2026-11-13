@@ -44,11 +44,12 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [done, setDone] = useState(false);
   const [q, setQ] = useState("");
   const lists = useTaskLists();
+  // opens on every task (the page of lists is the "by list" view)
   const [list, setList] = useState(() => {
     try {
-      return sessionStorage.getItem("akab.pipeline.todoList") ?? "";
+      return sessionStorage.getItem("akab.pipeline.todoList") ?? ALL_LISTS;
     } catch {
-      return "";
+      return ALL_LISTS;
     }
   });
   const [manage, setManage] = useState(false);
@@ -95,6 +96,16 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     }
   };
   const current = lists.data?.find((l) => l.id === list);
+  const viewSwitch = (
+    <div className="flex items-center gap-0.5 rounded-xl border bg-background/40 p-0.5" role="group" aria-label={t("pipeline.lists.viewTitle")}>
+      <button type="button" aria-pressed={list === ALL_LISTS} onClick={() => pick(ALL_LISTS)} className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors", list === ALL_LISTS ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
+        <ListChecks className="size-3.5" /> {t("pipeline.lists.everyTask")}
+      </button>
+      <button type="button" aria-pressed={list !== ALL_LISTS} onClick={() => pick("")} className={cn("flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors", list !== ALL_LISTS ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
+        <Folder className="size-3.5" /> {t("pipeline.lists.byList")}
+      </button>
+    </div>
+  );
   // nothing picked yet: every list, one per line, with a filter (all lists / mine / the team's) and the page of every task
   if (!list || (list !== ALL_LISTS && lists.data && !current)) {
     const shown = inSpace(lists.data, "tasks");
@@ -102,10 +113,7 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       <div className="space-y-3">
         {manage && <ManageLists space="tasks" onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => pick(ALL_LISTS)} className="flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
-            <ListChecks className="size-3.5" /> {t("pipeline.lists.everyTask")}
-            <span className="font-mono opacity-70">{shown.reduce((n, l) => n + l.open, 0)}</span>
-          </button>
+          {viewSwitch}
           {editable && (
             <button type="button" onClick={() => setManage(true)} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl bg-grad-gold px-4 text-sm font-semibold text-[#1a1204]">
               <Plus className="size-4" /> {t("pipeline.lists.new")}
@@ -146,7 +154,8 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     <div className="space-y-3">
       {manage && <ManageLists space="tasks" onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
       {/* an opened list: a little arrow goes back to all the lists */}
-      <div className="flex items-center gap-2">
+      {list === ALL_LISTS && <div className="flex flex-wrap items-center gap-2">{viewSwitch}</div>}
+      <div className={cn("flex items-center gap-2", list === ALL_LISTS && "hidden")}>
         <button type="button" onClick={() => pick("")} aria-label={t("pipeline.lists.back")} title={t("pipeline.lists.back")} className="flex size-9 items-center justify-center rounded-xl border text-muted-foreground transition-colors hover:border-[color:var(--gold)]/50 hover:text-foreground">
           <ArrowLeft className="size-4" />
         </button>

@@ -5852,6 +5852,7 @@ const en: Dict = {
     projectNote: "{{by}} flagged a project note for you",
     projectReminder: "Project reminder",
     projectFollowup: "Time for the project follow-up",
+    noteReminder: "Reminder",
     pipelineDayAdded: "{{by}} added an item to your day",
     pipelineComment: "{{by}} commented on one of your tasks",
     workDone: "{{from}} worked on your ticket",

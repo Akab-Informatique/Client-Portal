@@ -12991,3 +12991,43 @@ describe("portal assistant: the chat route", () => {
     }
   });
 });
+
+describe("private notes and quick reminders (the To do panel)", () => {
+  it("are the person's own alone, and a reminder rings the bell once", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const admin = await signIn("admin@akab.local");
+    expect((await tech.post("/api/my-notes", { kind: "note", body: "" })).json.error).toBe("note_empty");
+    expect((await tech.post("/api/my-notes", { kind: "reminder", body: "Appeler Marc" })).json.error).toBe("reminder_needs_time");
+    const note = await tech.post("/api/my-notes", { kind: "note", body: "Mot de passe du routeur : voir Passbolt" });
+    expect(note.status).toBe(201);
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const rem = await tech.post("/api/my-notes", { kind: "reminder", body: "Appeler Marc", remindAt: past });
+    expect(rem.status).toBe(201);
+    const future = await tech.post("/api/my-notes", { kind: "reminder", body: "Plus tard", remindAt: new Date(Date.now() + 3_600_000).toISOString() });
+    // nobody else reads or changes them, administrators included
+    for (const other of [tech2, admin]) {
+      expect((await other.get("/api/my-notes")).json.some((n: any) => n.id === note.json.id)).toBe(false);
+      expect((await other.patch(`/api/my-notes/${note.json.id}`, { body: "x" })).status).toBe(404);
+      expect((await other.del(`/api/my-notes/${note.json.id}`)).status).toBe(404);
+    }
+    // the soonest reminder first, notes after
+    const list = (await tech.get("/api/my-notes")).json.map((n: any) => n.id);
+    expect(list.indexOf(rem.json.id)).toBeLessThan(list.indexOf(future.json.id));
+    expect(list.indexOf(future.json.id)).toBeLessThan(list.indexOf(note.json.id));
+    // the bell rings once for the reminder that is due, never for the future one, and only for its owner
+    const { noteTick } = await import("../server/lib/personalNotes.ts");
+    expect(await noteTick()).toBe(1);
+    expect(await noteTick()).toBe(0);
+    const mine = (await tech.get("/api/notifications")).json.items.filter((n: any) => n.type === "note.reminder");
+    expect(mine.length).toBe(1);
+    expect(mine[0].data.text).toBe("Appeler Marc");
+    expect((await tech2.get("/api/notifications")).json.items.some((n: any) => n.type === "note.reminder")).toBe(false);
+    // done reminders do not ring; a new time rings again
+    expect((await tech.patch(`/api/my-notes/${future.json.id}`, { done: true })).json.done).toBe(true);
+    expect((await tech.patch(`/api/my-notes/${rem.json.id}`, { remindAt: past })).json.notified).toBe(false);
+    expect(await noteTick()).toBe(1);
+    expect((await tech.del(`/api/my-notes/${note.json.id}`)).status).toBe(200);
+  });
+});
