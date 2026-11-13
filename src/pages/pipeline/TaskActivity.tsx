@@ -41,7 +41,8 @@ export function TaskActivity({ task, editable, onChanged, startOnTime = false }:
   const items = task.checklistItems;
   const nameOf = new Map(items.map((i) => [i.id, i.text]));
   const hours = parseHm(duration);
-  const canTime = can("timesheets.use");
+  // a to-do (private) has no timer and no time entry
+  const canTime = can("timesheets.use") && !task.todo;
   const qc = useQueryClient();
 
   // ── the timer: starts when the person who has the task opens it (once), counts, pauses; stopping asks for the time ──

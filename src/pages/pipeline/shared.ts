@@ -18,6 +18,8 @@ export type TaskCard = {
   listShared: boolean;
   /** The owner's name when it is somebody else's personal list */
   listOwner: string | null;
+  /** A to-do: private to its owner (no list, or a personal list); no timer */
+  todo: boolean;
   status: TaskStatus;
   priority: TaskPriority;
   assigneeId: string | null;

@@ -2378,11 +2378,27 @@ export const pipelineLists = pgTable("pipeline_lists", {
   id: uuid("id").primaryKey().defaultRandom(),
   name: text("name").notNull(),
   shared: boolean("shared").notNull().default(true),
+  /** A shared list: everyone who sees Opérations (true), or only the people in pipeline_list_members (and its owner) */
+  everyone: boolean("everyone").notNull().default(true),
   /** The person a personal list belongs to (the maker of a shared one) */
   ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
   position: integer("position").notNull().default(0),
   createdAt: created(),
 });
+
+/** The people a shared list is shared with when it is not for everyone */
+export const pipelineListMembers = pgTable(
+  "pipeline_list_members",
+  {
+    listId: uuid("list_id")
+      .notNull()
+      .references(() => pipelineLists.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.listId, t.userId] })],
+);
 
 export const pipelineTasks = pgTable(
   "pipeline_tasks",

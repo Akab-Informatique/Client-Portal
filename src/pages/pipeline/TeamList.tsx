@@ -13,7 +13,8 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, hm, todayYmd, type TaskCard, type TaskStatus } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
-import { ListBadge, ManageLists, listError, rememberList, useTaskLists } from "./lists";
+import { ListBadge, ManageLists, inSpace, rememberList, useTaskLists } from "./lists";
+import { TaskQuickAdd } from "./TaskQuickAdd";
 
 type Scope = "all" | "mine" | "none";
 /** "Every task" as a folder of its own (a real list id otherwise; empty = the page of all the lists) */
@@ -51,25 +52,8 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     }
   });
   const [manage, setManage] = useState(false);
-  // which lists the page of lists shows
-  const [kind, setKind] = useState<"all" | "mine" | "team">(() => {
-    try {
-      const k = sessionStorage.getItem("akab.pipeline.todoKind");
-      return k === "mine" || k === "team" ? k : "all";
-    } catch {
-      return "all";
-    }
-  });
-  const pickKind = (k: "all" | "mine" | "team") => {
-    setKind(k);
-    try {
-      sessionStorage.setItem("akab.pipeline.todoKind", k);
-    } catch {
-      /* kept for this page only */
-    }
-  };
   const [view, setView] = useState<"list" | "board">(() => (localStorage.getItem("akab.pipeline.view") === "board" ? "board" : "list"));
-  const params = new URLSearchParams({ status: done ? "done" : "open" });
+  const params = new URLSearchParams({ status: done ? "done" : "open", space: "tasks" });
   if (scope === "mine") params.set("scope", "mine");
   if (scope === "none") params.set("assignee", "none");
   if (person) params.set("assignee", person);
@@ -110,41 +94,18 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       /* kept for this page only */
     }
   };
-  // add a to-do straight onto the list being looked at (the usual list when all are shown)
-  const [quick, setQuick] = useState("");
-  const addQuick = useMutation({
-    mutationFn: (title: string) => api.post("/pipeline/tasks", { title, assigneeId: me.id, listId: list && list !== ALL_LISTS ? list : undefined }),
-    onSuccess: () => {
-      setQuick("");
-      refresh();
-    },
-    onError: (e) => toast.error(listError(t, e) === t("common.error") ? taskError(t, e) : listError(t, e)),
-  });
   const current = lists.data?.find((l) => l.id === list);
   // nothing picked yet: every list, one per line, with a filter (all lists / mine / the team's) and the page of every task
   if (!list || (list !== ALL_LISTS && lists.data && !current)) {
-    const shown = (lists.data ?? []).filter((l) => (kind === "mine" ? !l.shared : kind === "team" ? l.shared : true));
+    const shown = inSpace(lists.data, "tasks");
     return (
       <div className="space-y-3">
-        {manage && <ManageLists onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
+        {manage && <ManageLists space="tasks" onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-0.5 rounded-xl border bg-background/40 p-0.5">
-            {(
-              [
-                ["all", t("pipeline.lists.filterAll")],
-                ["mine", t("pipeline.lists.filterMine")],
-                ["team", t("pipeline.lists.filterTeam")],
-              ] as const
-            ).map(([k, label]) => (
-              <button key={k} type="button" onClick={() => pickKind(k)} className={cn("rounded-lg px-3 py-1.5 text-xs font-medium transition-colors", kind === k ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
-                {label}
-              </button>
-            ))}
-            <button type="button" onClick={() => pick(ALL_LISTS)} className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
-              <ListChecks className="size-3.5" /> {t("pipeline.lists.everyTask")}
-              <span className="font-mono opacity-70">{(lists.data ?? []).reduce((n, l) => n + l.open, 0)}</span>
-            </button>
-          </div>
+          <button type="button" onClick={() => pick(ALL_LISTS)} className="flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground">
+            <ListChecks className="size-3.5" /> {t("pipeline.lists.everyTask")}
+            <span className="font-mono opacity-70">{shown.reduce((n, l) => n + l.open, 0)}</span>
+          </button>
           {editable && (
             <button type="button" onClick={() => setManage(true)} className="ml-auto flex h-9 items-center gap-1.5 rounded-xl bg-grad-gold px-4 text-sm font-semibold text-[#1a1204]">
               <Plus className="size-4" /> {t("pipeline.lists.new")}
@@ -183,7 +144,7 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   }
   return (
     <div className="space-y-3">
-      {manage && <ManageLists onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
+      {manage && <ManageLists space="tasks" onClose={() => setManage(false)} onCreated={(id) => pick(id)} />}
       {/* an opened list: a little arrow goes back to all the lists */}
       <div className="flex items-center gap-2">
         <button type="button" onClick={() => pick("")} aria-label={t("pipeline.lists.back")} title={t("pipeline.lists.back")} className="flex size-9 items-center justify-center rounded-xl border text-muted-foreground transition-colors hover:border-[color:var(--gold)]/50 hover:text-foreground">
@@ -297,21 +258,7 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           ))}
         </div>
       )}
-      {editable && (
-        <form
-          className="glass flex gap-2 rounded-2xl border p-2.5"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (quick.trim()) addQuick.mutate(quick.trim());
-          }}
-        >
-          <Plus className="my-auto ml-2 size-4 shrink-0 text-primary" />
-          <Input value={quick} onChange={(e) => setQuick(e.target.value)} placeholder={current ? t("pipeline.lists.addTo", { name: current.name }) : t("pipeline.lists.addToDefault")} className="h-9 border-transparent bg-transparent shadow-none focus-visible:border-input" maxLength={200} />
-          <button type="submit" disabled={!quick.trim() || addQuick.isPending} className="h-9 rounded-md bg-grad-gold px-4 text-sm font-semibold text-[#1a1204] disabled:opacity-50">
-            {t("pipeline.add")}
-          </button>
-        </form>
-      )}
+      {editable && <TaskQuickAdd space="tasks" listId={current?.id} />}
     </div>
   );
 }
@@ -375,7 +322,7 @@ function Meta({ task, plain }: { task: TaskCard; /** the list and the due day ar
   );
 }
 
-function TaskRow({ task, child, wide, editable, onOpen, onPatch, people }: { task: TaskCard; child?: boolean; wide?: boolean; editable: boolean; onOpen: () => void; onPatch: (p: Record<string, unknown>) => void; people: { id: string; name: string }[] }) {
+export function TaskRow({ task, child, wide, todo, editable, onOpen, onPatch, people }: { task: TaskCard; child?: boolean; wide?: boolean; /** a private to-do: nobody else has it */ todo?: boolean; editable: boolean; onOpen: () => void; onPatch: (p: Record<string, unknown>) => void; people: { id: string; name: string }[] }) {
   const { t } = useTranslation();
   return (
     <div className={cn("group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.06),transparent_60%)]", child && "py-2")}>
@@ -396,6 +343,7 @@ function TaskRow({ task, child, wide, editable, onOpen, onPatch, people }: { tas
         </>
       )}
       <span className={cn("hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium sm:inline", STATUS_STYLE[task.status])}>{t(`pipeline.status.${task.status}`)}</span>
+      {!todo && (
       <DropdownMenu>
         <DropdownMenuTrigger asChild disabled={!editable}>
           <button type="button" className="flex shrink-0 items-center gap-1.5 rounded-full border border-transparent px-1 py-0.5 hover:border-[color:var(--gold)]/40" aria-label={t("pipeline.assignee")}>
@@ -444,6 +392,7 @@ function TaskRow({ task, child, wide, editable, onOpen, onPatch, people }: { tas
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+      )}
     </div>
   );
 }

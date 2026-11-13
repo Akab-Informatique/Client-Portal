@@ -12692,48 +12692,72 @@ describe("delegated technician: team, noted time, checklist, merge", () => {
   });
 });
 
-describe("to-do lists: shared or personal, every task is on one", () => {
-  it("makes a list shared or personal, puts each task on one, filters by list and person, and keeps a personal list private", async () => {
+describe("task lists (shared, with a timer) and private to-dos", () => {
+  it("shares a list with everyone or chosen people, keeps to-dos private and without a timer", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
     const tech2 = await signIn("tech2@akab.local");
     const [u2] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
-    // a task with no list goes on the team list
+    const [boss] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    // a task with no list goes on the team list (everyone)
     const plain = await tech.post("/api/pipeline/tasks", { title: "Sans liste" });
-    expect(plain.status).toBe(201);
-    expect(plain.json.listId).toBeTruthy();
     expect(plain.json.listShared).toBe(true);
-    const lists = await tech.get("/api/pipeline/lists");
-    expect(lists.json.find((l: any) => l.id === plain.json.listId).shared).toBe(true);
-    // a personal list: its tasks are private; the other technician does not see the list nor its tasks
-    const mine = await tech.post("/api/pipeline/lists", { name: "Perso de Tech", shared: false });
-    expect(mine.status).toBe(201);
-    expect((await tech.post("/api/pipeline/lists", { name: "perso de tech", shared: false })).json.error).toBe("list_exists");
-    const own = await tech.post("/api/pipeline/tasks", { title: "Idée perso", listId: mine.json.id });
-    expect(own.json.visibility).toBe("private");
-    expect(own.json.listName).toBe("Perso de Tech");
-    expect((await tech2.get("/api/pipeline/lists")).json.some((l: any) => l.id === mine.json.id)).toBe(false);
-    expect((await tech2.get(`/api/pipeline/tasks/${own.json.id}`)).status).toBe(404);
-    // the other cannot put a task on a list that is not his
-    expect((await tech2.post("/api/pipeline/tasks", { title: "Intrus", listId: mine.json.id })).json.error).toBe("list_invalid");
-    // a shared list, tasks assigned to each; the tasks view shows everything, then one person's
-    const shared = await tech.post("/api/pipeline/lists", { name: "Projet interne", shared: true });
-    const a = await tech.post("/api/pipeline/tasks", { title: "Pour moi", listId: shared.json.id });
-    const b = await tech.post("/api/pipeline/tasks", { title: "Pour l'autre", listId: shared.json.id, assigneeId: u2.id });
-    const all = await tech2.get("/api/pipeline/tasks?status=open");
-    expect(all.json.some((x: any) => x.id === a.json.id) && all.json.some((x: any) => x.id === b.json.id)).toBe(true);
-    expect(all.json.find((x: any) => x.id === a.json.id).listName).toBe("Projet interne");
-    expect((await tech2.get(`/api/pipeline/tasks?status=open&assignee=${u2.id}`)).json.map((x: any) => x.id)).toContain(b.json.id);
-    const byList = (await tech2.get(`/api/pipeline/tasks?status=open&list=${shared.json.id}`)).json;
-    expect(byList.map((x: any) => x.title).sort()).toEqual(["Pour l'autre", "Pour moi"]);
-    // moving a task to a personal list makes it private; back to a shared one, the team's again
-    const moved = await tech.patch(`/api/pipeline/tasks/${a.json.id}`, { listId: mine.json.id });
-    expect(moved.json.visibility).toBe("private");
-    expect((await tech.patch(`/api/pipeline/tasks/${a.json.id}`, { listId: shared.json.id })).json.visibility).toBe("team");
+    expect(plain.json.todo).toBe(false);
+    // a shared list for everyone
+    const team = await tech.post("/api/pipeline/lists", { name: "Projet interne", shared: true });
+    expect(team.status).toBe(201);
+    expect(team.json.everyone).toBe(true);
+    expect((await tech.post("/api/pipeline/lists", { name: "projet INTERNE", shared: true })).json.error).toBe("list_exists");
+    // a shared list for chosen people: the other technician is not in it
+    const closed = await tech.post("/api/pipeline/lists", { name: "Direction", shared: true, everyone: false, memberIds: [boss.id] });
+    expect(closed.json.everyone).toBe(false);
+    const secret = await tech.post("/api/pipeline/tasks", { title: "Budget", listId: closed.json.id });
+    expect(secret.json.visibility).toBe("private");
+    expect((await tech2.get("/api/pipeline/lists")).json.some((l: any) => l.id === closed.json.id)).toBe(false);
+    expect((await tech2.get(`/api/pipeline/tasks/${secret.json.id}`)).status).toBe(404);
+    expect((await tech2.post("/api/pipeline/tasks", { title: "Intrus", listId: closed.json.id })).json.error).toBe("list_invalid");
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.get(`/api/pipeline/tasks/${secret.json.id}`)).status).toBe(200);
+    // shared with the second technician too: now he sees it
+    expect((await tech.patch(`/api/pipeline/lists/${closed.json.id}`, { memberIds: [boss.id, u2.id] })).status).toBe(200);
+    expect((await tech2.get(`/api/pipeline/tasks/${secret.json.id}`)).status).toBe(200);
+    // tasks on a shared list can be assigned and have a timer
+    const shared = await tech.post("/api/pipeline/tasks", { title: "Pour l'autre", listId: team.json.id, assigneeId: u2.id });
+    expect(shared.json.todo).toBe(false);
+    expect((await tech2.post(`/api/pipeline/tasks/${shared.json.id}/timer/start`, {})).status).toBe(200);
+    // the to-do space: on its own or on a personal list, private, never assigned to another, no timer
+    const perso = await tech.post("/api/pipeline/lists", { name: "Mes affaires", shared: false });
+    expect(perso.json.everyone).toBe(false);
+    const todo = await tech.post("/api/pipeline/tasks", { title: "Appeler le garage", space: "todo", assigneeId: u2.id });
+    expect(todo.status).toBe(201);
+    expect(todo.json.todo).toBe(true);
+    expect(todo.json.listId).toBeNull();
+    expect(todo.json.assignees.map((x: any) => x.id)).not.toContain(u2.id);
+    const inList = await tech.post("/api/pipeline/tasks", { title: "Idée", space: "todo", listId: perso.json.id });
+    expect(inList.json.todo).toBe(true);
+    expect((await tech2.get(`/api/pipeline/tasks/${inList.json.id}`)).status).toBe(404);
+    expect((await tech.post(`/api/pipeline/tasks/${todo.json.id}/timer/start`, {})).json.error).toBe("todo_no_timer");
+    expect((await tech.post(`/api/pipeline/tasks/${todo.json.id}/time`, { date: new Date().toISOString().slice(0, 10), hours: 1, itemIds: [], doneItemIds: [] })).json.error).toBe("todo_no_timer");
+    // a to-do cannot go on a shared list that is not his, nor a task on a personal list
+    expect((await tech.post("/api/pipeline/tasks", { title: "X", space: "todo", listId: team.json.id })).json.error).toBe("list_invalid");
+    expect((await tech.post("/api/pipeline/tasks", { title: "Y", listId: perso.json.id })).json.error).toBe("list_invalid");
+    // the two spaces are listed apart
+    const tasks = (await tech.get("/api/pipeline/tasks?status=open&space=tasks")).json.map((x: any) => x.id);
+    const todos = (await tech.get("/api/pipeline/tasks?status=open&space=todo")).json.map((x: any) => x.id);
+    expect(tasks).toContain(shared.json.id);
+    expect(tasks).not.toContain(todo.json.id);
+    expect(todos).toEqual(expect.arrayContaining([todo.json.id, inList.json.id]));
+    expect(todos).not.toContain(shared.json.id);
+    // a to-do turned into a task of a shared list (and back) follows the space
+    const up = await tech.patch(`/api/pipeline/tasks/${todo.json.id}`, { listId: team.json.id });
+    expect(up.json.todo).toBe(false);
+    expect(up.json.visibility).toBe("team");
+    const down = await tech.patch(`/api/pipeline/tasks/${todo.json.id}`, { listId: null });
+    expect(down.json.todo).toBe(true);
+    expect(down.json.visibility).toBe("private");
     // a list with tasks cannot be deleted; an empty one can
-    expect((await tech.del(`/api/pipeline/lists/${shared.json.id}`)).json.error).toBe("list_not_empty");
-    const empty = await tech.post("/api/pipeline/lists", { name: "Vide", shared: false });
-    expect((await tech.del(`/api/pipeline/lists/${empty.json.id}`)).status).toBe(200);
+    expect((await tech.del(`/api/pipeline/lists/${team.json.id}`)).json.error).toBe("list_not_empty");
+    expect((await tech.del(`/api/pipeline/lists/${perso.json.id}`)).json.error).toBe("list_not_empty");
   });
 });
 

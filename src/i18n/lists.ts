@@ -1,6 +1,15 @@
 /** Texts of the to-do lists (shared / personal) and of the Tasks section: their own file, keys under `pipeline.lists` and `pipeline.tasksSection`. */
 export const fr = {
   pipeline: {
+    tabs: { tasks: "Tâches", todo: "À faire" },
+    quick: { task: "Ajouter une tâche…", todo: "Ajouter une chose à faire…", list: "Liste", who: "Assignée à", due: "Échéance" },
+    todo: {
+      title: "À faire",
+      private: "Privé : vous seul le voyez, sans minuterie",
+      back: "Retour à mes choses à faire",
+      none: "Rien à faire ici. Ajoutez une chose à faire ci-dessus.",
+      loose: "Sans liste",
+    },
     lists: {
       label: "Liste",
       all: "Toutes les listes",
@@ -10,6 +19,13 @@ export const fr = {
       personalHint: "Vous seul la voyez (et les personnes à qui vous assignez une tâche).",
       manage: "Gérer les listes",
       new: "Nouvelle liste",
+      noList: "Sans liste (à faire privé)",
+      noListHint: "Une tâche à faire privée, sans liste : vous seul la voyez, sans minuterie.",
+      chosenHint: "Seules les personnes choisies voient cette liste.",
+      forEveryone: "Toute l'équipe",
+      forChosen: "Personnes choisies",
+      people: "{{count}} personne(s)",
+      shareWith: "Partager avec…",
       filterAll: "Toutes les listes",
       filterMine: "Mes listes",
       filterTeam: "Listes d'équipe",
@@ -48,6 +64,15 @@ export const fr = {
 };
 export const en = {
   pipeline: {
+    tabs: { tasks: "Tasks", todo: "To do" },
+    quick: { task: "Add a task…", todo: "Add something to do…", list: "List", who: "Assigned to", due: "Due" },
+    todo: {
+      title: "To do",
+      private: "Private: only you see it, no timer",
+      back: "Back to my to-dos",
+      none: "Nothing to do here. Add something above.",
+      loose: "No list",
+    },
     lists: {
       label: "List",
       all: "All lists",
@@ -57,6 +82,13 @@ export const en = {
       personalHint: "Only you see it (and anyone you assign a task to).",
       manage: "Manage lists",
       new: "New list",
+      noList: "No list (private to-do)",
+      noListHint: "A private to-do on its own: only you see it, no timer.",
+      chosenHint: "Only the chosen people see this list.",
+      forEveryone: "The whole team",
+      forChosen: "Chosen people",
+      people: "{{count}} people",
+      shareWith: "Share with…",
       filterAll: "All lists",
       filterMine: "My lists",
       filterTeam: "Team lists",

@@ -15,7 +15,7 @@ export const assignedTo = (userId: string) =>
  * and the portal assistant, so both apply the same rule.
  */
 export const seenBy = (userId: string) =>
-  sql<boolean>`(${schema.pipelineTasks.visibility} = 'team' or ${schema.pipelineTasks.createdBy} = ${userId} or ${assignedTo(userId)} or (${schema.pipelineTasks.visibility} = 'selected' and exists (select 1 from pipeline_task_viewers v where v.task_id = ${schema.pipelineTasks.id} and v.user_id = ${userId})))`;
+  sql<boolean>`(${schema.pipelineTasks.createdBy} = ${userId} or ${assignedTo(userId)} or exists (select 1 from pipeline_lists sl where sl.id = ${schema.pipelineTasks.listId} and sl.shared and ((sl.everyone and ${schema.pipelineTasks.visibility} = 'team') or (not sl.everyone and (sl.owner_id = ${userId} or exists (select 1 from pipeline_list_members sm where sm.list_id = sl.id and sm.user_id = ${userId})))) ) or (${schema.pipelineTasks.visibility} = 'selected' and exists (select 1 from pipeline_task_viewers v where v.task_id = ${schema.pipelineTasks.id} and v.user_id = ${userId})))`;
 
 /** The other people of each task (not the main one) */
 export async function coAssignees(taskIds: string[]): Promise<Map<string, string[]>> {
