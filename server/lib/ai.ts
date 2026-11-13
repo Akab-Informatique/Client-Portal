@@ -16,7 +16,7 @@ export type AiModel = (typeof AI_MODELS)[number];
  * an admin chose another one for it; a technician may pick another one for
  * one request when allowed. A new AI feature: add it here (and its label).
  */
-export const AI_FEATURE_KEYS = ["ticket.analyze", "ticket.reply", "tickets.plan", "tickets.assistant", "text.polish", "pipeline.day", "meetings.week"] as const;
+export const AI_FEATURE_KEYS = ["ticket.analyze", "ticket.reply", "tickets.plan", "tickets.assistant", "text.polish", "pipeline.day", "meetings.week", "reports.summary", "assistant.chat"] as const;
 export type AiFeature = (typeof AI_FEATURE_KEYS)[number];
 
 /** US dollars per million tokens (Anthropic API prices). */
@@ -27,7 +27,7 @@ export const AI_PRICES: Record<AiModel, { input: number; output: number }> = {
 };
 /** Cost of a request in millionths of a dollar (tokens × $/M tokens). */
 export const costMicros = (model: AiModel, input: number, output: number) => Math.round(input * AI_PRICES[model].input + output * AI_PRICES[model].output);
-const API = "https://api.anthropic.com/v1/messages";
+export const API = "https://api.anthropic.com/v1/messages";
 
 export type AiErrorCode = "not_configured" | "disabled" | "auth" | "rate_limit" | "network" | "api" | "bad_output" | "billing" | "model" | "overloaded" | "refusal" | "daily_limit";
 export class AiError extends Error {
@@ -42,7 +42,7 @@ export class AiError extends Error {
 }
 
 /** Anthropic's error answer → a code the portal can explain. */
-function apiError(status: number, body: { error?: { type?: string; message?: string } } | null): AiError {
+export function apiError(status: number, body: { error?: { type?: string; message?: string } } | null): AiError {
   const type = body?.error?.type ?? "";
   const message = (body?.error?.message ?? "").slice(0, 300);
   if (status === 401 || status === 403 || type === "authentication_error" || type === "permission_error") return new AiError("auth", status, message);
@@ -97,7 +97,7 @@ export async function aiSettings(): Promise<AiSettings> {
  * Parts with their own default model (the text correction: Haiku, the cheapest).
  * Only an admin changes it (Admin › AI, per part); no model is picked per request.
  */
-export const DEFAULT_FEATURE_MODELS: Partial<Record<AiFeature, AiModel>> = { "text.polish": "claude-haiku-5-5" };
+export const DEFAULT_FEATURE_MODELS: Partial<Record<AiFeature, AiModel>> = { "text.polish": "claude-haiku-5-5", "reports.summary": "claude-haiku-5-5", "assistant.chat": "claude-haiku-5-5" };
 
 export function modelFor(s: AiSettings, feature: AiFeature, asked?: AiModel | null): AiModel {
   const own = DEFAULT_FEATURE_MODELS[feature];
@@ -144,6 +144,16 @@ export async function saveAiSettings(actorId: string, p: Partial<Omit<AiSettings
     .insert(schema.integrations)
     .values({ provider: AI_PROVIDER, ...values })
     .onConflictDoUpdate({ target: schema.integrations.provider, set: values });
+}
+
+/** Counts one answer of Claude (tokens and cost) in the usage summary and the daily limits. */
+export async function recordAiUsage(opts: { userId: string | null; feature: string; model: AiModel; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } }) {
+  const input = (opts.usage?.input_tokens ?? 0) + (opts.usage?.cache_creation_input_tokens ?? 0) + (opts.usage?.cache_read_input_tokens ?? 0);
+  const output = opts.usage?.output_tokens ?? 0;
+  await db()
+    .insert(schema.aiUsage)
+    .values({ userId: opts.userId, feature: opts.feature, model: opts.model, inputTokens: input, outputTokens: output, costMicros: costMicros(opts.model, input, output) })
+    .catch((e) => console.warn("[ai] usage:", e instanceof Error ? e.message : e));
 }
 
 /**
@@ -194,12 +204,7 @@ export async function askClaude(
   if (!res.ok) throw apiError(res.status, (await res.json().catch(() => null)) as { error?: { type?: string; message?: string } } | null);
   const j = (await res.json()) as { content?: { type: string; text?: string }[]; stop_reason?: string; usage?: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } };
   // every request is counted (the usage summary, the daily limits)
-  const input = (j.usage?.input_tokens ?? 0) + (j.usage?.cache_creation_input_tokens ?? 0) + (j.usage?.cache_read_input_tokens ?? 0);
-  const output = j.usage?.output_tokens ?? 0;
-  await db()
-    .insert(schema.aiUsage)
-    .values({ userId: opts.userId ?? null, feature: opts.feature ?? "test", model, inputTokens: input, outputTokens: output, costMicros: costMicros(model, input, output) })
-    .catch((e) => console.warn("[ai] usage:", e instanceof Error ? e.message : e));
+  await recordAiUsage({ userId: opts.userId ?? null, feature: opts.feature ?? "test", model, usage: j.usage });
   if (j.stop_reason === "refusal") throw new AiError("refusal");
   return (j.content ?? [])
     .filter((b) => b.type === "text")

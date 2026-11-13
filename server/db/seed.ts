@@ -1,5 +1,6 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { clientRoleId, ensureAllClientRoles } from "../lib/clientRoles.ts";
+import { ensureBuiltinReports } from "../lib/reports.ts";
 import { db, schema } from "./index.ts";
 import { config } from "../config.ts";
 import { hashPassword, temporaryPassword, passwordProblem } from "../lib/crypto.ts";
@@ -73,6 +74,9 @@ export async function seed(): Promise<void> {
     const [existing] = await d.select({ id: schema.dashboards.id }).from(schema.dashboards).where(eq(schema.dashboards.slug, b.slug));
     if (!existing) await d.insert(schema.dashboards).values({ slug: b.slug, name: b.name, visibility: b.visibility });
   }
+
+  // Built-in reports (the portal usage, monthly, no channels): made once, in production as well
+  await ensureBuiltinReports();
 
   const [{ count }] = await d
     .select({ count: sql<number>`count(*)::int` })

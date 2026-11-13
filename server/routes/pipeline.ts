@@ -26,7 +26,8 @@ async function itemOf(taskId: string, itemId: string) {
 }
 import { body, zUuid } from "../lib/validate.ts";
 import { nextAfter, type Recurrence } from "../../shared/recurrence.ts";
-import { assignedTo, coAssignees, isAssigned, setAssignees } from "../lib/pipelineAssign.ts";
+import { assignedTo, coAssignees, isAssigned, seenBy, setAssignees } from "../lib/pipelineAssign.ts";
+import { isTodoSql, listsFor, resolveList, setListAudience, teamListId, visibilityOf, type Space } from "../lib/pipelineLists.ts";
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const zHm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
@@ -50,12 +51,6 @@ const MAX_FILES = 20;
 
 type Task = typeof schema.pipelineTasks.$inferSelect;
 
-/**
- * Who sees a task: everyone when it is a team task; otherwise the one who made it, the one it is assigned to,
- * and (when "selected") the people chosen. Not even a manager sees a private one.
- */
-const seenBy = (userId: string) =>
-  sql<boolean>`(${schema.pipelineTasks.visibility} = 'team' or ${schema.pipelineTasks.createdBy} = ${userId} or ${assignedTo(userId)} or (${schema.pipelineTasks.visibility} = 'selected' and exists (select 1 from pipeline_task_viewers v where v.task_id = ${schema.pipelineTasks.id} and v.user_id = ${userId})))`;
 
 /** Whose day it is about: one's own, or (pipeline.manage) another active staff member's. */
 async function dayTarget(a: ReturnType<typeof auth>, asked?: string | null): Promise<string> {
@@ -73,6 +68,10 @@ async function cards(rows: Task[], viewerId: string) {
   const d = db();
   const ids = rows.map((r) => r.id);
   const co = await coAssignees(ids);
+  const listRows = await d
+    .select({ id: schema.pipelineLists.id, name: schema.pipelineLists.name, shared: schema.pipelineLists.shared, ownerId: schema.pipelineLists.ownerId })
+    .from(schema.pipelineLists)
+    .where(inArray(schema.pipelineLists.id, [...new Set(rows.map((r) => r.listId).filter((x): x is string => Boolean(x)))]));
   const [people, checks, kids, parents, waiting, fileRows] = await Promise.all([
     d.select({ id: schema.users.id, name: schema.users.name }).from(schema.users),
     d
@@ -95,6 +94,7 @@ async function cards(rows: Task[], viewerId: string) {
       .groupBy(schema.pipelineTaskFiles.taskId),
   ]);
   const name = new Map(people.map((p) => [p.id, p.name]));
+  const lists = new Map(listRows.map((l) => [l.id, l]));
   const parent = new Map(parents.map((p) => [p.id, p.seen ? p.title : null]));
   const wait = new Map(waiting.map((p) => [p.id, p]));
   return rows.map((t) => {
@@ -104,6 +104,16 @@ async function cards(rows: Task[], viewerId: string) {
     return {
       id: t.id,
       title: t.title,
+      /** The list it is on (a shared list, or its owner's personal one) */
+      listId: t.listId,
+      listName: t.listId ? (lists.get(t.listId)?.name ?? null) : null,
+      listShared: t.listId ? (lists.get(t.listId)?.shared ?? true) : false,
+      /** A to-do: private to its owner (no list, or a personal list), no timer */
+      todo: !t.listId || lists.get(t.listId)?.shared === false,
+      listOwner: (() => {
+        const l = t.listId ? lists.get(t.listId) : null;
+        return l && !l.shared && l.ownerId ? (name.get(l.ownerId) ?? null) : null;
+      })(),
       status: t.status,
       priority: t.priority,
       assigneeId: t.assigneeId,
@@ -166,6 +176,13 @@ async function reaches(start: string | null, id: string, column: "parentId" | "b
   return false;
 }
 
+/** A to-do (private: no list or a personal list) has no timer and no time entry; only tasks on shared lists do */
+async function noTimerOnTodo(t: Task) {
+  if (!t.listId) throw new HTTPException(400, { message: "todo_no_timer" });
+  const [l] = await db().select({ shared: schema.pipelineLists.shared }).from(schema.pipelineLists).where(eq(schema.pipelineLists.id, t.listId));
+  if (!l || !l.shared) throw new HTTPException(400, { message: "todo_no_timer" });
+}
+
 async function activeStaff(id: string | string[]) {
   const ids = [...new Set(Array.isArray(id) ? id : [id])];
   if (!ids.length) return;
@@ -205,6 +222,7 @@ async function spawnNext(done: Task, by: string): Promise<string | null> {
   const [row] = await db()
     .insert(schema.pipelineTasks)
     .values({
+      listId: done.listId,
       title: done.title,
       notes: done.notes,
       priority: done.priority,
@@ -600,6 +618,59 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json(rows);
   })
 
+  // ── Lists: every task is on one, shared (the team) or personal (its owner) ──
+  .get("/lists", async (c) => {
+    const a = auth(c);
+    await teamListId();
+    return c.json(await listsFor(a.user.id, seenBy(a.user.id)));
+  })
+  .post("/lists", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(80), shared: z.boolean().default(false), everyone: z.boolean().default(true), memberIds: z.array(zUuid).max(60).default([]) }));
+    const dup = await db().select({ id: schema.pipelineLists.id }).from(schema.pipelineLists).where(and(sql`lower(${schema.pipelineLists.name}) = lower(${p.name})`, p.shared ? eq(schema.pipelineLists.shared, true) : and(eq(schema.pipelineLists.shared, false), eq(schema.pipelineLists.ownerId, a.user.id))));
+    if (dup.length) throw new HTTPException(409, { message: "list_exists" });
+    await activeStaff(p.memberIds);
+    const everyone = p.shared ? p.everyone : false;
+    const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineLists.position}), 0)`.mapWith(Number) }).from(schema.pipelineLists);
+    const [row] = await db().insert(schema.pipelineLists).values({ name: p.name, shared: p.shared, everyone, ownerId: a.user.id, position: max + 1 }).returning();
+    if (p.shared && !everyone) await setListAudience(row.id, false, [...p.memberIds, a.user.id]);
+    await audit(a.user.id, "pipeline.list_created", row.id, { name: row.name, shared: row.shared, everyone });
+    const [made] = (await listsFor(a.user.id, seenBy(a.user.id))).filter((l) => l.id === row.id);
+    return c.json(made, 201);
+  })
+  .patch("/lists/:id", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(80).optional(), everyone: z.boolean().optional(), memberIds: z.array(zUuid).max(60).optional() }));
+    const [l] = await db().select().from(schema.pipelineLists).where(eq(schema.pipelineLists.id, id));
+    // a personal list is its owner's; a shared one is changed by whoever made it or a manager
+    if (!l || (!l.shared && l.ownerId !== a.user.id)) throw new HTTPException(404, { message: "not_found" });
+    if (l.ownerId !== a.user.id && !a.permissions.includes("pipeline.manage")) throw new HTTPException(403, { message: "forbidden" });
+    if (p.name !== undefined) await db().update(schema.pipelineLists).set({ name: p.name }).where(eq(schema.pipelineLists.id, id));
+    // who a shared list is for: everyone, or only the people chosen (its owner always stays in)
+    if (l.shared && (p.everyone !== undefined || p.memberIds !== undefined)) {
+      const everyone = p.everyone ?? l.everyone;
+      const members = p.memberIds ?? (await db().select({ id: schema.pipelineListMembers.userId }).from(schema.pipelineListMembers).where(eq(schema.pipelineListMembers.listId, id))).map((m) => m.id);
+      await activeStaff(members);
+      await setListAudience(id, everyone, l.ownerId ? [...members, l.ownerId] : members);
+    }
+    await audit(a.user.id, "pipeline.list_changed", id, { name: p.name, everyone: p.everyone });
+    return c.json({ ok: true });
+  })
+  .delete("/lists/:id", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const [l] = await db().select().from(schema.pipelineLists).where(eq(schema.pipelineLists.id, id));
+    if (!l || (!l.shared && l.ownerId !== a.user.id)) throw new HTTPException(404, { message: "not_found" });
+    if (l.ownerId !== a.user.id && !a.permissions.includes("pipeline.manage")) throw new HTTPException(403, { message: "forbidden" });
+    const [{ n }] = await db().select({ n: sql<number>`count(*)`.mapWith(Number) }).from(schema.pipelineTasks).where(eq(schema.pipelineTasks.listId, id));
+    // a list with tasks (even done ones, even ones this person cannot see) is never deleted: move them first
+    if (n > 0) throw new HTTPException(409, { message: "list_not_empty" });
+    await db().delete(schema.pipelineLists).where(eq(schema.pipelineLists.id, id));
+    await audit(a.user.id, "pipeline.list_deleted", id, { name: l.name });
+    return c.json({ ok: true });
+  })
+
   .get("/tasks", async (c) => {
     await resetDailyTasks();
     const a = auth(c);
@@ -608,6 +679,10 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const conds: SQL[] = [seenBy(a.user.id)];
     if (status === "open") conds.push(ne(schema.pipelineTasks.status, "done"));
     if (status === "done") conds.push(eq(schema.pipelineTasks.status, "done"), sql`${schema.pipelineTasks.completedAt} > now() - interval '30 days'`);
+    if (q.list && zUuid.safeParse(q.list).success) conds.push(eq(schema.pipelineTasks.listId, q.list));
+    // Tâches = tasks on shared lists; À faire = the person's own to-dos (on no list, or a personal list)
+    if (q.space === "tasks") conds.push(sql`not ${isTodoSql}`);
+    if (q.space === "todo") conds.push(isTodoSql, eq(schema.pipelineTasks.createdBy, a.user.id));
     if (q.scope === "mine") conds.push(assignedTo(a.user.id));
     else if (q.assignee === "none") conds.push(sql`${schema.pipelineTasks.assigneeId} is null`);
     else if (q.assignee && zUuid.safeParse(q.assignee).success) conds.push(assignedTo(q.assignee));
@@ -678,6 +753,10 @@ export const pipelineRoutes = new Hono<AppEnv>()
         remindEveryDays: zRemind.nullable().default(null),
         estimateMinutes: zMinutes.nullable().default(null),
         tags: zTags.default([]),
+        /** The list it goes on (a shared one or one's own); the team list when none is named */
+        listId: zUuid.nullable().default(null),
+        /** tasks = on a shared list (timer, assigned to people); todo = private to me, on no list or one of my personal lists */
+        space: z.enum(["tasks", "todo"]).default("tasks"),
         visibility: zVisibility.default("team"),
         viewerIds: z.array(zUuid).max(30).default([]),
         recurrence: zRecurrence.nullable().default(null),
@@ -685,7 +764,10 @@ export const pipelineRoutes = new Hono<AppEnv>()
         checklist: z.array(z.union([z.string().trim().min(1).max(300), z.object({ text: z.string().trim().min(1).max(300), priority: zPriority.default("normal"), dueDate: zDate.nullable().default(null), dueTime: zHm.nullable().default(null), assigneeId: zUuid.nullable().default(null), startDate: zDate.nullable().default(null), dependsOn: z.number().int().min(0).nullable().default(null) })])).max(60).default([]),
       }),
     );
-    const wanted = p.assigneeIds ?? (p.assigneeId ? [p.assigneeId] : []);
+    const list = await resolveList(a.user.id, p.listId, p.space as Space);
+    const visibility = p.space === "todo" ? "private" : visibilityOf(list, p.visibility);
+    // a to-do is private: it is the person's own, never assigned to anyone else
+    const wanted = p.space === "todo" ? [a.user.id] : (p.assigneeIds ?? (p.assigneeId ? [p.assigneeId] : []));
     await activeStaff(wanted);
     for (const it of p.checklist) if (typeof it !== "string" && it.assigneeId) await activeStaff(it.assigneeId);
     if (p.parentId) await taskOr404(c, p.parentId);
@@ -694,10 +776,10 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [row] = await db()
       .insert(schema.pipelineTasks)
-      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: wanted[0] ?? null, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.kind === "normal" ? p.dueDate : null, dueTime: p.dueDate && p.kind === "normal" ? p.dueTime : null, kind: p.kind, lastResetOn: p.kind === "daily" ? todayQc() : null, remindEveryDays: p.kind === "continuous" ? p.remindEveryDays : null, lastCheckedOn: p.kind === "continuous" && p.remindEveryDays ? todayQc() : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.kind === "continuous" ? null : p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.kind === "normal" ? p.recurrence : null, ...ticket, position: max + 1 })
+      .values({ listId: list.id, title: p.title, notes: p.notes, priority: p.priority, assigneeId: wanted[0] ?? null, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.kind === "normal" ? p.dueDate : null, dueTime: p.dueDate && p.kind === "normal" ? p.dueTime : null, kind: p.kind, lastResetOn: p.kind === "daily" ? todayQc() : null, remindEveryDays: p.kind === "continuous" ? p.remindEveryDays : null, lastCheckedOn: p.kind === "continuous" && p.remindEveryDays ? todayQc() : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.kind === "continuous" ? null : p.estimateMinutes, tags: [...new Set(p.tags)], visibility, recurrence: p.kind === "normal" ? p.recurrence : null, ...ticket, position: max + 1 })
       .returning();
     if (wanted.length > 1) await setAssignees(row.id, wanted);
-    if (p.visibility === "selected") await setViewers(row.id, p.viewerIds);
+    if (visibility === "selected") await setViewers(row.id, p.viewerIds);
     if (row.recurrence) await db().update(schema.pipelineTasks).set({ seriesId: row.id }).where(eq(schema.pipelineTasks.id, row.id));
     if (p.checklist.length) {
       const made = await db()
@@ -739,6 +821,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
         remindEveryDays: zRemind.nullable().optional(),
         estimateMinutes: zMinutes.nullable().optional(),
         tags: zTags.optional(),
+        listId: zUuid.nullable().optional(),
         visibility: zVisibility.optional(),
         viewerIds: z.array(zUuid).max(30).optional(),
         recurrence: zRecurrence.nullable().optional(),
@@ -752,6 +835,25 @@ export const pipelineRoutes = new Hono<AppEnv>()
     if (p.title !== undefined) set.title = p.title;
     if (p.notes !== undefined) set.notes = p.notes;
     if (p.priority !== undefined) set.priority = p.priority;
+    // another list (or none, for a to-do on its own): a shared list the person is in, or one of their personal lists; who sees the task follows it
+    if (p.listId !== undefined && p.listId !== cur.listId) {
+      const [target] = p.listId ? await db().select({ shared: schema.pipelineLists.shared }).from(schema.pipelineLists).where(eq(schema.pipelineLists.id, p.listId)) : [];
+      const space: Space = p.listId && target?.shared ? "tasks" : "todo";
+      const list = await resolveList(a.user.id, p.listId, space);
+      // into the to-do space: only the one who made the task, and it becomes theirs alone
+      if (space === "todo" && cur.createdBy !== a.user.id) throw new HTTPException(403, { message: "forbidden" });
+      set.listId = list.id;
+      if (space === "todo") {
+        set.assigneeId = a.user.id;
+        set.visibility = "private";
+        await setAssignees(cur.id, [a.user.id]);
+        await db().delete(schema.pipelineTaskTimers).where(eq(schema.pipelineTaskTimers.taskId, cur.id));
+      } else if (p.visibility === undefined) {
+        // out of the to-do space into a shared list the task is the list's again
+        const wasTodo = !cur.listId || cur.visibility === "private" && (await db().select({ s: schema.pipelineLists.shared }).from(schema.pipelineLists).where(eq(schema.pipelineLists.id, cur.listId)))[0]?.s === false;
+        set.visibility = visibilityOf(list, wasTodo ? "team" : cur.visibility);
+      }
+    }
     // a continuous or daily task has no due day (a continuous one has a checkpoint, a daily one starts again each day)
     const kindNow = p.kind ?? cur.kind;
     if (p.kind !== undefined) {
@@ -958,7 +1060,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [child] = await db()
       .insert(schema.pipelineTasks)
-      .values({ title: it.text, priority: it.priority, assigneeId: it.assigneeId ?? t.assigneeId, createdBy: a.user.id, parentId: t.id, dueDate: it.dueDate, dueTime: it.dueDate ? it.dueTime : null, visibility: t.visibility === "team" ? "team" : "private", position: max + 1 })
+      .values({ listId: t.listId, title: it.text, priority: it.priority, assigneeId: it.assigneeId ?? t.assigneeId, createdBy: a.user.id, parentId: t.id, dueDate: it.dueDate, dueTime: it.dueDate ? it.dueTime : null, visibility: t.visibility === "team" ? "team" : "private", position: max + 1 })
       .returning();
     await db().update(schema.pipelineChecklist).set({ childTaskId: child.id }).where(eq(schema.pipelineChecklist.id, it.id));
     if (child.assigneeId && child.assigneeId !== a.user.id) await notify([child.assigneeId], { type: "pipeline.assigned", data: { by: a.user.name, title: child.title, taskId: child.id }, link: `/pipeline?task=${child.id}` });
@@ -1024,6 +1126,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
   .post("/tasks/:id/time", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
     const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    await noTimerOnTodo(t);
     const p = await body(c, zTodoTime);
     return c.json(await todoTime(a.user.id, t, p), 201);
   })
@@ -1045,6 +1148,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
   .post("/tasks/:id/timer/start", requirePermission("pipeline.edit"), async (c) => {
     const a = auth(c);
     const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    await noTimerOnTodo(t);
     if (t.status === "done") throw new HTTPException(409, { message: "task_done" });
     await db().insert(schema.pipelineTaskTimers).values({ taskId: t.id, userId: a.user.id }).onConflictDoNothing();
     const [timer] = await db().select().from(schema.pipelineTaskTimers).where(and(eq(schema.pipelineTaskTimers.taskId, t.id), eq(schema.pipelineTaskTimers.userId, a.user.id)));

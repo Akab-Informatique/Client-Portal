@@ -12,6 +12,14 @@ export type Visibility = "team" | "private" | "selected";
 export type TaskCard = {
   id: string;
   title: string;
+  /** The list it is on: a shared one, or its owner's personal one */
+  listId: string | null;
+  listName: string | null;
+  listShared: boolean;
+  /** The owner's name when it is somebody else's personal list */
+  listOwner: string | null;
+  /** A to-do: private to its owner (no list, or a personal list); no timer */
+  todo: boolean;
   status: TaskStatus;
   priority: TaskPriority;
   assigneeId: string | null;
@@ -133,6 +141,13 @@ export type DayItem = {
   statusKind?: string;
   statusLabel?: string | null;
   companyName?: string;
+  /** A to-do task in the Tasks section: its list, due day and status */
+  listName?: string | null;
+  listShared?: boolean;
+  listOwner?: string | null;
+  dueDay?: string | null;
+  taskStatus?: TaskStatus;
+  assigneeName?: string | null;
 };
 
 export type DayData = {

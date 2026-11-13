@@ -165,6 +165,21 @@ export const MODULES = [
     ],
   },
   {
+    key: "assistant",
+    audience: "staff",
+    label: { fr: "Assistant du portail", en: "Portal assistant" },
+    permissions: [
+      {
+        key: "assistant.use",
+        label: { fr: "Poser des questions à l'assistant du portail", en: "Ask the portal assistant questions" },
+        description: {
+          fr: "Savoir comment faire une chose dans le portail et ce qu'il reste à faire pour soi ; il ne répond qu'avec ce que la personne peut voir (son texte est envoyé au fournisseur d'IA)",
+          en: "Learn how to do something in the portal and what is left to do for oneself; it answers only with what the person can see (its text is sent to the AI provider)",
+        },
+      },
+    ],
+  },
+  {
     key: "sops",
     audience: "staff",
     label: { fr: "Procédures (SOP)", en: "Procedures (SOP)" },
@@ -182,6 +197,15 @@ export const MODULES = [
       { key: "kb.view", label: { fr: "Lire la base de connaissances", en: "Read the knowledge base" }, description: { fr: "Lire les articles publiés par l'équipe", en: "Read the articles the team published" } },
       { key: "kb.edit", label: { fr: "Écrire des articles", en: "Write articles" }, description: { fr: "Créer, modifier et publier ses propres articles", en: "Create, edit and publish one's own articles" } },
       { key: "kb.manage", label: { fr: "Gérer tous les articles", en: "Manage every article" }, description: { fr: "Voir les brouillons des autres, modifier et supprimer les articles des autres", en: "See other people's drafts, edit and delete other people's articles" } },
+    ],
+  },
+  {
+    key: "reports",
+    audience: "staff",
+    label: { fr: "Rapports", en: "Reports" },
+    permissions: [
+      { key: "reports.view", label: { fr: "Voir les rapports", en: "See reports" }, description: { fr: "Lire les rapports, leur historique et la liste de ce qui est planifié", en: "Read the reports, their history and the list of what is scheduled" } },
+      { key: "reports.manage", label: { fr: "Gérer les rapports et leurs envois", en: "Manage reports and their deliveries" }, description: { fr: "Créer, modifier et supprimer des rapports et leurs planifications, lancer un rapport maintenant, l'envoyer par courriel, texto ou Teams", en: "Create, edit and delete reports and their schedules, run a report now, send it by email, text or Teams" } },
     ],
   },
   {
@@ -677,9 +701,9 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom", "tv"] },
-  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb"] },
+  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb", "assistant"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "sms", "passbolt"] },
-  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "newsletter", "hr"] },
+  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "newsletter", "reports", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
@@ -755,6 +779,7 @@ export const SYSTEM_ROLES: Array<{
       "tickets.edit",
       "tickets.selfManaged",
       "tickets.planSelf",
+      "assistant.use",
       "crm.view",
       "timesheets.use",
       "pipeline.view",

@@ -22,6 +22,7 @@ import { vendorRoutes } from "./routes/vendors.ts";
 import { apiKeyRoutes } from "./routes/apiKeys.ts";
 import { openApiRoutes } from "./routes/openapi.ts";
 import { newsletterRoutes } from "./routes/newsletter.ts";
+import { reportRoutes } from "./routes/reports.ts";
 import { passboltRoutes } from "./routes/passbolt.ts";
 import { serviceRoutes } from "./routes/services.ts";
 import { itcloudRoutes } from "./routes/itcloud.ts";
@@ -50,6 +51,7 @@ import { kbRoutes } from "./routes/kb.ts";
 import { searchRoutes } from "./routes/search.ts";
 import { dattoAdminRoutes, rmmDeviceRoutes } from "./routes/rmmDatto.ts";
 import { projectsRoutes } from "./routes/projects.ts";
+import { myNotesRoutes } from "./routes/myNotes.ts";
 import { planningRoutes } from "./routes/planning.ts";
 import { smsHookRoutes, smsRoutes } from "./routes/sms.ts";
 import { outlookRoutes } from "./routes/outlook.ts";
@@ -66,6 +68,7 @@ import { timeRoutes } from "./routes/time.ts";
 import { hrRoutes } from "./routes/hr.ts";
 import { chatRoutes } from "./routes/chat.ts";
 import { tvRoutes } from "./routes/tv.ts";
+import { assistantRoutes } from "./routes/assistant.ts";
 
 export function createApp() {
   const app = new Hono<AppEnv>();
@@ -141,6 +144,7 @@ export function createApp() {
   api.route("/admin/api-keys", apiKeyRoutes);
   api.route("/openapi.json", openApiRoutes);
   api.route("/newsletter", newsletterRoutes);
+  api.route("/reports", reportRoutes);
   api.route("/admin/itcloud", itcloudRoutes);
   api.route("/admin/rmm-datto", dattoAdminRoutes);
   api.route("/rmm", rmmDeviceRoutes);
@@ -160,6 +164,7 @@ export function createApp() {
   api.use("/search", requireStaff);
   api.route("/search", searchRoutes);
   api.route("/projects", projectsRoutes);
+  api.route("/my-notes", myNotesRoutes);
   api.route("/services", serviceRoutes);
   api.route("/passbolt", passboltRoutes);
   api.route("/planning", planningRoutes);
@@ -187,6 +192,7 @@ export function createApp() {
   api.route("/chat", chatRoutes);
   // Dashboard TV: the lobby screen's bots (public display and report links use secret keys; the rest needs tv.view / tv.manage)
   api.route("/tv", tvRoutes);
+  api.route("/assistant", assistantRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
   api.route("/portal", portalRoutes);

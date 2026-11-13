@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Minus, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
+import { ListTree, BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Minus, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -15,6 +15,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { hm as hmHours, parseHm } from "@shared/duration";
 import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBase64, hm, todayYmd, type Person, type Recurrence, type TaskCard, type TaskFull, type TaskKind, type TaskPriority, type Visibility } from "./shared";
+import { ListSelect, rememberList, rememberedList, useTaskLists } from "./lists";
 import { FilesBox, RecurrenceEditor, TagsEditor, VisibilityEditor } from "./TaskParts";
 import { newStep, TaskSteps, type Step } from "./TaskSteps";
 import { TaskNotify } from "./TaskNotify";
@@ -44,6 +45,8 @@ const scheduleOf = (kind: TaskKind, recurrence: Recurrence | null): Schedule => 
 
 /** The values that are the same whether the task is new (kept in the form) or open (saved as changed) */
 type Values = {
+  /** The list the task is on ("" = the usual one, chosen by the server) */
+  listId: string;
   kind: TaskKind;
   recurrence: Recurrence | null;
   remindEveryDays: number | null;
@@ -85,7 +88,7 @@ function Heading({ icon: Icon, children, extra }: { icon: typeof Clock3; childre
  * inside this one window), the files and the team's notes. Right: how it is planned (simple, recurring or
  * continuous), who has it, who sees it. Open, everything saves as it is changed; with no id it is the form of a new task.
  */
-export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: string | null; defaults?: { assigneeId?: string | null; dueDate?: string | null; parentId?: string | null }; onClose: () => void; onOpenTask?: (id: string) => void }) {
+export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: string | null; defaults?: { assigneeId?: string | null; dueDate?: string | null; parentId?: string | null; listId?: string | null; /** a new task of the shared lists (default) or a private to-do */ space?: "tasks" | "todo" }; onClose: () => void; onOpenTask?: (id: string) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const me = useMe();
@@ -128,7 +131,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   const [pickItem, setPickItem] = useState<string | null>(null);
   // closing with a timer running asks what to do with the time
   const [closing, setClosing] = useState(false);
-  const timerQ = useQuery({ queryKey: ["pipeline", "task", taskId, "timer"], queryFn: () => api.get<{ seconds: number } | null>(`/pipeline/tasks/${taskId}/timer`), enabled: Boolean(taskId) && editable && can("timesheets.use") });
+  const timerQ = useQuery({ queryKey: ["pipeline", "task", taskId, "timer"], queryFn: () => api.get<{ seconds: number } | null>(`/pipeline/tasks/${taskId}/timer`), enabled: Boolean(taskId) && editable && can("timesheets.use") && !task?.todo });
   useEffect(() => {
     if (taskId) todoDock.remove(taskId);
   }, [taskId]);
@@ -142,15 +145,26 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task: its values and steps stay here until "Create" ──
-  const [f, setF] = useState<Values & { waitsOn: string }>({ kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
+  const lists = useTaskLists();
+  const [f, setF] = useState<Values & { waitsOn: string }>({ listId: defaults?.listId ?? "", kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
   const [newSteps, setNewSteps] = useState<Step[]>([]);
   const [staged, setStaged] = useState<File[]>([]);
   const [counter, setCounter] = useState(0);
 
+  // a to-do is private: no timer, not assigned to anyone else, on no list or one of the person's own
+  const isTodo = task ? task.todo : defaults?.space === "todo";
   const v: Values = task
-    ? { kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, assigneeIds: task.assignees.map((x) => x.id), priority: task.priority }
+    ? { listId: task.listId ?? "", kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, assigneeIds: task.assignees.map((x) => x.id), priority: task.priority }
     : f;
-  const set = (p: Partial<Values>) => (isNew ? setF((old) => ({ ...old, ...p })) : patch.mutate(p));
+  // (an open task moved to "no list" sends null: it becomes a to-do on its own)
+  const set = (p: Partial<Values>) => (isNew ? setF((old) => ({ ...old, ...p })) : patch.mutate(p.listId === "" ? ({ ...p, listId: null } as never) : p));
+  // the list a new task starts on: the one last used (or the team's); a personal list makes it private, a shared one the team's
+  const listNow = lists.data?.find((l) => l.id === (v.listId || (isTodo ? "" : rememberedList(lists.data))));
+  const pickList = (id: string) => {
+    if (!isTodo || !isNew) rememberList(id);
+    if (isNew) setF((old) => ({ ...old, listId: id }));
+    else set({ listId: id });
+  };
   const schedule = scheduleOf(v.kind, v.recurrence);
   const setSchedule = (s: Schedule) => {
     if (s === schedule) return;
@@ -194,9 +208,11 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
     mutationFn: () =>
       api.post<TaskCard>("/pipeline/tasks", {
         title,
+        space: isTodo ? "todo" : "tasks",
+        listId: (isTodo ? f.listId : f.listId || rememberedList(lists.data)) || undefined,
         notes,
         priority: f.priority,
-        assigneeIds: f.assigneeIds,
+        assigneeIds: isTodo ? [] : f.assigneeIds,
         dueDate: f.kind !== "normal" ? null : f.dueDate,
         kind: f.kind,
         remindEveryDays: f.kind === "continuous" ? f.remindEveryDays : null,
@@ -424,10 +440,19 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         )}
       </div>
 
-      {/* who */}
+      {/* the list: every task is on one, shared with the team or personal */}
+      <Field label={t("pipeline.lists.label")} icon={ListTree}>
+        <ListSelect value={v.listId || (isTodo ? "" : rememberedList(lists.data))} onChange={pickList} lists={lists.data} space={isNew ? (isTodo ? "todo" : "tasks") : undefined} all={isNew && !isTodo ? undefined : t("pipeline.lists.noList")} disabled={locked} className="w-full" />
+        <span className="block text-[11px] text-muted-foreground">{listNow ? t(listNow.shared ? (listNow.everyone ? "pipeline.lists.sharedHint" : "pipeline.lists.chosenHint") : "pipeline.lists.personalHint") : t("pipeline.lists.noListHint")}</span>
+      </Field>
+
+      {/* who (a to-do is the person's own: nobody else sees it, nobody else has it) */}
+      {!isTodo && (
       <Field label={t("pipeline.assignee")} icon={UserRound}>
         <PeoplePick value={v.assigneeIds} people={people.data ?? []} disabled={locked} onChange={(assigneeIds) => set({ assigneeIds })} />
       </Field>
+      )}
+      {!isTodo && (
       <div className="space-y-1">
         <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           <Eye className="size-3" /> {t("pipeline.whoSees")}
@@ -441,6 +466,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
           onChange={(visibility, viewerIds) => set({ visibility, viewerIds })}
         />
       </div>
+      )}
 
       <Field label={t("pipeline.priority.label")}>
         <div className="flex gap-1">

@@ -13,6 +13,7 @@ export const pageLoaders = {
   store: () => import("@/pages/store/StorePage"),
   services: () => import("@/pages/services/ServicesPage"),
   newsletter: () => import("@/pages/newsletter/NewsletterPage"),
+  reports: () => import("@/pages/reports/ReportsPage"),
   hr: () => import("@/pages/hr/HrPage"),
   chat: () => import("@/pages/chat/ChatPage"),
   sops: () => import("@/pages/sops/SopsPage"),

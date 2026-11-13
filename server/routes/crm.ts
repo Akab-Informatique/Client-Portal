@@ -25,8 +25,8 @@ import { DraftError, recalcInvoiceTaxes, renumberInvoice, taxesByLine } from "..
 import { applyToLines, contractsIn, runningLinesOf } from "../lib/servicePrices.ts";
 import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
 import { applyAutoApprove } from "../lib/billables.ts";
-import { BILLING_MODES, KIND_MODE, adjustmentsOf, usageByCompanyOf, bankRowsOf, banksOf, contractTypes, usedByMonthOf, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
-import { BANK_ROLLOVERS, bankBundle } from "../../shared/bank.ts";
+import { BILLING_MODES, KIND_MODE, adjustmentsOf, usageByCompanyOf, bankRowsOf, banksOf, topupHoursOf, contractTypes, usedByMonthOf, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
+import { BANK_ROLLOVERS, bankBundle, withTopupCharges } from "../../shared/bank.ts";
 import { bpsOfPercent, combineBps, netCents } from "../../shared/rebate.ts";
 import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
 import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
@@ -135,9 +135,11 @@ async function deleteCheck(client: { id: string; autotaskId: number | null }) {
 type ServiceRow = typeof schema.contractServices.$inferSelect;
 const chargeLines = (rows: ServiceRow[]): ChargeLine[] => rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: r.priceCents, quantity: r.quantity, addedOn: r.addedOn, rebateBps: r.rebateBps }));
 /** What a contract charges (per full period, over its term) and what comes next, from its services */
-function summaryOf(k: ContractRow, rows: ServiceRow[], today: string) {
+function summaryOf(k: ContractRow, rows: ServiceRow[], today: string, topup?: Map<string, number>) {
   const period = k.billingPeriod === "yearly" ? "yearly" : "monthly";
-  const ch = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, chargeLines(rows)));
+  let ch = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, chargeLines(rows)));
+  // an hours bank that tops up only buys what the month before left unused
+  if (topup && k.bankRateCents != null) ch = withTopupCharges(ch, topup, netCents(k.bankRateCents, k.rebateBps));
   const on = chargesOn(ch, today, k.billedThrough);
   return {
     billedThrough: k.billedThrough ?? null,
@@ -987,7 +989,8 @@ export const crmRoutes = new Hono<AppEnv>()
     const bankMonths = bank ? bankRowsOf(k, (await usedByMonthOf([k])).get(k.id), today, (await adjustmentsOf([k.id])).get(k.id)) : [];
     const usual = Math.round((await billingSettings()).rates.hourly * 100);
     const bankUsage = bank ? ((await usageByCompanyOf([k])).get(k.id) ?? []) : [];
-    return c.json({ ...k, bank, bankMonths, bankUsage, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today), charged: await contractCharged(k.id, today) });
+    const topup = (await topupHoursOf([k])).get(k.id);
+    return c.json({ ...k, bank, bankMonths, bankUsage, topupHours: topup ? Object.fromEntries(topup) : null, usedHours: used.get(k.id) ?? 0, usualRateCents: usual, services: rows.map((r) => serviceLine(r, k)), summary: summaryOf(k, rows, today, topup), charged: await contractCharged(k.id, today) });
   })
   /** What happened on a contract: added, changed, removed, stopped (newest first) */
   .get("/clients/:id/contracts/:kid/activity", async (c) => {
@@ -1040,9 +1043,10 @@ export const crmRoutes = new Hono<AppEnv>()
     const allLines = rows.length ? await db().select().from(schema.contractServices).where(inArray(schema.contractServices.contractId, rows.map((k) => k.id))) : [];
     const today = todayQc();
     const banks = await banksOf(rows);
+    const topups = await topupHoursOf(rows);
     return c.json(
       rows
-        .map((k) => ({ ...k, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today) }))
+        .map((k) => ({ ...k, bank: banks.get(k.id) ?? null, isSupportDefault: chosen?.id === k.id, usualRateCents: usual, usedHours: used.get(k.id) ?? 0, serviceCount: allLines.filter((l) => l.contractId === k.id).length, summary: summaryOf(k, allLines.filter((l) => l.contractId === k.id), today, topups.get(k.id)) }))
         .sort((x, y) => Number(y.active) - Number(x.active) || Number(y.isSupportDefault) - Number(x.isSupportDefault) || x.name.localeCompare(y.name)),
     );
   })
@@ -1122,6 +1126,7 @@ export const crmRoutes = new Hono<AppEnv>()
     const names = new Map(clients.map((x) => [x.id, x.name]));
     const today = todayQc();
     const banks = await banksOf(rows);
+    const topups = await topupHoursOf(rows);
     // automatic card payment: active wins over a link waiting for the client
     const autopay = new Map<string, string>();
     for (const a of await d.select({ contractId: schema.contractAutopay.contractId, status: schema.contractAutopay.status }).from(schema.contractAutopay).where(ne(schema.contractAutopay.status, "revoked"))) {
@@ -1146,7 +1151,7 @@ export const crmRoutes = new Hono<AppEnv>()
           serviceCount: lines.length,
           bank: banks.get(k.id) ?? null,
           autopay: autopay.get(k.id) ?? null,
-          summary: summaryOf(k, lines, today),
+          summary: summaryOf(k, lines, today, topups.get(k.id)),
         };
       }),
     );

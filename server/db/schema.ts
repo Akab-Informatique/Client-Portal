@@ -2373,10 +2373,39 @@ export const meetingWeekBriefs = pgTable("meeting_week_briefs", {
 
 // ── Pipeline: the team's to-do list and each technician's day ──
 /** A to-do: shared by the team, assigned to someone (or nobody), with a checklist, notes, a parent and a task it waits for. */
+/** A list of to-do tasks: shared (the whole team sees it) or personal (its owner only). Every task is on one. */
+export const pipelineLists = pgTable("pipeline_lists", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  shared: boolean("shared").notNull().default(true),
+  /** A shared list: everyone who sees Opérations (true), or only the people in pipeline_list_members (and its owner) */
+  everyone: boolean("everyone").notNull().default(true),
+  /** The person a personal list belongs to (the maker of a shared one) */
+  ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+  position: integer("position").notNull().default(0),
+  createdAt: created(),
+});
+
+/** The people a shared list is shared with when it is not for everyone */
+export const pipelineListMembers = pgTable(
+  "pipeline_list_members",
+  {
+    listId: uuid("list_id")
+      .notNull()
+      .references(() => pipelineLists.id, { onDelete: "cascade" }),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+  },
+  (t) => [primaryKey({ columns: [t.listId, t.userId] })],
+);
+
 export const pipelineTasks = pgTable(
   "pipeline_tasks",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** The list the task is on (a shared one, or its owner's personal one) */
+    listId: uuid("list_id").references(() => pipelineLists.id, { onDelete: "restrict" }),
     title: text("title").notNull(),
     /** Instructions / notes written on the task */
     notes: text("notes").notNull().default(""),
@@ -3585,4 +3614,92 @@ export const clientUserGrants = pgTable(
     createdAt: created(),
   },
   (t) => [primaryKey({ columns: [t.userId, t.clientId] })],
+);
+
+/** Reports: the built-in ones (key set, made at startup) and the custom ones (name, sources, period). */
+export type ReportConfig = { sources?: string[]; period?: 7 | 30 | 90; aiSummary?: boolean };
+export const reportDefinitions = pgTable(
+  "report_definitions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key"),
+    kind: text("kind", { enum: ["builtin", "custom"] }).notNull(),
+    name: text("name").notNull(),
+    description: text("description").notNull().default(""),
+    config: jsonb("config").$type<ReportConfig>().notNull().default({}),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [uniqueIndex("report_definitions_key_unique").on(t.key)],
+);
+
+/** Channels a scheduled run is sent to (each optional). */
+export type ReportChannels = { email: string[]; sms: string[]; teams: boolean };
+export const reportSchedules = pgTable(
+  "report_schedules",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => reportDefinitions.id, { onDelete: "cascade" }),
+    frequency: text("frequency", { enum: ["daily", "weekly", "monthly"] }).notNull(),
+    /** HH:MM, Québec time */
+    time: text("time").notNull(),
+    /** 0 (Sunday) to 6, for a weekly schedule */
+    weekday: integer("weekday"),
+    /** 1 to 28, for a monthly schedule */
+    dayOfMonth: integer("day_of_month"),
+    enabled: boolean("enabled").notNull().default(true),
+    channels: jsonb("channels").$type<ReportChannels>().notNull().default({ email: [], sms: [], teams: false }),
+    lastRunAt: timestamp("last_run_at", { withTimezone: true }),
+    nextRunAt: timestamp("next_run_at", { withTimezone: true }),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("report_schedules_next_idx").on(t.enabled, t.nextRunAt)],
+);
+
+/** One run of a report: its markdown, the small data behind it, and what each delivery channel answered. */
+export const reportRuns = pgTable(
+  "report_runs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    reportId: uuid("report_id")
+      .notNull()
+      .references(() => reportDefinitions.id, { onDelete: "cascade" }),
+    scheduleId: uuid("schedule_id").references(() => reportSchedules.id, { onDelete: "set null" }),
+    trigger: text("trigger", { enum: ["manual", "schedule"] }).notNull(),
+    status: text("status", { enum: ["running", "ok", "failed"] }).notNull(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    summary: text("summary").notNull().default(""),
+    body: text("body").notNull().default(""),
+    data: jsonb("data"),
+    error: text("error"),
+    delivered: jsonb("delivered"),
+    startedBy: uuid("started_by").references(() => users.id, { onDelete: "set null" }),
+  },
+  (t) => [index("report_runs_report_idx").on(t.reportId, t.startedAt)],
+);
+
+/** A staff member's private notes and quick reminders (only its owner ever reads or changes them); a reminder rings the bell once at its time */
+export const personalNotes = pgTable(
+  "personal_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["note", "reminder"] }).notNull().default("note"),
+    title: text("title").notNull().default(""),
+    body: text("body").notNull().default(""),
+    remindAt: timestamp("remind_at", { withTimezone: true }),
+    notifiedAt: timestamp("notified_at", { withTimezone: true }),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    createdAt: created(),
+    updatedAt: updated(),
+  },
+  (t) => [index("personal_notes_user_idx").on(t.userId, t.kind)],
 );

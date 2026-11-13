@@ -41,7 +41,7 @@ export function TodoDock() {
   if (!slot || items.length === 0) return null;
   const open = (id: string) => {
     todoDock.remove(id);
-    navigate(`/pipeline?section=todo&task=${id}`);
+    navigate(`/pipeline?section=tasks&task=${id}`);
   };
   return createPortal(
     <AnimatePresence>

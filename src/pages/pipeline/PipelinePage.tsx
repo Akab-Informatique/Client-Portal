@@ -1,10 +1,8 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router-dom";
-import { CalendarCheck, FolderKanban, ListTodo, Loader2, Plus, Settings2, Ticket, Workflow } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { CalendarCheck, FolderKanban, ListChecks, Loader2, Ticket, Workflow } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
-import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { MyDay } from "./MyDay";
 import { TaskDialog } from "./TaskDialog";
@@ -14,8 +12,8 @@ import { TeamList } from "./TeamList";
 const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage").then((m) => ({ default: m.TicketsPage })));
 const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage").then((m) => ({ default: m.ProjectsPage })));
 
-type Tab = "day" | "tickets" | "projects" | "todo";
-const TABS: Tab[] = ["day", "tickets", "projects", "todo"];
+type Tab = "day" | "tickets" | "projects" | "tasks";
+const TABS: Tab[] = ["day", "tickets", "projects", "tasks"];
 
 /**
  * Mon travail (was "Pipeline"): everything a technician works on, in one place. "Ma journée" is the dashboard (the AI's
@@ -25,10 +23,10 @@ const TABS: Tab[] = ["day", "tickets", "projects", "todo"];
  */
 export function PipelinePage() {
   const { t } = useTranslation();
-  const can = useCan();
   const [params, setParams] = useSearchParams();
   // (`?tab=team` was the old link to the team list)
-  const asked = params.get("section") ?? (params.get("tab") === "team" ? "todo" : null);
+  // (`?tab=team` and the old `?section=todo` were the team's list: it is now the Tasks tab)
+  const asked = params.get("section") ?? (params.get("tab") === "team" ? "tasks" : null);
   const tab: Tab = TABS.includes(asked as Tab) ? (asked as Tab) : "day";
   // switching tab starts the new tab's own filters from scratch (Tickets and Projects keep theirs in the address)
   const setTab = (k: Tab) => setParams(k === "day" ? {} : { section: k });
@@ -53,18 +51,6 @@ export function PipelinePage() {
           </h1>
           <p className="text-sm text-muted-foreground">{t("pipeline.subtitle")}</p>
         </div>
-        <div className="flex items-center gap-2">
-          {can("pipeline.manage") && (
-            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => setParams((p) => (p.set("admin", "pipeline"), p))}>
-              <Settings2 className="size-4" /> {t("pipeline.settings.button")}
-            </Button>
-          )}
-          {can("pipeline.edit") && tab === "todo" && (
-            <Button size="sm" className="h-9 bg-grad-gold font-semibold text-[#1a1204] glow-gold hover:brightness-105" onClick={() => setOpen("new")}>
-              <Plus className="size-4" /> {t("pipeline.newTask")}
-            </Button>
-          )}
-        </div>
       </div>
 
       <div className="flex w-fit items-center gap-0.5 rounded-xl border bg-background/40 p-0.5">
@@ -73,7 +59,7 @@ export function PipelinePage() {
             ["day", CalendarCheck, t("pipeline.tabs.day")],
             ["tickets", Ticket, t("pipeline.tabs.tickets")],
             ["projects", FolderKanban, t("pipeline.tabs.projects")],
-            ["todo", ListTodo, t("pipeline.tabs.todo")],
+            ["tasks", ListChecks, t("pipeline.tabs.tasks")],
           ] as const
         ).map(([k, Icon, label]) => (
           <button key={k} type="button" onClick={() => setTab(k)} className={cn("flex items-center gap-1.5 rounded-lg px-4 py-1.5 text-sm font-medium transition-colors", tab === k ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
@@ -83,7 +69,7 @@ export function PipelinePage() {
       </div>
 
       {tab === "day" && <MyDay onOpenTask={(id) => setOpen(id)} />}
-      {tab === "todo" && <TeamList onOpenTask={(id) => setOpen(id)} />}
+      {tab === "tasks" && <TeamList onOpenTask={(id) => setOpen(id)} />}
       {(tab === "tickets" || tab === "projects") && (
         <Suspense fallback={<Loader2 className="mx-auto mt-12 size-6 animate-spin text-muted-foreground" />}>{tab === "tickets" ? <TicketsPage /> : <ProjectsPage />}</Suspense>
       )}

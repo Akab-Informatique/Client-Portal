@@ -255,9 +255,9 @@ export async function usageByCompanyOf(contracts: { id: string; autotaskId: stri
 type BankRow = { rebateBps?: number; id: string; autotaskId: string | null; billingMode: string; bankedHoursX100: number | null; bankRateCents: number | null; bankRollover: string; startDate: string | null; endDate: string | null; endedOn: string | null };
 const todayQuebec = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 /** The month-by-month bank of one contract (empty when it is not an hours bank) */
-export function bankRowsOf(k: BankRow, used: Map<string, number> | undefined, today = todayQuebec(), adjust?: Map<string, number>): BankMonth[] {
+export function bankRowsOf(k: BankRow, used: Map<string, number> | undefined, today = todayQuebec(), adjust?: Map<string, number>, project = false): BankMonth[] {
   if (modeOf(k.billingMode) !== "banked" || !k.bankedHoursX100) return [];
-  return bankMonths({ hours: k.bankedHoursX100 / 100, rollover: bankRollover(k.bankRollover), start: k.startDate, end: k.endDate, endedOn: k.endedOn, today, used: used ?? new Map(), adjust });
+  return bankMonths({ hours: k.bankedHoursX100 / 100, rollover: bankRollover(k.bankRollover), start: k.startDate, end: k.endDate, endedOn: k.endedOn, today, used: used ?? new Map(), adjust, project });
 }
 /** Hours put on or taken off each hours bank by hand, month by month (YYYY-MM). Keyed by the contract's id. */
 export async function adjustmentsOf(contractIds: string[]): Promise<Map<string, Map<string, number>>> {
@@ -301,4 +301,15 @@ export async function setTicketContract(ticketId: number, contractId: string | n
     .insert(schema.ticketMeta)
     .values({ ticketId, contractId, updatedBy: userId })
     .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { contractId, updatedBy: userId, updatedAt: new Date() } });
+}
+
+/** For hours banks that top up: the hours each month will buy (this month and the next ones, foreseen with no more work), by contract id */
+export async function topupHoursOf(contracts: BankRow[], today = todayQuebec()): Promise<Map<string, Map<string, number>>> {
+  const out = new Map<string, Map<string, number>>();
+  const mine = contracts.filter((k) => modeOf(k.billingMode) === "banked" && k.bankedHoursX100 && bankRollover(k.bankRollover) === "topup");
+  if (!mine.length) return out;
+  const used = await usedByMonthOf(mine);
+  const adjust = await adjustmentsOf(mine.map((k) => k.id));
+  for (const k of mine) out.set(k.id, new Map(bankRowsOf(k, used.get(k.id), today, adjust.get(k.id), true).map((r) => [r.month, r.charge])));
+  return out;
 }

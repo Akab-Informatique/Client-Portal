@@ -91,7 +91,7 @@ const zPlan = z.object({
   overview: z.string().max(2000).default(""),
   items: z.array(z.object({ id: z.number(), order: z.number(), reason: z.string().max(400).default("") })).max(100),
 });
-function aiHttpError(e: unknown) {
+export function aiHttpError(e: unknown) {
   if (e instanceof AiError) {
     const status = e.code === "not_configured" || e.code === "disabled" || e.code === "billing" ? 409 : e.code === "rate_limit" || e.code === "daily_limit" ? 429 : 502;
     console.warn("[ai]", e.message);

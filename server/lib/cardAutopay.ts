@@ -8,6 +8,8 @@ import { notify, usersWith } from "./notify.ts";
 import { balanceOf, stripeCall, StripeError } from "./stripe.ts";
 import { combineBps, netCents } from "../../shared/rebate.ts";
 import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
+import { withTopupCharges } from "../../shared/bank.ts";
+import { topupHoursOf } from "./contracts.ts";
 
 /**
  * A client contract paid automatically by card (Clients › contract › Paiement automatique):
@@ -147,7 +149,10 @@ export async function contractTerms(k: typeof schema.clientContracts.$inferSelec
   const bundle = k.bundlePriceCents != null ? { quantity: k.bundleQuantity ?? 1, unitCents: netCents(k.bundlePriceCents, k.rebateBps) } : null;
   const period: "monthly" | "yearly" = k.billingPeriod === "yearly" ? "yearly" : "monthly";
   const services: ChargeLine[] = rows.map((l) => ({ id: l.id, name: l.name, kind: l.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: l.rebateBps }));
-  const ch = k.startDate && k.endDate ? contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services)) : null;
+  let ch = k.startDate && k.endDate ? contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services)) : null;
+  // an hours bank that tops up only buys what the month before left unused
+  const topup = (await topupHoursOf([k])).get(k.id);
+  if (ch && topup && k.bankRateCents != null) ch = withTopupCharges(ch, topup, netCents(k.bankRateCents, k.rebateBps));
   const next = ch ? chargesOn(ch, today(), k.billedThrough).next : null;
   return {
     id: k.id,

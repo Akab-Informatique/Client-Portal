@@ -12691,3 +12691,343 @@ describe("delegated technician: team, noted time, checklist, merge", () => {
     for (const act of ["delegate.checklist", "delegate.tags", "delegate.delegate_set", "delegate.merged", "ticket.delegate_visibility"]) expect(actions).toContain(act);
   });
 });
+
+describe("task lists (shared, with a timer) and private to-dos", () => {
+  it("shares a list with everyone or chosen people, keeps to-dos private and without a timer", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [u2] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    const [boss] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    // a task with no list goes on the team list (everyone)
+    const plain = await tech.post("/api/pipeline/tasks", { title: "Sans liste" });
+    expect(plain.json.listShared).toBe(true);
+    expect(plain.json.todo).toBe(false);
+    // a shared list for everyone
+    const team = await tech.post("/api/pipeline/lists", { name: "Projet interne", shared: true });
+    expect(team.status).toBe(201);
+    expect(team.json.everyone).toBe(true);
+    expect((await tech.post("/api/pipeline/lists", { name: "projet INTERNE", shared: true })).json.error).toBe("list_exists");
+    // a shared list for chosen people: the other technician is not in it
+    const closed = await tech.post("/api/pipeline/lists", { name: "Direction", shared: true, everyone: false, memberIds: [boss.id] });
+    expect(closed.json.everyone).toBe(false);
+    const secret = await tech.post("/api/pipeline/tasks", { title: "Budget", listId: closed.json.id });
+    expect(secret.json.visibility).toBe("private");
+    expect((await tech2.get("/api/pipeline/lists")).json.some((l: any) => l.id === closed.json.id)).toBe(false);
+    expect((await tech2.get(`/api/pipeline/tasks/${secret.json.id}`)).status).toBe(404);
+    expect((await tech2.post("/api/pipeline/tasks", { title: "Intrus", listId: closed.json.id })).json.error).toBe("list_invalid");
+    const admin = await signIn("admin@akab.local");
+    expect((await admin.get(`/api/pipeline/tasks/${secret.json.id}`)).status).toBe(200);
+    // shared with the second technician too: now he sees it
+    expect((await tech.patch(`/api/pipeline/lists/${closed.json.id}`, { memberIds: [boss.id, u2.id] })).status).toBe(200);
+    expect((await tech2.get(`/api/pipeline/tasks/${secret.json.id}`)).status).toBe(200);
+    // tasks on a shared list can be assigned and have a timer
+    const shared = await tech.post("/api/pipeline/tasks", { title: "Pour l'autre", listId: team.json.id, assigneeId: u2.id });
+    expect(shared.json.todo).toBe(false);
+    expect((await tech2.post(`/api/pipeline/tasks/${shared.json.id}/timer/start`, {})).status).toBe(200);
+    // the to-do space: on its own or on a personal list, private, never assigned to another, no timer
+    const perso = await tech.post("/api/pipeline/lists", { name: "Mes affaires", shared: false });
+    expect(perso.json.everyone).toBe(false);
+    const todo = await tech.post("/api/pipeline/tasks", { title: "Appeler le garage", space: "todo", assigneeId: u2.id });
+    expect(todo.status).toBe(201);
+    expect(todo.json.todo).toBe(true);
+    expect(todo.json.listId).toBeNull();
+    expect(todo.json.assignees.map((x: any) => x.id)).not.toContain(u2.id);
+    const inList = await tech.post("/api/pipeline/tasks", { title: "Idée", space: "todo", listId: perso.json.id });
+    expect(inList.json.todo).toBe(true);
+    expect((await tech2.get(`/api/pipeline/tasks/${inList.json.id}`)).status).toBe(404);
+    expect((await tech.post(`/api/pipeline/tasks/${todo.json.id}/timer/start`, {})).json.error).toBe("todo_no_timer");
+    expect((await tech.post(`/api/pipeline/tasks/${todo.json.id}/time`, { date: new Date().toISOString().slice(0, 10), hours: 1, itemIds: [], doneItemIds: [] })).json.error).toBe("todo_no_timer");
+    // a to-do cannot go on a shared list that is not his, nor a task on a personal list
+    expect((await tech.post("/api/pipeline/tasks", { title: "X", space: "todo", listId: team.json.id })).json.error).toBe("list_invalid");
+    expect((await tech.post("/api/pipeline/tasks", { title: "Y", listId: perso.json.id })).json.error).toBe("list_invalid");
+    // the two spaces are listed apart
+    const tasks = (await tech.get("/api/pipeline/tasks?status=open&space=tasks")).json.map((x: any) => x.id);
+    const todos = (await tech.get("/api/pipeline/tasks?status=open&space=todo")).json.map((x: any) => x.id);
+    expect(tasks).toContain(shared.json.id);
+    expect(tasks).not.toContain(todo.json.id);
+    expect(todos).toEqual(expect.arrayContaining([todo.json.id, inList.json.id]));
+    expect(todos).not.toContain(shared.json.id);
+    // a to-do turned into a task of a shared list (and back) follows the space
+    const up = await tech.patch(`/api/pipeline/tasks/${todo.json.id}`, { listId: team.json.id });
+    expect(up.json.todo).toBe(false);
+    expect(up.json.visibility).toBe("team");
+    const down = await tech.patch(`/api/pipeline/tasks/${todo.json.id}`, { listId: null });
+    expect(down.json.todo).toBe(true);
+    expect(down.json.visibility).toBe("private");
+    // a list with tasks cannot be deleted; an empty one can
+    expect((await tech.del(`/api/pipeline/lists/${team.json.id}`)).json.error).toBe("list_not_empty");
+    expect((await tech.del(`/api/pipeline/lists/${perso.json.id}`)).json.error).toBe("list_not_empty");
+  });
+});
+
+describe("reports: sources, runs, schedules, delivery, portal usage", () => {
+  it("the Québec schedule arithmetic: a weekly Monday 07:00 in November is 12:00 UTC (EST)", async () => {
+    const { nextRunAfter, quebecInstant } = await import("../server/lib/reports.ts");
+    expect(nextRunAfter({ frequency: "weekly", time: "07:00", weekday: 1 }, new Date("2026-11-12T12:00:00Z")).toISOString()).toBe("2026-11-16T12:00:00.000Z");
+    // in July Québec is on EDT (UTC-4)
+    expect(quebecInstant("2026-07-01", "06:00").toISOString()).toBe("2026-07-01T10:00:00.000Z");
+    // the first of the month, next after a run on the 1st at 06:00 (strictly later)
+    expect(nextRunAfter({ frequency: "monthly", time: "06:00", dayOfMonth: 1 }, new Date("2026-12-01T11:00:00Z")).toISOString()).toBe("2027-01-01T11:00:00.000Z");
+  });
+
+  it("a technician without reports.view gets 403 on every route; the administrator reads the built-in usage report", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get("/api/reports")).status).toBe(403);
+    expect((await tech.get("/api/reports/schedules")).status).toBe(403);
+    expect((await tech.get("/api/reports/runs")).status).toBe(403);
+    expect((await tech.post("/api/reports", { name: "x", sources: ["hours"], period: 7, aiSummary: false, description: "" })).status).toBe(403);
+    expect((await tech.post("/api/reports/00000000-0000-0000-0000-000000000000/run", {})).status).toBe(403);
+    const admin = await signIn("admin@akab.local");
+    const list = await admin.get("/api/reports");
+    expect(list.status).toBe(200);
+    const usage = list.json.reports.find((r: any) => r.key === "portal-usage");
+    expect(usage).toBeTruthy();
+    expect(usage.kind).toBe("builtin");
+    // the monthly schedule, on the 1st at 06:00, with no channels: nobody is notified
+    expect(usage.schedules).toHaveLength(1);
+    expect(usage.schedules[0]).toMatchObject({ frequency: "monthly", time: "06:00", dayOfMonth: 1, enabled: true, channels: { email: [], sms: [], teams: false } });
+    expect(usage.schedules[0].nextRunAt).toBeTruthy();
+    // built-in reports cannot be deleted or edited
+    expect((await admin.del(`/api/reports/${usage.id}`)).status).toBe(409);
+    expect((await admin.patch(`/api/reports/${usage.id}`, { name: "Autre" })).status).toBe(409);
+    // the run of it works on the demo database (no AI key: the reading is skipped, the tables stay)
+    const run = await admin.post(`/api/reports/${usage.id}/run`, {});
+    expect(run.status).toBe(200);
+    expect(run.json.run.status).toBe("ok");
+    expect(run.json.run.body).toContain("## Modules");
+    expect(run.json.run.body).toContain("Utilisation du portail");
+    expect(run.json.run.data.modules.length).toBeGreaterThan(10);
+    // making it again at startup changes nothing
+    const { ensureBuiltinReports } = await import("../server/lib/reports.ts");
+    await ensureBuiltinReports();
+    const again = (await admin.get("/api/reports")).json.reports.filter((r: any) => r.key === "portal-usage");
+    expect(again).toHaveLength(1);
+  });
+
+  it("creates a custom report, runs it, reads the run back, and refuses an unknown source", async () => {
+    const admin = await signIn("admin@akab.local");
+    const bad = await admin.post("/api/reports", { name: "Mauvais", description: "", sources: ["mot_de_passe"], period: 7, aiSummary: false });
+    expect(bad.status).not.toBe(201);
+    const made = await admin.post("/api/reports", { name: "Activité", description: "Test", sources: ["tickets_flow", "hours", "invoices", "tasks", "logins"], period: 30, aiSummary: false });
+    expect(made.status).toBe(201);
+    const id = made.json.id;
+    const run = await admin.post(`/api/reports/${id}/run`, {});
+    expect(run.json.run.status).toBe("ok");
+    expect(run.json.run.body).toContain("## Billets ouverts et fermés par semaine");
+    expect(run.json.run.body).toContain("## Heures saisies par semaine");
+    // hours only: no wage or amount paid to a person appears in the output
+    expect(run.json.run.body).not.toMatch(/salaire|wage|taux horaire/i);
+    const full = await admin.get(`/api/reports/runs/${run.json.run.id}`);
+    expect(full.json.body).toContain("Activité");
+    const history = await admin.get(`/api/reports/${id}/runs`);
+    expect(history.json.runs.length).toBe(1);
+    expect(history.json.runs[0].body).toBeUndefined();
+    // a technician cannot read the run either
+    const tech = await signIn("tech@akab.local");
+    expect((await tech.get(`/api/reports/runs/${run.json.run.id}`)).status).toBe(403);
+    // editing a custom report keeps what is not sent; deleting it removes the history with it
+    const edited = await admin.patch(`/api/reports/${id}`, { name: "Activité renommée" });
+    expect(edited.json.name).toBe("Activité renommée");
+    expect(edited.json.config.sources).toHaveLength(5);
+    expect((await admin.del(`/api/reports/${id}`)).status).toBe(200);
+    expect((await admin.get(`/api/reports/${id}/runs`)).status).toBe(404);
+  });
+
+  it("a schedule runs once when it is due, is recorded, and is sent to its email address", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { devOutbox } = await import("../server/lib/mail.ts");
+    const { reportsTick } = await import("../server/lib/reports.ts");
+    const made = await admin.post("/api/reports", { name: "Planifié", description: "", sources: ["quotes"], period: 7, aiSummary: false });
+    const reportId = made.json.id;
+    const sched = await admin.post(`/api/reports/${reportId}/schedules`, { frequency: "daily", time: "07:00", weekday: null, dayOfMonth: null, enabled: true, channels: { email: ["Direction@example.com"], sms: [], teams: false } });
+    expect(sched.status).toBe(201);
+    expect(sched.json.label).toContain("07:00");
+    // due now: the next run was in the past
+    await db().update(schema.reportSchedules).set({ nextRunAt: new Date("2026-01-01T00:00:00Z") }).where(eq(schema.reportSchedules.id, sched.json.id));
+    const outboxBefore = devOutbox.length;
+    const now = new Date();
+    await reportsTick(now);
+    const ran = await db().select().from(schema.reportRuns).where(eq(schema.reportRuns.scheduleId, sched.json.id));
+    expect(ran).toHaveLength(1);
+    expect(ran[0].trigger).toBe("schedule");
+    expect(ran[0].status).toBe("ok");
+    // a second tick at the same moment does not run it again: its next run is later
+    await reportsTick(now);
+    expect((await db().select().from(schema.reportRuns).where(eq(schema.reportRuns.scheduleId, sched.json.id))).length).toBe(1);
+    // the email went to the listed address (one message), and the delivery is recorded on the run
+    const sent = devOutbox.slice(outboxBefore).filter((m) => m.to === "direction@example.com");
+    expect(sent).toHaveLength(1);
+    expect(sent[0].subject).toContain("Planifié");
+    expect(sent[0].html).toContain("<table>");
+    const full = await admin.get(`/api/reports/runs/${ran[0].id}`);
+    expect(full.json.delivered.email).toEqual([{ to: "direction@example.com", ok: true }]);
+    const listed = (await admin.get("/api/reports/schedules")).json.find((s: any) => s.id === sched.json.id);
+    expect(listed.lastStatus).toBe("ok");
+    expect(listed.lastRunAt).toBeTruthy();
+    // a schedule switched off is not run
+    await admin.patch(`/api/reports/schedules/${sched.json.id}`, { enabled: false });
+    await db().update(schema.reportSchedules).set({ nextRunAt: new Date("2026-01-01T00:00:00Z") }).where(eq(schema.reportSchedules.id, sched.json.id));
+    await reportsTick(new Date());
+    expect((await db().select().from(schema.reportRuns).where(eq(schema.reportRuns.scheduleId, sched.json.id))).length).toBe(1);
+    // the report's schedule is removed with the report
+    expect((await admin.del(`/api/reports/${reportId}`)).status).toBe(200);
+  });
+});
+
+describe("portal assistant: the chat route", () => {
+  const configureAi = (admin: Agent, enabled = true) =>
+    admin.put("/api/admin/integrations/ai", { apiKey: "sk-ant-assistant-test", enabled, model: "claude-haiku-5-5", dailyLimitUsd: null, userLimits: {} });
+
+  it("needs a signed-in staff member with the assistant right", async () => {
+    const { hashPassword } = await import("../server/lib/crypto.ts");
+    const [viewer] = await db().select().from(schema.roles).where(and(eq(schema.roles.slug, "viewer"), isNull(schema.roles.clientId)));
+    await db().insert(schema.users).values({ email: "lecture@akab.local", name: "Lecture Seule", kind: "staff", roleId: viewer.id, passwordHash: await hashPassword(PASSWORD), mustChangePassword: false, title: "Lecture" });
+    const lecture = await signIn("lecture@akab.local");
+    const question = { messages: [{ role: "user", content: "Bonjour" }] };
+    expect((await lecture.post("/api/assistant/chat", question)).status).toBe(403);
+    expect((await new Agent().post("/api/assistant/chat", question)).status).toBe(401);
+  });
+
+  it("answers from the documentation the person may read, and says which tools it could use", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    await configureAi(admin);
+    const seen: any[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: unknown, init: RequestInit = {}) => {
+        seen.push({ body: JSON.parse(String(init.body)) });
+        return new Response(JSON.stringify({ content: [{ type: "text", text: "Une banque d'heures se suit dans la fiche du contrat." }], stop_reason: "end_turn" }), { status: 200 });
+      }),
+    );
+    try {
+      const r = await tech.post("/api/assistant/chat", { messages: [{ role: "user", content: "Comment fonctionne une banque d'heures ?" }] });
+      expect(r.status).toBe(200);
+      expect(r.json.answer).toContain("banque");
+      expect(r.json.sources.length).toBeGreaterThan(0);
+      expect(r.json.tools).toEqual([]);
+      const body = seen[0].body;
+      expect(body.model).toBe("claude-haiku-5-5");
+      expect(body.tools.map((t: any) => t.name)).toEqual(expect.arrayContaining(["my_tasks", "my_tickets", "my_projects"]));
+      expect(body.system).toContain("Alex");
+      // the parts a technician may not read never reach the model, nor the answer's sources
+      const { readFileSync } = await import("node:fs");
+      const { join } = await import("node:path");
+      const chunks = JSON.parse(readFileSync(join(import.meta.dirname, "..", "server", "knowledge", "portal.json"), "utf8")).chunks;
+      const hr = chunks.find((c: any) => c.restrictTo.some((g: string[]) => g.includes("hr.manage")));
+      expect(body.system).not.toContain(hr.text.slice(0, 60));
+      expect(r.json.sources).not.toContain(hr.title);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a tool answers with the person's own tasks only, as that person", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    await configureAi(admin);
+    const adminUser = (await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local")))[0];
+    const techUser = (await db().select().from(schema.users).where(eq(schema.users.email, "tech@akab.local")))[0];
+    await db().insert(schema.pipelineTasks).values([
+      { title: "Relancer le client Boulangerie (assistant)", createdBy: techUser.id, assigneeId: techUser.id, visibility: "team" },
+      { title: "Note privée de l'admin (assistant)", createdBy: adminUser.id, assigneeId: adminUser.id, visibility: "private" },
+    ]);
+    const seen: any[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_u: unknown, init: RequestInit = {}) => {
+        seen.push({ body: JSON.parse(String(init.body)) });
+        call++;
+        const reply =
+          call === 1
+            ? { content: [{ type: "tool_use", id: "tu_1", name: "my_tasks", input: {} }], stop_reason: "tool_use" }
+            : { content: [{ type: "text", text: "Vous avez une tâche : relancer le client Boulangerie." }], stop_reason: "end_turn" };
+        return new Response(JSON.stringify(reply), { status: 200 });
+      }),
+    );
+    try {
+      const r = await tech.post("/api/assistant/chat", { messages: [{ role: "user", content: "Quelles sont mes tâches ?" }] });
+      expect(r.status).toBe(200);
+      expect(r.json.tools).toEqual(["my_tasks"]);
+      const toolResult = seen[1].body.messages.at(-1).content[0].content as string;
+      expect(toolResult).toContain("Relancer le client Boulangerie (assistant)");
+      expect(toolResult).not.toContain("Note privée de l'admin (assistant)");
+      // the audit keeps the length of the question and the tools used, never the question
+      const [log] = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "assistant.asked")).orderBy(sql`${schema.auditLog.id} desc`).limit(1);
+      expect(JSON.stringify(log.details)).not.toContain("Quelles sont mes tâches");
+      expect(log.details).toMatchObject({ tools: ["my_tasks"] });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("says clearly when the assistant is off, and refuses a conversation not ending with a question", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    await configureAi(admin, false);
+    const off = await tech.post("/api/assistant/chat", { messages: [{ role: "user", content: "Bonjour" }] });
+    expect(off.status).toBe(409);
+    expect(off.json.error).toBe("ai_disabled");
+    await configureAi(admin, true);
+    const bad = await tech.post("/api/assistant/chat", { messages: [{ role: "user", content: "Bonjour" }, { role: "assistant", content: "Salut" }] });
+    expect(bad.status).toBe(400);
+  });
+
+  it("asks at most 30 questions an hour per person", async () => {
+    const admin = await signIn("admin@akab.local");
+    await configureAi(admin);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ content: [{ type: "text", text: "Un billet est une demande." }], stop_reason: "end_turn" }), { status: 200 })));
+    try {
+      const question = { messages: [{ role: "user", content: "Qu'est-ce qu'un billet ?" }] };
+      for (let i = 0; i < 30; i++) expect((await admin.post("/api/assistant/chat", question)).status).toBe(200);
+      const over = await admin.post("/api/assistant/chat", question);
+      expect(over.status).toBe(429);
+      expect(over.json.error).toBe("rate_limited");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("private notes and quick reminders (the To do panel)", () => {
+  it("are the person's own alone, and a reminder rings the bell once", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const admin = await signIn("admin@akab.local");
+    expect((await tech.post("/api/my-notes", { kind: "note", body: "" })).json.error).toBe("note_empty");
+    expect((await tech.post("/api/my-notes", { kind: "reminder", body: "Appeler Marc" })).json.error).toBe("reminder_needs_time");
+    const note = await tech.post("/api/my-notes", { kind: "note", body: "Mot de passe du routeur : voir Passbolt" });
+    expect(note.status).toBe(201);
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const rem = await tech.post("/api/my-notes", { kind: "reminder", body: "Appeler Marc", remindAt: past });
+    expect(rem.status).toBe(201);
+    const future = await tech.post("/api/my-notes", { kind: "reminder", body: "Plus tard", remindAt: new Date(Date.now() + 3_600_000).toISOString() });
+    // nobody else reads or changes them, administrators included
+    for (const other of [tech2, admin]) {
+      expect((await other.get("/api/my-notes")).json.some((n: any) => n.id === note.json.id)).toBe(false);
+      expect((await other.patch(`/api/my-notes/${note.json.id}`, { body: "x" })).status).toBe(404);
+      expect((await other.del(`/api/my-notes/${note.json.id}`)).status).toBe(404);
+    }
+    // the soonest reminder first, notes after
+    const list = (await tech.get("/api/my-notes")).json.map((n: any) => n.id);
+    expect(list.indexOf(rem.json.id)).toBeLessThan(list.indexOf(future.json.id));
+    expect(list.indexOf(future.json.id)).toBeLessThan(list.indexOf(note.json.id));
+    // the bell rings once for the reminder that is due, never for the future one, and only for its owner
+    const { noteTick } = await import("../server/lib/personalNotes.ts");
+    expect(await noteTick()).toBe(1);
+    expect(await noteTick()).toBe(0);
+    const mine = (await tech.get("/api/notifications")).json.items.filter((n: any) => n.type === "note.reminder");
+    expect(mine.length).toBe(1);
+    expect(mine[0].data.text).toBe("Appeler Marc");
+    expect((await tech2.get("/api/notifications")).json.items.some((n: any) => n.type === "note.reminder")).toBe(false);
+    // done reminders do not ring; a new time rings again
+    expect((await tech.patch(`/api/my-notes/${future.json.id}`, { done: true })).json.done).toBe(true);
+    expect((await tech.patch(`/api/my-notes/${rem.json.id}`, { remindAt: past })).json.notified).toBe(false);
+    expect(await noteTick()).toBe(1);
+    expect((await tech.del(`/api/my-notes/${note.json.id}`)).status).toBe(200);
+  });
+});

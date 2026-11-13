@@ -10,7 +10,7 @@ import { LanguageToggle } from "@/components/LanguageToggle";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ProfileDialog } from "@/components/ProfileDialog";
 import { CompanySwitcher } from "@/components/CompanySwitcher";
-import { ViewAsBanner, ViewSwitcher } from "@/components/ViewSwitcher";
+import { ViewAsBanner, ViewSwitchButton } from "@/components/ViewSwitcher";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -213,7 +213,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
         <span className="hidden size-1.5 shrink-0 rounded-full bg-grad-gold shadow-[0_0_10px_var(--gold)] sm:block" />
         {me.viewAs ? <span className="hidden truncate text-sm font-medium sm:block">{me.viewAs.clientName}</span> : <CompanySwitcher name={me.client?.name} />}
       </span>
-      {me.viewAs && <ViewSwitcher />}
+      {me.viewAs && <ViewSwitchButton />}
       <div className="ml-auto flex items-center gap-3">
         {!me.viewAs && <NotificationBell />}
         <LanguageToggle persist={!me.viewAs} className="hidden sm:flex" />

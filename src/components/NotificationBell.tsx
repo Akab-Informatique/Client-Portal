@@ -80,6 +80,8 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       return { icon: Workflow, title: t(n.data.notice ? "notifications.pipelineNotice" : n.data.comment ? "notifications.pipelineComment" : "notifications.pipelineAssigned", { by: n.data.by ?? "" }), body: [n.data.title, n.data.message].filter(Boolean).join(" — "), tone: "gold" };
     case "project.note":
       return { icon: Workflow, title: t("notifications.projectNote", { by: n.data.by ?? "" }), body: [n.data.number, n.data.name, n.data.message].filter(Boolean).join(" · "), tone: "gold" };
+    case "note.reminder":
+      return { icon: Workflow, title: t("notifications.noteReminder"), body: [n.data.title, n.data.text].filter(Boolean).join(" · "), tone: "gold" };
     case "project.reminder":
       return { icon: Workflow, title: t(n.data.kind === "followup" ? "notifications.projectFollowup" : "notifications.projectReminder"), body: [n.data.number, n.data.name, n.data.text].filter(Boolean).join(" · "), tone: "gold" };
     case "pipeline.day_added":

@@ -18,7 +18,9 @@ import { runIntake } from "./lib/mailIntake.ts";
 import { workflowTick } from "./lib/workflows.ts";
 import { pipelineTick } from "./lib/pipeline.ts";
 import { projectTick } from "./lib/projectTick.ts";
+import { noteTick } from "./lib/personalNotes.ts";
 import { reminderTick } from "./lib/invoiceMail.ts";
+import { reportsTick } from "./lib/reports.ts";
 
 await initDb();
 await seed();
@@ -64,9 +66,12 @@ setInterval(() => void runIntake().catch((e) => console.warn("[mail-intake] pass
 // Automatic workflows (switched on in Admin › Flux de travail): the new tickets get their reply
 setInterval(() => void workflowTick().catch((e) => console.warn("[workflow] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 // Pipeline: each morning (at the chosen time, work days) everyone's day is planned and texted
+setInterval(() => void noteTick().catch((e) => console.warn("[notes] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 setInterval(() => void projectTick().catch((e) => console.warn("[projects] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 setInterval(() => void pipelineTick().catch((e) => console.warn("[pipeline] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 setInterval(() => void reminderTick().catch((e) => console.warn("[invoice reminders] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
+// Scheduled reports (Québec time): the due ones run and are sent to their channels
+setInterval(() => void reportsTick().catch((e) => console.warn("[reports] tick:", e instanceof Error ? e.message : e)), 60_000).unref();
 
 // Alerts before calendar events
 setInterval(() => void sendReminders().catch((e) => console.warn("[planning] reminders:", e instanceof Error ? e.message : e)), 60_000).unref();

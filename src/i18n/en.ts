@@ -4755,6 +4755,7 @@ const en: Dict = {
         meetings_week: "Meeting: week ahead summary",
         pipeline_day: "Operations: the morning day plan",
         text_polish: "Texts: correction (language and structure)",
+        assistant_chat: "Portal assistant (questions)",
       },
       usage: {
         title: "Usage (US dollars)",
@@ -5895,6 +5896,7 @@ const en: Dict = {
     projectNote: "{{by}} flagged a project note for you",
     projectReminder: "Project reminder",
     projectFollowup: "Time for the project follow-up",
+    noteReminder: "Reminder",
     pipelineDayAdded: "{{by}} added an item to your day",
     pipelineComment: "{{by}} commented on one of your tasks",
     workDone: "{{from}} worked on your ticket",
@@ -5921,6 +5923,9 @@ const en: Dict = {
   viewAs: {
     staff: "Technician",
     client: "Client",
+    menuTitle: "View",
+    pickMenu: "View as a client…",
+    switchView: "Switch view",
     pickTitle: "View the portal as a client",
     pickText: "Choose the client: you will see exactly their portal, read only.",
     none: "No active clients.",

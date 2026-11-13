@@ -3,20 +3,21 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Plus, Undo2, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Undo2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { RemoveFromDay } from "./DayEdge";
+import { ListBadge } from "./lists";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
-import { PRIORITY_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
-import { taskError, usePeople } from "./TaskDialog";
+import { PRIORITY_STYLE, STATUS_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem } from "./shared";
+import { usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets } from "./DayLists";
+import { DayTasks } from "./DayTasks";
 import { DayEdge } from "./DayEdge";
 import { AgendaCard } from "@/pages/tickets/Planning";
 import { DayBlockDialog, type DayBlockDraft } from "./DayBlockDialog";
@@ -51,7 +52,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const people = usePeople();
   const [date, setDate] = useState(todayYmd());
   const [userId, setUserId] = useState<string>(me.id);
-  const [quick, setQuick] = useState("");
   // the height of the blocks of the day: dragged by the bar under them (pixels an hour), kept on this computer
   const [hourPx, setHourPx] = useState(() => {
     const v = Number(localStorage.getItem(HOUR_PX_KEY));
@@ -118,20 +118,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
   // a slot of time blocked by hand (new, or an existing one being edited)
   const [blockDraft, setBlockDraft] = useState<DayBlockDraft | null>(null)
-  const complete = useMutation({
-    mutationFn: (id: string) => api.patch(`/pipeline/tasks/${id}`, { status: "done" }),
-    onSuccess: refresh,
-    onError: (e) => toast.error(taskError(t, e)),
-  });
-  const add = useMutation({
-    mutationFn: (title: string) => api.post("/pipeline/tasks", { title, assigneeId: userId, dueDate: date }),
-    onSuccess: () => {
-      setQuick("");
-      refresh();
-    },
-    onError: (e) => toast.error(taskError(t, e)),
-  });
-
   const first = me.name.split(/\s+/)[0];
   const isToday = date === todayYmd();
   const plan = data?.plan;
@@ -139,24 +125,6 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const pct = plan && plan.capacityMinutes > 0 ? Math.min(100, Math.round((Math.min(plan.plannedMinutes, plan.capacityMinutes) / plan.capacityMinutes) * 100)) : 0;
   const tickets = (data?.items ?? []).filter((i) => i.kind === "ticket");
   const tasks = (data?.items ?? []).filter((i) => i.kind === "task");
-  // the list of tasks is every open task of the person, not only the ones of the day
-  const allTasks = useQuery({
-    queryKey: ["pipeline", "tasks", "mine-open", userId],
-    queryFn: () => api.get<TaskCard[]>(`/pipeline/tasks?status=open&${userId === me.id ? "scope=mine" : `assignee=${userId}`}`),
-    refetchInterval: 60_000,
-  });
-  const today = todayYmd();
-  const taskItems: DayItem[] = (allTasks.data ?? [])
-    .map((k): DayItem => ({ key: `task:${k.id}`, kind: "task", refId: k.id, title: k.title, priority: k.priority, due: k.checkpointDate ? `${k.checkpointDate} ${k.checkpointTime ?? "17:00"}` : k.dueDate ? `${k.dueDate} 23:59` : null, overdue: Boolean(k.dueDate && k.dueDate < today), minutes: k.estimateMinutes ?? 30, ticketNumber: k.ticketNumber, blocked: k.waiting || k.status === "blocked", reminder: Boolean(k.continuous && k.remindEveryDays) }))
-    .sort((a, b) => (a.due ?? "9999-99-99 ").localeCompare(b.due ?? "9999-99-99 ") || a.title.localeCompare(b.title));
-  const check = useMutation({
-    mutationFn: (id: string) => api.post(`/pipeline/tasks/${id}/check`, {}),
-    onSuccess: () => {
-      toast.success(t("pipeline.checked"));
-      refresh();
-    },
-    onError: (e) => toast.error(taskError(t, e)),
-  });
   const goTo = useNavigate();
   const open = (i: DayItem) =>
     i.kind === "ticket"
@@ -258,8 +226,8 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
       {blockDraft && <DayBlockDialog key={blockDraft.id ?? "new"} draft={blockDraft} date={date} forUser={userId === me.id ? undefined : userId} onClose={() => setBlockDraft(null)} onSaved={refresh} />}
       {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
-        <div className="min-w-0 space-y-4">
-          <section className="glass h-fit rounded-2xl border border-[color:var(--gold)]/30 p-4 shadow-[0_0_30px_-12px_rgba(255,206,26,0.35)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <section className="glass flex-1 rounded-2xl border border-[color:var(--gold)]/30 p-4 shadow-[0_0_30px_-12px_rgba(255,206,26,0.35)]">
             <div className="relative mb-3 flex items-center justify-center">
               <h3 className="flex items-center gap-2 text-center text-base font-bold tracking-wide text-primary">
                 <CalendarClock className="size-5" /> {t("pipeline.day.timeline")}
@@ -333,22 +301,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
           {userId === me.id && can("projects.view") && <DayProjects />}
           {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" sortView="projectTasks" />}
-          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} sortView="tasks" />
-          {can("pipeline.edit") && (
-            <form
-              className="glass flex gap-2 rounded-2xl border p-2.5"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (quick.trim()) add.mutate(quick.trim());
-              }}
-            >
-              <Plus className="my-auto ml-2 size-4 shrink-0 text-primary" />
-              <Input value={quick} onChange={(e) => setQuick(e.target.value)} placeholder={t("pipeline.day.quickAdd")} className="h-9 border-transparent bg-transparent shadow-none focus-visible:border-input" maxLength={200} />
-              <Button type="submit" size="sm" disabled={!quick.trim() || add.isPending} className="h-9 bg-grad-gold font-semibold text-[#1a1204]">
-                {t("pipeline.add")}
-              </Button>
-            </form>
-          )}
+          <DayTasks userId={userId} onOpenTask={onOpenTask} />
         </div>
       </div>
     </div>
@@ -394,7 +347,7 @@ function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) 
   );
 }
 
-function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty, sortView }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string; sortView: string }) {
+function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty, sortView, toolbar }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string; sortView: string; toolbar?: React.ReactNode }) {
   const { t } = useTranslation();
   const [sort, setSort] = useSortDefault<ListSort>(`day.${sortView}`, "checkpoint", LIST_SORTS);
   const { keys, save } = useCustomOrder(`day:${sortView}`, sort === "custom");
@@ -429,6 +382,7 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
           </DropdownMenu>
         )}
       </div>
+      {toolbar}
       {loading ? (
         <Skeleton className="h-20 w-full" />
       ) : items.length === 0 ? (
@@ -467,6 +421,9 @@ function ItemRow({ i, onOpen, onComplete }: { i: DayItem; onOpen: (i: DayItem) =
         </span>
         {(i.client || i.pinNote) && <span className="block truncate text-xs text-muted-foreground">{[i.client, i.pinNote].filter(Boolean).join(" · ")}</span>}
       </button>
+      {i.listName !== undefined && <ListBadge name={i.listShared === false && i.listOwner ? t("pipeline.lists.personalOf", { name: i.listOwner }) : i.listName} shared={i.listShared} className="hidden max-w-40 shrink-0 sm:inline-flex" />}
+      {i.listName !== undefined && <span className={cn("hidden w-20 shrink-0 text-right font-mono text-[11px] sm:block", i.overdue ? "text-red-300" : "text-muted-foreground")}>{i.dueDay ? dayLabel(i.dueDay) : "—"}</span>}
+      {i.taskStatus && <span className={cn("hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium sm:inline", STATUS_STYLE[i.taskStatus])}>{t(`pipeline.status.${i.taskStatus}`)}</span>}
       {i.blocked && <Lock className="size-3.5 shrink-0 text-fuchsia-300" />}
       {i.overdue && <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 text-[10px] font-medium text-red-300">{t("pipeline.late")}</span>}
       {i.dueTime && <span className="shrink-0 font-mono text-[10px] text-orange-300">{t("pipeline.before", { time: i.dueTime })}</span>}
