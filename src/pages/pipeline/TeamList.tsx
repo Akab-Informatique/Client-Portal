@@ -12,6 +12,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, hm, todayYmd, type TaskCard, type TaskStatus } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
+import { ListBadge, ListSelect, ManageLists, rememberList, useTaskLists } from "./lists";
 
 type Scope = "all" | "mine" | "none";
 
@@ -38,12 +39,22 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [person, setPerson] = useState("");
   const [done, setDone] = useState(false);
   const [q, setQ] = useState("");
+  const lists = useTaskLists();
+  const [list, setList] = useState(() => {
+    try {
+      return sessionStorage.getItem("akab.pipeline.todoList") ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [manage, setManage] = useState(false);
   const [view, setView] = useState<"list" | "board">(() => (localStorage.getItem("akab.pipeline.view") === "board" ? "board" : "list"));
   const params = new URLSearchParams({ status: done ? "done" : "open" });
   if (scope === "mine") params.set("scope", "mine");
   if (scope === "none") params.set("assignee", "none");
   if (person) params.set("assignee", person);
   if (q.trim()) params.set("q", q.trim());
+  if (list && lists.data?.some((l) => l.id === list)) params.set("list", list);
   const { data, isLoading } = useQuery({ queryKey: ["pipeline", "tasks", params.toString()], queryFn: () => api.get<TaskCard[]>(`/pipeline/tasks?${params}`), refetchInterval: 30_000, placeholderData: (p) => p });
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
   const patch = useMutation({
@@ -70,6 +81,7 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
 
   return (
     <div className="space-y-3">
+      {manage && <ManageLists onClose={() => setManage(false)} />}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-0.5 rounded-xl border bg-background/40 p-0.5">
           {(
@@ -100,6 +112,23 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             </option>
           ))}
         </select>
+        <ListSelect
+          value={list}
+          onChange={(id) => {
+            setList(id);
+            rememberList(id);
+            try {
+              sessionStorage.setItem("akab.pipeline.todoList", id);
+            } catch {
+              /* kept for this page only */
+            }
+          }}
+          lists={lists.data}
+          all={t("pipeline.lists.all")}
+        />
+        <button type="button" onClick={() => setManage(true)} className="h-9 rounded-xl border px-3 text-xs font-medium text-muted-foreground hover:text-foreground">
+          {t("pipeline.lists.manage")}
+        </button>
         <button type="button" onClick={() => setDone(!done)} className={cn("flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-medium", done ? "border-emerald-400/40 bg-emerald-400/10 text-emerald-300" : "text-muted-foreground hover:text-foreground")}>
           <CheckCircle2 className="size-3.5" /> {t("pipeline.team.doneToggle")}
         </button>
@@ -176,6 +205,7 @@ function Meta({ task }: { task: TaskCard }) {
   const late = task.dueDate && task.dueDate < todayYmd() && task.status !== "done";
   return (
     <span className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-muted-foreground">
+      <ListBadge name={task.listShared === false && task.listOwner ? t("pipeline.lists.personalOf", { name: task.listOwner }) : task.listName} shared={task.listShared} />
       {task.dueDate && (
         <span className={cn("flex items-center gap-1", late && "text-red-300")}>
           <CalendarClock className="size-3" /> {dayLabel(task.dueDate)}

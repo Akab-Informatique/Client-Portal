@@ -12691,3 +12691,48 @@ describe("delegated technician: team, noted time, checklist, merge", () => {
     for (const act of ["delegate.checklist", "delegate.tags", "delegate.delegate_set", "delegate.merged", "ticket.delegate_visibility"]) expect(actions).toContain(act);
   });
 });
+
+describe("to-do lists: shared or personal, every task is on one", () => {
+  it("makes a list shared or personal, puts each task on one, filters by list and person, and keeps a personal list private", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const tech2 = await signIn("tech2@akab.local");
+    const [u2] = await db().select().from(schema.users).where(eq(schema.users.email, "tech2@akab.local"));
+    // a task with no list goes on the team list
+    const plain = await tech.post("/api/pipeline/tasks", { title: "Sans liste" });
+    expect(plain.status).toBe(201);
+    expect(plain.json.listId).toBeTruthy();
+    expect(plain.json.listShared).toBe(true);
+    const lists = await tech.get("/api/pipeline/lists");
+    expect(lists.json.find((l: any) => l.id === plain.json.listId).shared).toBe(true);
+    // a personal list: its tasks are private; the other technician does not see the list nor its tasks
+    const mine = await tech.post("/api/pipeline/lists", { name: "Perso de Tech", shared: false });
+    expect(mine.status).toBe(201);
+    expect((await tech.post("/api/pipeline/lists", { name: "perso de tech", shared: false })).json.error).toBe("list_exists");
+    const own = await tech.post("/api/pipeline/tasks", { title: "Idée perso", listId: mine.json.id });
+    expect(own.json.visibility).toBe("private");
+    expect(own.json.listName).toBe("Perso de Tech");
+    expect((await tech2.get("/api/pipeline/lists")).json.some((l: any) => l.id === mine.json.id)).toBe(false);
+    expect((await tech2.get(`/api/pipeline/tasks/${own.json.id}`)).status).toBe(404);
+    // the other cannot put a task on a list that is not his
+    expect((await tech2.post("/api/pipeline/tasks", { title: "Intrus", listId: mine.json.id })).json.error).toBe("list_invalid");
+    // a shared list, tasks assigned to each; the tasks view shows everything, then one person's
+    const shared = await tech.post("/api/pipeline/lists", { name: "Projet interne", shared: true });
+    const a = await tech.post("/api/pipeline/tasks", { title: "Pour moi", listId: shared.json.id });
+    const b = await tech.post("/api/pipeline/tasks", { title: "Pour l'autre", listId: shared.json.id, assigneeId: u2.id });
+    const all = await tech2.get("/api/pipeline/tasks?status=open");
+    expect(all.json.some((x: any) => x.id === a.json.id) && all.json.some((x: any) => x.id === b.json.id)).toBe(true);
+    expect(all.json.find((x: any) => x.id === a.json.id).listName).toBe("Projet interne");
+    expect((await tech2.get(`/api/pipeline/tasks?status=open&assignee=${u2.id}`)).json.map((x: any) => x.id)).toContain(b.json.id);
+    const byList = (await tech2.get(`/api/pipeline/tasks?status=open&list=${shared.json.id}`)).json;
+    expect(byList.map((x: any) => x.title).sort()).toEqual(["Pour l'autre", "Pour moi"]);
+    // moving a task to a personal list makes it private; back to a shared one, the team's again
+    const moved = await tech.patch(`/api/pipeline/tasks/${a.json.id}`, { listId: mine.json.id });
+    expect(moved.json.visibility).toBe("private");
+    expect((await tech.patch(`/api/pipeline/tasks/${a.json.id}`, { listId: shared.json.id })).json.visibility).toBe("team");
+    // a list with tasks cannot be deleted; an empty one can
+    expect((await tech.del(`/api/pipeline/lists/${shared.json.id}`)).json.error).toBe("list_not_empty");
+    const empty = await tech.post("/api/pipeline/lists", { name: "Vide", shared: false });
+    expect((await tech.del(`/api/pipeline/lists/${empty.json.id}`)).status).toBe(200);
+  });
+});

@@ -27,6 +27,7 @@ async function itemOf(taskId: string, itemId: string) {
 import { body, zUuid } from "../lib/validate.ts";
 import { nextAfter, type Recurrence } from "../../shared/recurrence.ts";
 import { assignedTo, coAssignees, isAssigned, setAssignees } from "../lib/pipelineAssign.ts";
+import { listsFor, resolveList, teamListId, visibilityFor } from "../lib/pipelineLists.ts";
 
 const zDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const zHm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/);
@@ -73,6 +74,10 @@ async function cards(rows: Task[], viewerId: string) {
   const d = db();
   const ids = rows.map((r) => r.id);
   const co = await coAssignees(ids);
+  const listRows = await d
+    .select({ id: schema.pipelineLists.id, name: schema.pipelineLists.name, shared: schema.pipelineLists.shared, ownerId: schema.pipelineLists.ownerId })
+    .from(schema.pipelineLists)
+    .where(inArray(schema.pipelineLists.id, [...new Set(rows.map((r) => r.listId).filter((x): x is string => Boolean(x)))]));
   const [people, checks, kids, parents, waiting, fileRows] = await Promise.all([
     d.select({ id: schema.users.id, name: schema.users.name }).from(schema.users),
     d
@@ -95,6 +100,7 @@ async function cards(rows: Task[], viewerId: string) {
       .groupBy(schema.pipelineTaskFiles.taskId),
   ]);
   const name = new Map(people.map((p) => [p.id, p.name]));
+  const lists = new Map(listRows.map((l) => [l.id, l]));
   const parent = new Map(parents.map((p) => [p.id, p.seen ? p.title : null]));
   const wait = new Map(waiting.map((p) => [p.id, p]));
   return rows.map((t) => {
@@ -104,6 +110,14 @@ async function cards(rows: Task[], viewerId: string) {
     return {
       id: t.id,
       title: t.title,
+      /** The list it is on (a shared list, or its owner's personal one) */
+      listId: t.listId,
+      listName: t.listId ? (lists.get(t.listId)?.name ?? null) : null,
+      listShared: t.listId ? (lists.get(t.listId)?.shared ?? true) : true,
+      listOwner: (() => {
+        const l = t.listId ? lists.get(t.listId) : null;
+        return l && !l.shared && l.ownerId ? (name.get(l.ownerId) ?? null) : null;
+      })(),
       status: t.status,
       priority: t.priority,
       assigneeId: t.assigneeId,
@@ -205,6 +219,7 @@ async function spawnNext(done: Task, by: string): Promise<string | null> {
   const [row] = await db()
     .insert(schema.pipelineTasks)
     .values({
+      listId: done.listId,
       title: done.title,
       notes: done.notes,
       priority: done.priority,
@@ -600,6 +615,48 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json(rows);
   })
 
+  // ── Lists: every task is on one, shared (the team) or personal (its owner) ──
+  .get("/lists", async (c) => {
+    const a = auth(c);
+    await teamListId();
+    return c.json(await listsFor(a.user.id, seenBy(a.user.id)));
+  })
+  .post("/lists", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(80), shared: z.boolean().default(false) }));
+    const dup = await db().select({ id: schema.pipelineLists.id }).from(schema.pipelineLists).where(and(sql`lower(${schema.pipelineLists.name}) = lower(${p.name})`, p.shared ? eq(schema.pipelineLists.shared, true) : and(eq(schema.pipelineLists.shared, false), eq(schema.pipelineLists.ownerId, a.user.id))));
+    if (dup.length) throw new HTTPException(409, { message: "list_exists" });
+    const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineLists.position}), 0)`.mapWith(Number) }).from(schema.pipelineLists);
+    const [row] = await db().insert(schema.pipelineLists).values({ name: p.name, shared: p.shared, ownerId: a.user.id, position: max + 1 }).returning();
+    await audit(a.user.id, "pipeline.list_created", row.id, { name: row.name, shared: row.shared });
+    return c.json({ id: row.id, name: row.name, shared: row.shared, ownerId: row.ownerId, owner: a.user.name, mine: true, open: 0 }, 201);
+  })
+  .patch("/lists/:id", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const p = await body(c, z.object({ name: z.string().trim().min(1).max(80) }));
+    const [l] = await db().select().from(schema.pipelineLists).where(eq(schema.pipelineLists.id, id));
+    // a personal list is its owner's; a shared one is changed by whoever made it or a manager
+    if (!l || (!l.shared && l.ownerId !== a.user.id)) throw new HTTPException(404, { message: "not_found" });
+    if (l.ownerId !== a.user.id && !a.permissions.includes("pipeline.manage")) throw new HTTPException(403, { message: "forbidden" });
+    await db().update(schema.pipelineLists).set({ name: p.name }).where(eq(schema.pipelineLists.id, id));
+    await audit(a.user.id, "pipeline.list_renamed", id, { name: p.name });
+    return c.json({ ok: true });
+  })
+  .delete("/lists/:id", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const id = zUuid.parse(c.req.param("id"));
+    const [l] = await db().select().from(schema.pipelineLists).where(eq(schema.pipelineLists.id, id));
+    if (!l || (!l.shared && l.ownerId !== a.user.id)) throw new HTTPException(404, { message: "not_found" });
+    if (l.ownerId !== a.user.id && !a.permissions.includes("pipeline.manage")) throw new HTTPException(403, { message: "forbidden" });
+    const [{ n }] = await db().select({ n: sql<number>`count(*)`.mapWith(Number) }).from(schema.pipelineTasks).where(eq(schema.pipelineTasks.listId, id));
+    // a list with tasks (even done ones, even ones this person cannot see) is never deleted: move them first
+    if (n > 0) throw new HTTPException(409, { message: "list_not_empty" });
+    await db().delete(schema.pipelineLists).where(eq(schema.pipelineLists.id, id));
+    await audit(a.user.id, "pipeline.list_deleted", id, { name: l.name });
+    return c.json({ ok: true });
+  })
+
   .get("/tasks", async (c) => {
     await resetDailyTasks();
     const a = auth(c);
@@ -608,6 +665,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const conds: SQL[] = [seenBy(a.user.id)];
     if (status === "open") conds.push(ne(schema.pipelineTasks.status, "done"));
     if (status === "done") conds.push(eq(schema.pipelineTasks.status, "done"), sql`${schema.pipelineTasks.completedAt} > now() - interval '30 days'`);
+    if (q.list && zUuid.safeParse(q.list).success) conds.push(eq(schema.pipelineTasks.listId, q.list));
     if (q.scope === "mine") conds.push(assignedTo(a.user.id));
     else if (q.assignee === "none") conds.push(sql`${schema.pipelineTasks.assigneeId} is null`);
     else if (q.assignee && zUuid.safeParse(q.assignee).success) conds.push(assignedTo(q.assignee));
@@ -678,6 +736,8 @@ export const pipelineRoutes = new Hono<AppEnv>()
         remindEveryDays: zRemind.nullable().default(null),
         estimateMinutes: zMinutes.nullable().default(null),
         tags: zTags.default([]),
+        /** The list it goes on (a shared one or one's own); the team list when none is named */
+        listId: zUuid.nullable().default(null),
         visibility: zVisibility.default("team"),
         viewerIds: z.array(zUuid).max(30).default([]),
         recurrence: zRecurrence.nullable().default(null),
@@ -685,6 +745,8 @@ export const pipelineRoutes = new Hono<AppEnv>()
         checklist: z.array(z.union([z.string().trim().min(1).max(300), z.object({ text: z.string().trim().min(1).max(300), priority: zPriority.default("normal"), dueDate: zDate.nullable().default(null), dueTime: zHm.nullable().default(null), assigneeId: zUuid.nullable().default(null), startDate: zDate.nullable().default(null), dependsOn: z.number().int().min(0).nullable().default(null) })])).max(60).default([]),
       }),
     );
+    const list = await resolveList(a.user.id, p.listId);
+    const visibility = visibilityFor(list.shared, p.visibility);
     const wanted = p.assigneeIds ?? (p.assigneeId ? [p.assigneeId] : []);
     await activeStaff(wanted);
     for (const it of p.checklist) if (typeof it !== "string" && it.assigneeId) await activeStaff(it.assigneeId);
@@ -694,10 +756,10 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [row] = await db()
       .insert(schema.pipelineTasks)
-      .values({ title: p.title, notes: p.notes, priority: p.priority, assigneeId: wanted[0] ?? null, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.kind === "normal" ? p.dueDate : null, dueTime: p.dueDate && p.kind === "normal" ? p.dueTime : null, kind: p.kind, lastResetOn: p.kind === "daily" ? todayQc() : null, remindEveryDays: p.kind === "continuous" ? p.remindEveryDays : null, lastCheckedOn: p.kind === "continuous" && p.remindEveryDays ? todayQc() : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.kind === "continuous" ? null : p.estimateMinutes, tags: [...new Set(p.tags)], visibility: p.visibility, recurrence: p.kind === "normal" ? p.recurrence : null, ...ticket, position: max + 1 })
+      .values({ listId: list.id, title: p.title, notes: p.notes, priority: p.priority, assigneeId: wanted[0] ?? null, createdBy: a.user.id, parentId: p.parentId, blockedById: p.blockedById, dueDate: p.kind === "normal" ? p.dueDate : null, dueTime: p.dueDate && p.kind === "normal" ? p.dueTime : null, kind: p.kind, lastResetOn: p.kind === "daily" ? todayQc() : null, remindEveryDays: p.kind === "continuous" ? p.remindEveryDays : null, lastCheckedOn: p.kind === "continuous" && p.remindEveryDays ? todayQc() : null, startDate: p.startDate, startTime: p.startDate ? p.startTime : null, checkpointDate: p.checkpointDate, checkpointTime: p.checkpointDate ? (p.checkpointTime ?? "17:00") : null, estimateMinutes: p.kind === "continuous" ? null : p.estimateMinutes, tags: [...new Set(p.tags)], visibility, recurrence: p.kind === "normal" ? p.recurrence : null, ...ticket, position: max + 1 })
       .returning();
     if (wanted.length > 1) await setAssignees(row.id, wanted);
-    if (p.visibility === "selected") await setViewers(row.id, p.viewerIds);
+    if (visibility === "selected") await setViewers(row.id, p.viewerIds);
     if (row.recurrence) await db().update(schema.pipelineTasks).set({ seriesId: row.id }).where(eq(schema.pipelineTasks.id, row.id));
     if (p.checklist.length) {
       const made = await db()
@@ -739,6 +801,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
         remindEveryDays: zRemind.nullable().optional(),
         estimateMinutes: zMinutes.nullable().optional(),
         tags: zTags.optional(),
+        listId: zUuid.optional(),
         visibility: zVisibility.optional(),
         viewerIds: z.array(zUuid).max(30).optional(),
         recurrence: zRecurrence.nullable().optional(),
@@ -752,6 +815,16 @@ export const pipelineRoutes = new Hono<AppEnv>()
     if (p.title !== undefined) set.title = p.title;
     if (p.notes !== undefined) set.notes = p.notes;
     if (p.priority !== undefined) set.priority = p.priority;
+    // another list: it must be a shared one or the person's own, and who sees the task follows it
+    if (p.listId !== undefined && p.listId !== cur.listId) {
+      const list = await resolveList(a.user.id, p.listId);
+      set.listId = list.id;
+      if (p.visibility === undefined) {
+        // out of a personal list into a shared one a private task becomes the team's again
+        const [from] = cur.listId ? await db().select({ shared: schema.pipelineLists.shared }).from(schema.pipelineLists).where(eq(schema.pipelineLists.id, cur.listId)) : [];
+        set.visibility = list.shared && from && !from.shared && cur.visibility === "private" ? "team" : visibilityFor(list.shared, cur.visibility);
+      }
+    }
     // a continuous or daily task has no due day (a continuous one has a checkpoint, a daily one starts again each day)
     const kindNow = p.kind ?? cur.kind;
     if (p.kind !== undefined) {
@@ -958,7 +1031,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const [{ max }] = await db().select({ max: sql<number>`coalesce(max(${schema.pipelineTasks.position}), 0)`.mapWith(Number) }).from(schema.pipelineTasks);
     const [child] = await db()
       .insert(schema.pipelineTasks)
-      .values({ title: it.text, priority: it.priority, assigneeId: it.assigneeId ?? t.assigneeId, createdBy: a.user.id, parentId: t.id, dueDate: it.dueDate, dueTime: it.dueDate ? it.dueTime : null, visibility: t.visibility === "team" ? "team" : "private", position: max + 1 })
+      .values({ listId: t.listId, title: it.text, priority: it.priority, assigneeId: it.assigneeId ?? t.assigneeId, createdBy: a.user.id, parentId: t.id, dueDate: it.dueDate, dueTime: it.dueDate ? it.dueTime : null, visibility: t.visibility === "team" ? "team" : "private", position: max + 1 })
       .returning();
     await db().update(schema.pipelineChecklist).set({ childTaskId: child.id }).where(eq(schema.pipelineChecklist.id, it.id));
     if (child.assigneeId && child.assigneeId !== a.user.id) await notify([child.assigneeId], { type: "pipeline.assigned", data: { by: a.user.name, title: child.title, taskId: child.id }, link: `/pipeline?task=${child.id}` });

@@ -9,12 +9,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { RemoveFromDay } from "./DayEdge";
 import { useTicketWorkspace } from "@/pages/tickets/workspace";
-import { PRIORITY_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
+import { ListBadge, ListSelect, ManageLists, listError, rememberList, rememberedList, useTaskLists } from "./lists";
+import { PRIORITY_STYLE, STATUS_STYLE, addDays, dayLabel, hm, isWork, longDay, todayYmd, toMinutes, type Block, type DayData, type DayItem, type TaskCard } from "./shared";
 import { taskError, usePeople } from "./TaskDialog";
 import { DayProjects, MyTickets } from "./DayLists";
 import { DayEdge } from "./DayEdge";
@@ -52,6 +53,12 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const [date, setDate] = useState(todayYmd());
   const [userId, setUserId] = useState<string>(me.id);
   const [quick, setQuick] = useState("");
+  // the Tasks section: every task I can see by default, then only mine, or a partner's; and the list a new task goes on
+  const [taskScope, setTaskScope] = useState<string>("all");
+  const [taskList, setTaskList] = useState("");
+  const [newList, setNewList] = useState("");
+  const [manageLists, setManageLists] = useState(false);
+  const lists = useTaskLists();
   // the height of the blocks of the day: dragged by the bar under them (pixels an hour), kept on this computer
   const [hourPx, setHourPx] = useState(() => {
     const v = Number(localStorage.getItem(HOUR_PX_KEY));
@@ -124,12 +131,12 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     onError: (e) => toast.error(taskError(t, e)),
   });
   const add = useMutation({
-    mutationFn: (title: string) => api.post("/pipeline/tasks", { title, assigneeId: userId, dueDate: date }),
+    mutationFn: (title: string) => api.post("/pipeline/tasks", { title, assigneeId: userId, dueDate: date, listId: newList || rememberedList(lists.data) || undefined }),
     onSuccess: () => {
       setQuick("");
       refresh();
     },
-    onError: (e) => toast.error(taskError(t, e)),
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "list_invalid" ? listError(t, e) : taskError(t, e)),
   });
 
   const first = me.name.split(/\s+/)[0];
@@ -141,13 +148,21 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   const tasks = (data?.items ?? []).filter((i) => i.kind === "task");
   // the list of tasks is every open task of the person, not only the ones of the day
   const allTasks = useQuery({
-    queryKey: ["pipeline", "tasks", "mine-open", userId],
-    queryFn: () => api.get<TaskCard[]>(`/pipeline/tasks?status=open&${userId === me.id ? "scope=mine" : `assignee=${userId}`}`),
+    queryKey: ["pipeline", "tasks", "section", userId, taskScope, taskList],
+    queryFn: () => {
+      const q = new URLSearchParams({ status: "open" });
+      if (taskScope === "mine") {
+        if (userId === me.id) q.set("scope", "mine");
+        else q.set("assignee", userId);
+      } else if (taskScope !== "all") q.set("assignee", taskScope);
+      if (taskList) q.set("list", taskList);
+      return api.get<TaskCard[]>(`/pipeline/tasks?${q}`);
+    },
     refetchInterval: 60_000,
   });
   const today = todayYmd();
   const taskItems: DayItem[] = (allTasks.data ?? [])
-    .map((k): DayItem => ({ key: `task:${k.id}`, kind: "task", refId: k.id, title: k.title, priority: k.priority, due: k.checkpointDate ? `${k.checkpointDate} ${k.checkpointTime ?? "17:00"}` : k.dueDate ? `${k.dueDate} 23:59` : null, overdue: Boolean(k.dueDate && k.dueDate < today), minutes: k.estimateMinutes ?? 30, ticketNumber: k.ticketNumber, blocked: k.waiting || k.status === "blocked", reminder: Boolean(k.continuous && k.remindEveryDays) }))
+    .map((k): DayItem => ({ key: `task:${k.id}`, kind: "task", refId: k.id, title: k.title, priority: k.priority, due: k.checkpointDate ? `${k.checkpointDate} ${k.checkpointTime ?? "17:00"}` : k.dueDate ? `${k.dueDate} 23:59` : null, overdue: Boolean(k.dueDate && k.dueDate < today), minutes: k.estimateMinutes ?? 30, ticketNumber: k.ticketNumber, blocked: k.waiting || k.status === "blocked", reminder: Boolean(k.continuous && k.remindEveryDays), listName: k.listName, listShared: k.listShared, listOwner: k.listOwner, dueDay: k.dueDate, taskStatus: k.status, assigneeName: k.assignee }))
     .sort((a, b) => (a.due ?? "9999-99-99 ").localeCompare(b.due ?? "9999-99-99 ") || a.title.localeCompare(b.title));
   const check = useMutation({
     mutationFn: (id: string) => api.post(`/pipeline/tasks/${id}/check`, {}),
@@ -255,6 +270,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         )}
       </section>
 
+      {manageLists && <ManageLists onClose={() => setManageLists(false)} />}
       {blockDraft && <DayBlockDialog key={blockDraft.id ?? "new"} draft={blockDraft} date={date} forUser={userId === me.id ? undefined : userId} onClose={() => setBlockDraft(null)} onSaved={refresh} />}
       {/* left: the blocks of the day (and the priorities of the day); right: the priorities of the week, all my tickets (compact), projects, tasks. The bar between them is dragged to give one side more room. */}
       <div ref={box} className="grid gap-4 xl:gap-0 xl:grid-cols-[var(--split)_12px_minmax(0,1fr)]" style={{ "--split": `${split}%` } as React.CSSProperties}>
@@ -333,7 +349,42 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
           <MyTickets userId={userId} mine={userId === me.id} onOpen={(id) => ws.open(id)} />
           {userId === me.id && can("projects.view") && <DayProjects />}
           {projectTasks.length > 0 && <ItemList title={t("pipeline.day.projectTasks")} icon={Workflow} items={projectTasks} loading={false} onOpen={open} empty="" sortView="projectTasks" />}
-          <ItemList title={t("pipeline.day.tasksToday")} icon={Workflow} items={taskItems} loading={allTasks.isLoading} onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.day.noTasks")} sortView="tasks" />
+          <ItemList
+            title={t("pipeline.tasksSection.title")}
+            icon={Workflow}
+            items={taskItems}
+            loading={allTasks.isLoading}
+            toolbar={
+              <div className="mb-2 flex flex-wrap items-center gap-1.5">
+                <div className="flex items-center gap-0.5 rounded-lg border bg-background/40 p-0.5">
+                  {(
+                    [
+                      ["all", t("pipeline.tasksSection.all")],
+                      ["mine", userId === me.id ? t("pipeline.tasksSection.mine") : (people.data?.find((p) => p.id === userId)?.name ?? t("pipeline.tasksSection.mine"))],
+                    ] as const
+                  ).map(([k, label]) => (
+                    <button key={k} type="button" onClick={() => setTaskScope(k)} className={cn("rounded-md px-2.5 py-1 text-xs font-medium transition-colors", taskScope === k ? "bg-[color:var(--gold)]/15 text-primary" : "text-muted-foreground hover:text-foreground")}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <select value={taskScope === "all" || taskScope === "mine" ? "" : taskScope} onChange={(e) => setTaskScope(e.target.value || "all")} aria-label={t("pipeline.tasksSection.person")} className="h-7 rounded-md border bg-transparent px-2 text-xs">
+                  <option value="">{t("pipeline.tasksSection.person")}</option>
+                  {(people.data ?? [])
+                    .filter((p) => p.id !== userId)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+                <ListSelect value={taskList} onChange={setTaskList} lists={lists.data} all={t("pipeline.lists.all")} className="h-7 text-xs" />
+                <button type="button" onClick={() => setManageLists(true)} className="h-7 rounded-md border px-2 text-xs text-muted-foreground hover:text-foreground">
+                  {t("pipeline.lists.manage")}
+                </button>
+              </div>
+            }
+            onOpen={open} onComplete={can("pipeline.edit") ? (i) => (i.reminder ? check.mutate(i.refId) : complete.mutate(i.refId)) : undefined} empty={t("pipeline.tasksSection.none")} sortView="tasks" />
           {can("pipeline.edit") && (
             <form
               className="glass flex gap-2 rounded-2xl border p-2.5"
@@ -344,6 +395,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
             >
               <Plus className="my-auto ml-2 size-4 shrink-0 text-primary" />
               <Input value={quick} onChange={(e) => setQuick(e.target.value)} placeholder={t("pipeline.day.quickAdd")} className="h-9 border-transparent bg-transparent shadow-none focus-visible:border-input" maxLength={200} />
+              <ListSelect value={newList || rememberedList(lists.data)} onChange={(id) => (setNewList(id), rememberList(id))} lists={lists.data} label={t("pipeline.tasksSection.addTo")} className="h-9 max-w-40 shrink-0 text-xs" />
               <Button type="submit" size="sm" disabled={!quick.trim() || add.isPending} className="h-9 bg-grad-gold font-semibold text-[#1a1204]">
                 {t("pipeline.add")}
               </Button>
@@ -394,7 +446,7 @@ function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) 
   );
 }
 
-function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty, sortView }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string; sortView: string }) {
+function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty, sortView, toolbar }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string; sortView: string; toolbar?: React.ReactNode }) {
   const { t } = useTranslation();
   const [sort, setSort] = useSortDefault<ListSort>(`day.${sortView}`, "checkpoint", LIST_SORTS);
   const { keys, save } = useCustomOrder(`day:${sortView}`, sort === "custom");
@@ -429,6 +481,7 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
           </DropdownMenu>
         )}
       </div>
+      {toolbar}
       {loading ? (
         <Skeleton className="h-20 w-full" />
       ) : items.length === 0 ? (
@@ -467,6 +520,9 @@ function ItemRow({ i, onOpen, onComplete }: { i: DayItem; onOpen: (i: DayItem) =
         </span>
         {(i.client || i.pinNote) && <span className="block truncate text-xs text-muted-foreground">{[i.client, i.pinNote].filter(Boolean).join(" · ")}</span>}
       </button>
+      {i.listName !== undefined && <ListBadge name={i.listShared === false && i.listOwner ? t("pipeline.lists.personalOf", { name: i.listOwner }) : i.listName} shared={i.listShared} className="hidden max-w-40 shrink-0 sm:inline-flex" />}
+      {i.listName !== undefined && <span className={cn("hidden w-20 shrink-0 text-right font-mono text-[11px] sm:block", i.overdue ? "text-red-300" : "text-muted-foreground")}>{i.dueDay ? dayLabel(i.dueDay) : "—"}</span>}
+      {i.taskStatus && <span className={cn("hidden shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium sm:inline", STATUS_STYLE[i.taskStatus])}>{t(`pipeline.status.${i.taskStatus}`)}</span>}
       {i.blocked && <Lock className="size-3.5 shrink-0 text-fuchsia-300" />}
       {i.overdue && <span className="shrink-0 rounded-full bg-red-500/15 px-1.5 text-[10px] font-medium text-red-300">{t("pipeline.late")}</span>}
       {i.dueTime && <span className="shrink-0 font-mono text-[10px] text-orange-300">{t("pipeline.before", { time: i.dueTime })}</span>}

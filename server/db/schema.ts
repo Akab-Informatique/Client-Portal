@@ -2373,10 +2373,23 @@ export const meetingWeekBriefs = pgTable("meeting_week_briefs", {
 
 // ── Pipeline: the team's to-do list and each technician's day ──
 /** A to-do: shared by the team, assigned to someone (or nobody), with a checklist, notes, a parent and a task it waits for. */
+/** A list of to-do tasks: shared (the whole team sees it) or personal (its owner only). Every task is on one. */
+export const pipelineLists = pgTable("pipeline_lists", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  shared: boolean("shared").notNull().default(true),
+  /** The person a personal list belongs to (the maker of a shared one) */
+  ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+  position: integer("position").notNull().default(0),
+  createdAt: created(),
+});
+
 export const pipelineTasks = pgTable(
   "pipeline_tasks",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    /** The list the task is on (a shared one, or its owner's personal one) */
+    listId: uuid("list_id").references(() => pipelineLists.id, { onDelete: "restrict" }),
     title: text("title").notNull(),
     /** Instructions / notes written on the task */
     notes: text("notes").notNull().default(""),

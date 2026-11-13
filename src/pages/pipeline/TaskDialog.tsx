@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Minus, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
+import { ListTree, BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Minus, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -15,6 +15,7 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { hm as hmHours, parseHm } from "@shared/duration";
 import { PRIORITIES, PRIORITY_STYLE, STATUSES, STATUS_STYLE, dayLabel, fileToBase64, hm, todayYmd, type Person, type Recurrence, type TaskCard, type TaskFull, type TaskKind, type TaskPriority, type Visibility } from "./shared";
+import { ListSelect, rememberList, rememberedList, useTaskLists } from "./lists";
 import { FilesBox, RecurrenceEditor, TagsEditor, VisibilityEditor } from "./TaskParts";
 import { newStep, TaskSteps, type Step } from "./TaskSteps";
 import { TaskNotify } from "./TaskNotify";
@@ -44,6 +45,8 @@ const scheduleOf = (kind: TaskKind, recurrence: Recurrence | null): Schedule => 
 
 /** The values that are the same whether the task is new (kept in the form) or open (saved as changed) */
 type Values = {
+  /** The list the task is on ("" = the usual one, chosen by the server) */
+  listId: string;
   kind: TaskKind;
   recurrence: Recurrence | null;
   remindEveryDays: number | null;
@@ -142,15 +145,24 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   }, [task?.id, task?.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── a new task: its values and steps stay here until "Create" ──
-  const [f, setF] = useState<Values & { waitsOn: string }>({ kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
+  const lists = useTaskLists();
+  const [f, setF] = useState<Values & { waitsOn: string }>({ listId: "", kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
   const [newSteps, setNewSteps] = useState<Step[]>([]);
   const [staged, setStaged] = useState<File[]>([]);
   const [counter, setCounter] = useState(0);
 
   const v: Values = task
-    ? { kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, assigneeIds: task.assignees.map((x) => x.id), priority: task.priority }
+    ? { listId: task.listId ?? "", kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, assigneeIds: task.assignees.map((x) => x.id), priority: task.priority }
     : f;
   const set = (p: Partial<Values>) => (isNew ? setF((old) => ({ ...old, ...p })) : patch.mutate(p));
+  // the list a new task starts on: the one last used (or the team's); a personal list makes it private, a shared one the team's
+  const listNow = lists.data?.find((l) => l.id === (v.listId || rememberedList(lists.data)));
+  const pickList = (id: string) => {
+    const l = lists.data?.find((x) => x.id === id);
+    rememberList(id);
+    if (isNew && l) setF((old) => ({ ...old, listId: id, visibility: old.visibility === "selected" ? "selected" : l.shared ? "team" : "private" }));
+    else set({ listId: id });
+  };
   const schedule = scheduleOf(v.kind, v.recurrence);
   const setSchedule = (s: Schedule) => {
     if (s === schedule) return;
@@ -194,6 +206,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
     mutationFn: () =>
       api.post<TaskCard>("/pipeline/tasks", {
         title,
+        listId: f.listId || rememberedList(lists.data) || undefined,
         notes,
         priority: f.priority,
         assigneeIds: f.assigneeIds,
@@ -423,6 +436,12 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
           </Field>
         )}
       </div>
+
+      {/* the list: every task is on one, shared with the team or personal */}
+      <Field label={t("pipeline.lists.label")} icon={ListTree}>
+        <ListSelect value={v.listId || rememberedList(lists.data)} onChange={pickList} lists={lists.data} disabled={locked} className="w-full" />
+        {listNow && <span className="block text-[11px] text-muted-foreground">{t(listNow.shared ? "pipeline.lists.sharedHint" : "pipeline.lists.personalHint")}</span>}
+      </Field>
 
       {/* who */}
       <Field label={t("pipeline.assignee")} icon={UserRound}>
