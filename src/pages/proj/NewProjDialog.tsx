@@ -36,7 +36,6 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
   const [clientId, setClientId] = useState("");
   const [leadId, setLeadId] = useState(me.id);
   const [memberIds, setMemberIds] = useState<string[]>([]);
-  const [startDate, setStartDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [soldHours, setSoldHours] = useState("");
   const [description, setDescription] = useState("");
@@ -64,7 +63,6 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
     mutationFn: () => {
       const body: Record<string, unknown> = { name: name.trim(), leadId, memberIds };
       if (clientId) body.clientId = clientId;
-      if (startDate) body.startDate = startDate;
       if (dueDate) body.dueDate = dueDate;
       const hours = soldHours.trim() === "" ? NaN : Number(soldHours.replace(",", "."));
       if (Number.isFinite(hours) && hours >= 0) body.soldHours = hours;
@@ -182,14 +180,10 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-3">
-            <label className={labelCls}>
-              <span className={labelText}>{t("proj.newProj.startDate")}</span>
-              <input type="date" className={fieldCls} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-            </label>
+          <div className="grid gap-4 sm:grid-cols-2">
             <label className={labelCls}>
               <span className={labelText}>{t("proj.newProj.dueDate")}</span>
-              <input type="date" className={fieldCls} value={dueDate} min={startDate || undefined} onChange={(e) => setDueDate(e.target.value)} />
+              <input type="date" className={fieldCls} value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
             </label>
             <label className={labelCls}>
               <span className={labelText}>{t("proj.newProj.soldHours")}</span>

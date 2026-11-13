@@ -1,3 +1,4 @@
+import { WHATS_NEW } from "../../shared/whatsnew.ts";
 import { passboltMenuShown } from "../lib/passbolt.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
@@ -85,6 +86,24 @@ export const meRoutes = new Hono<AppEnv>()
       .update(schema.users)
       .set({ ...p, updatedAt: new Date() })
       .where(eq(schema.users.id, a.user.id));
+    return c.json({ ok: true });
+  })
+
+  /** What's new: the revisions (shared/whatsnew.ts) and the newest one this person has read */
+  .get("/whatsnew", async (c) => {
+    const a = auth(c);
+    const [p] = await db().select({ seen: schema.userPreferences.whatsNewSeen }).from(schema.userPreferences).where(eq(schema.userPreferences.userId, a.user.id));
+    return c.json({ entries: WHATS_NEW, latest: WHATS_NEW[0]?.id ?? null, seen: p?.seen ?? null });
+  })
+
+  .put("/whatsnew/seen", async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ id: z.string().max(40) }));
+    if (!WHATS_NEW.some((e) => e.id === p.id)) throw new HTTPException(400, { message: "unknown_revision" });
+    await db()
+      .insert(schema.userPreferences)
+      .values({ userId: a.user.id, whatsNewSeen: p.id })
+      .onConflictDoUpdate({ target: schema.userPreferences.userId, set: { whatsNewSeen: p.id, updatedAt: new Date() } });
     return c.json({ ok: true });
   })
 

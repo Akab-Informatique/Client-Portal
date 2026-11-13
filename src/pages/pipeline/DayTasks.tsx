@@ -1,3 +1,4 @@
+import { STALE_ROW } from "@/components/WatchReminder";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -25,7 +26,7 @@ const initials = (n: string) =>
     .toUpperCase();
 const TASK_COLUMNS = ["task", "list", "due", "assigned", "status"] as const;
 const TASK_WIDTHS = { task: 320, list: 170, due: 110, assigned: 120, status: 110 };
-const byDue = (a: TaskCard, b: TaskCard) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || (a.dueTime ?? "").localeCompare(b.dueTime ?? "") || a.title.localeCompare(b.title);
+const byDue = (a: TaskCard, b: TaskCard) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || a.title.localeCompare(b.title);
 
 /**
  * Ma journée › Tâches: the tasks of the shared lists, every one the person can see by default (or only mine, a partner's, or one list),
@@ -148,7 +149,7 @@ export function DayTasks({ userId, onOpenTask }: { userId: string; onOpenTask: (
                   status: <span className={cn("inline-block rounded-full border px-2 py-0.5 text-[10px] font-medium", STATUS_STYLE[k.status])}>{t(`pipeline.status.${k.status}`)}</span>,
                 };
                 return (
-                  <li key={k.id} style={grid} className="grid items-center gap-x-3 px-1 py-1.5">
+                  <li key={k.id} style={grid} className={cn("grid items-center gap-x-3 px-1 py-1.5", k.stale && k.status !== "done" && STALE_ROW)}>
                     {cols.order.map((c) => (
                       <span key={c} className="min-w-0">
                         {cell[c]}

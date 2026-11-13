@@ -17,7 +17,7 @@ function todayYmd(): string {
 export function ProjCalendar({ project, onOpenTask }: { project: ProjDetail; onOpenTask: (taskId: string) => void }) {
   const { t, i18n } = useTranslation();
   const today = todayYmd();
-  const [ym, setYm] = useState(() => (project.dueDate ?? project.startDate ?? today).slice(0, 7));
+  const [ym, setYm] = useState(() => (project.dueDate ?? today).slice(0, 7));
   const [selected, setSelected] = useState<string | null>(null);
 
   const [year, month] = ym.split("-").map(Number);
@@ -81,7 +81,6 @@ export function ProjCalendar({ project, onOpenTask }: { project: ProjDetail; onO
           if (d === null) return <span key={`b${i}`} />;
           const date = ymd(year, month, d);
           const tasks = tasksByDay.get(date) ?? [];
-          const isStart = project.startDate === date;
           const isDue = project.dueDate === date;
           const isToday = date === today;
           const isSel = selected === date;
@@ -100,7 +99,6 @@ export function ProjCalendar({ project, onOpenTask }: { project: ProjDetail; onO
             >
               <span>{d}</span>
               <span className="flex h-2 items-center gap-0.5" aria-hidden>
-                {isStart && <span className="size-1.5 rounded-full bg-emerald-400" />}
                 {isDue && <span className="size-1.5 rounded-full bg-red-400" />}
                 {tasks.length > 0 && <span className="flex items-center gap-0.5 rounded-full bg-violet-400 px-1 text-[8px] leading-3 text-black">{tasks.length > 1 ? tasks.length : ""}</span>}
               </span>
@@ -127,7 +125,6 @@ export function ProjCalendar({ project, onOpenTask }: { project: ProjDetail; onO
         <div className="space-y-2 rounded-xl border border-white/10 p-3">
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             <span className="font-medium text-foreground tabular-nums">{selected}</span>
-            {project.startDate === selected && <span className="text-emerald-300">{t("proj.calendar.start")}</span>}
             {project.dueDate === selected && <span className="text-red-300">{t("proj.calendar.due")}</span>}
           </div>
           {dayTasks.length === 0 ? (

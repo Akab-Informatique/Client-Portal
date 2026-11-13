@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { AnimatePresence, motion } from "motion/react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
-import { AlertTriangle, BellRing, Flag, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, Hand, Undo2, EyeOff, FolderKanban } from "lucide-react";
+import { AlertTriangle, BellRing, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, Hand, Undo2, EyeOff, FolderKanban } from "lucide-react";
 import { HiddenBadge, ManagedBadge, useDelegateVisibility, useTakeOver } from "./managed";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -23,7 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
+import { WatchReminder, useWatchOnOpen, type WatchFields } from "@/components/WatchReminder";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api, ApiError } from "@/lib/api";
 import { AiModelSub, AiTodayLine, useAiModel } from "@/components/AiModelPicker";
@@ -55,8 +55,6 @@ import { ChargeButtons } from "./Charges";
 import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import {
-  heatState,
-  CP_TONE,
   longDateTime,
   shortDate,
   PRIORITY_STYLE,
@@ -68,12 +66,9 @@ import {
   type TicketList,
   type Viewer,
   ticketErrorText,
-  type TicketSummary,
   hm,
   parseHm,
   fullDate,
-  dateConflict,
-  CONFLICT_CLASS,
 } from "./shared";
 
 const SOURCE_ICON: Record<string, LucideIcon> = { email: Mail, phone: Phone, portal: Inbox, monitoring: MonitorCog };
@@ -243,6 +238,9 @@ function TicketBody({
   const qc = useQueryClient();
   const confirm = useConfirm();
   const { data: companies = [tk.company] } = useCompanies();
+  // the "no activity" reminder: opening the ticket starts its quiet days again; the window never flashes for a ticket that is open
+  useWatchOnOpen("ticket", tk.id);
+  const { data: watch } = useQuery({ queryKey: ["tickets", "watch", tk.id], queryFn: () => api.get<WatchFields>(`/tickets/${tk.id}/watch`) });
   // A change made in place shows at once and is saved right away
   const [staged, setStaged] = useState<Staged>({});
   useEffect(() => setStaged({}), [tk.id]);
@@ -252,17 +250,9 @@ function TicketBody({
     queue: tk.queue,
     dueAt: tk.dueAt,
     assigneeId: tk.assignee?.id ?? null,
-    startDate: tk.startDate ?? null,
-    startTime: tk.startTime ?? null,
-    startLocked: Boolean(tk.startLocked),
-    milestoneDate: tk.milestoneDate ?? null,
-    milestoneTime: tk.milestoneTime ?? null,
   };
   const stage = (p: Staged) => {
     const next: Staged = { ...p };
-    // no day, no time nor restriction
-    if (p.startDate === null) Object.assign(next, { startTime: null, startLocked: false });
-    if (p.milestoneDate === null) Object.assign(next, { milestoneTime: null });
     for (const k of Object.keys(next) as (keyof Staged)[]) if (next[k] === original[k]) delete next[k];
     if (!Object.keys(next).length) return;
     setStaged((s) => ({ ...s, ...next }));
@@ -272,11 +262,8 @@ function TicketBody({
   const changed = (k: keyof Staged) => k in staged;
   const saveAll = useMutation({
     mutationFn: async (changes: Staged) => {
-      const { startDate, startTime, startLocked, milestoneDate, milestoneTime, ...patch } = changes;
       let next: TicketDetail | null = null;
-      if (Object.keys(patch).length) next = await api.patch<TicketDetail>(`/tickets/${tk.id}`, patch);
-      const start = { startDate, startTime, startLocked, milestoneDate, milestoneTime };
-      if (Object.values(start).some((x) => x !== undefined)) await api.put(`/tickets/${tk.id}/start-date`, start);
+      if (Object.keys(changes).length) next = await api.patch<TicketDetail>(`/tickets/${tk.id}`, changes);
       return next;
     },
     onSuccess: (next) => {
@@ -320,11 +307,6 @@ function TicketBody({
       ? (tk.options.technicians.find((p) => p.id === view.assigneeId)?.name ?? "")
       : null
     : (tk.assignee?.name ?? null);
-  // the checkpoint is what matters: it sets the hue (red passed, orange today, gold soon, green later); the due date stays quiet
-  // the checkpoint after the due date: warned once when the ticket opens, and the two dates flash while it lasts
-  const conflict = dateConflict({ milestoneDate: view.milestoneDate, dueAt: view.dueAt, statusKind });
-  const [conflictOpen, setConflictOpen] = useState(() => dateConflict({ milestoneDate: tk.milestoneDate, dueAt: tk.dueAt, statusKind: tk.statusKind }));
-  const cpHeat = statusKind === "complete" ? "done" : view.milestoneDate ? heatState(view.dueAt, statusKind, { milestoneDate: view.milestoneDate, milestoneTime: view.milestoneTime }) : "none";
   const [draft, setDraft] = useState<{ text: string; internal: boolean } | null>(null);
   // Quick actions put the note box in a mode and bring it into view
   const [focusNote, setFocusNote] = useState<{ internal: boolean; at: number } | null>(null);
@@ -540,33 +522,12 @@ function TicketBody({
                 }
               />
               {(update.isPending || saveAll.isPending) && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
-              {/* quick edits: the start and the checkpoint (a day and a time) */}
-              <QuickDate
-                icon={CalendarPlus}
-                label={t("tickets.fields.start")}
-                date={view.startDate}
-                disabled={!editable}
-                onSave={(date) => stage({ startDate: date })}
-              />
-              <span className={cn(conflict && CONFLICT_CLASS)} title={conflict ? t("tickets.dateConflict.tip") : undefined}>
-              <QuickDate
-                icon={Flag}
-                label={t("tickets.milestone.label")}
-                date={view.milestoneDate}
-                time={view.milestoneTime}
-                withTime
-                tone={cpHeat}
-                disabled={!editable}
-                min={view.startDate}
-                onSave={(date, time) => stage({ milestoneDate: date, milestoneTime: date ? time : null })}
-              />
-              </span>
+              <WatchReminder kind="ticket" id={tk.id} info={{ ...watch, stale: false }} canEdit={editable} />
               {(() => {
                 const badge = (
                   <span
                     className={cn(
-                      "flex items-center gap-1 rounded-full border border-transparent px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground/70",
-                      conflict && cn(CONFLICT_CLASS, "font-semibold text-red-300"),
+                      "flex items-center gap-1 rounded-full border border-transparent px-1.5 py-0.5 text-xs font-medium text-muted-foreground",
                       editable && "cursor-pointer hover:border-[color:var(--gold)]/60 hover:text-muted-foreground",
                     )}
                     title={`${t("tickets.fields.due")} · ${fullDate(view.dueAt)}`}
@@ -623,9 +584,8 @@ function TicketBody({
                 key: "planning",
                 icon: CalendarClock,
                 label: t("tickets.sections.planning"),
-                value: tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : shortDate(view.dueAt),
+                value: shortDate(view.dueAt),
                 more: [
-                  `${t("tickets.fields.start")} : ${tk.startDate ? shortDate(tk.startDate) : "—"}`,
                   `${t("tickets.fields.due")} : ${shortDate(view.dueAt)}`,
                   `${t("tickets.fields.hours")} : ${partial ? "…" : t("tickets.hoursValue", { hours: tk.hours.toLocaleString() })}`,
                   `${t("tickets.estimate.short")} : ${tk.estimate ? hm(tk.estimate.minutes / 60) : "—"}`,
@@ -714,10 +674,7 @@ function TicketBody({
                 )}
                 {key === "planning" && (
                   <dl className="space-y-3">
-                      <StartDate value={view} onChange={stage} />
-                      <CheckpointField value={view} tone={cpHeat} onChange={stage} />
-                      {/* the due date: the quiet one, the checkpoint is what counts */}
-                      <div className="flex gap-3 text-xs text-muted-foreground opacity-80">
+                      <div className="flex gap-3 text-xs text-muted-foreground">
                         <CalendarClock className="mt-0.5 size-3.5 shrink-0" />
                         <div className="min-w-0 flex-1">
                           <p className="text-[10px]">{t("tickets.fields.due")}</p>
@@ -793,12 +750,6 @@ function TicketBody({
           {tk.mergedInto && (
             <p className="flex items-start gap-2 rounded-xl border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-xs text-violet-200">
               <GitMerge className="mt-0.5 size-3.5 shrink-0" /> {t("tickets.merge.mergedInto", { number: tk.mergedInto.number })}
-            </p>
-          )}
-          {tk.startLocked && tk.startDate && tk.startDate > todayLocal() && (
-            <p className="flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-              <Lock className="mt-0.5 size-3.5 shrink-0" />{" "}
-              {t("tickets.startLock.notice", { date: shortDate(tk.startDate) })}
             </p>
           )}
         </div>
@@ -939,19 +890,6 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
-      {conflictOpen && view.milestoneDate && (
-      <Dialog open onOpenChange={setConflictOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-red-300">
-              <AlertTriangle className="size-5" /> {t("tickets.dateConflict.title")}
-            </DialogTitle>
-            <DialogDescription>{t("tickets.dateConflict.text", { cp: shortDate(view.milestoneDate), due: shortDate(view.dueAt) })}</DialogDescription>
-          </DialogHeader>
-          <Button onClick={() => setConflictOpen(false)}>{t("tickets.dateConflict.ok")}</Button>
-        </DialogContent>
-      </Dialog>
-      )}
       {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(false)} tk={tk} onDone={() => onClose()} />}
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={tk} />}
       {accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(false)} tk={tk} statuses={tk.options.statuses} />}
@@ -1708,208 +1646,12 @@ function Detail({ icon: Icon, label, children }: { icon: LucideIcon; label: stri
   );
 }
 
-/** Portal-only planned start date (Planning section, above the due date), saved right away. */
-/** The time on the start date (optional): saved when the field is left */
-export function StartTimeInput({
-  tk,
-  disabled,
-  onSave,
-  className,
-}: {
-  tk: Pick<TicketSummary, "startDate" | "startTime">;
-  disabled: boolean;
-  onSave: (time: string | null) => void;
-  className?: string;
-}) {
-  const { t } = useTranslation();
-  const [v, setV] = useState(tk.startTime ?? "");
-  useEffect(() => setV(tk.startTime ?? ""), [tk.startTime]);
-  const commit = () => {
-    const next = v || null;
-    if (next !== (tk.startTime ?? null)) onSave(next);
-  };
-  return (
-    <Input
-      type="time"
-      className={cn("mt-1 h-8 w-32", className)}
-      disabled={disabled}
-      value={v}
-      onChange={(e) => setV(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          commit();
-        }
-      }}
-      aria-label={t("tickets.startTime")}
-      title={t("tickets.startTimeHint")}
-    />
-  );
-}
-
-/** Today, YYYY-MM-DD (local) */
-const todayLocal = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-};
-
-function StartDate({
-  value,
-  onChange,
-}: {
-  value: { startDate: string | null; startTime: string | null; startLocked: boolean; milestoneDate: string | null; milestoneTime: string | null };
-  onChange: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean; milestoneDate?: string | null; milestoneTime?: string | null }) => void;
-}) {
-  const { t } = useTranslation();
-  const can = useCan();
-  const off = !can("tickets.edit");
-  return (
-    <div className="flex gap-3">
-      <CalendarPlus className="mt-0.5 size-4 shrink-0 text-primary" />
-      <div className="min-w-0 flex-1">
-        <dt className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <label htmlFor="start-date">{t("tickets.fields.start")}</label>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="rounded border border-[color:var(--gold)]/40 px-1 text-[9px] font-semibold text-primary">{t("tickets.portalTag")}</span>
-            </TooltipTrigger>
-            <TooltipContent className="max-w-60">{t("tickets.portalHint")}</TooltipContent>
-          </Tooltip>
-        </dt>
-        <dd>
-          <Input
-            id="start-date"
-            type="date"
-            className={cn("mt-0.5 h-8")}
-            disabled={off}
-            value={value.startDate ?? ""}
-            onChange={(e) => onChange({ startDate: e.target.value || null })}
-          />
-          {/* Restriction: nobody works on it before that day (off by default) */}
-          <label
-            className={cn("mt-1.5 flex w-fit items-center gap-2 rounded-md px-1 text-xs", !value.startDate && "opacity-60")}
-            title={t("tickets.startLock.hint")}
-          >
-            <Switch
-              checked={value.startLocked}
-              disabled={off || !value.startDate}
-              onCheckedChange={(v) => onChange({ startLocked: v })}
-              aria-label={t("tickets.startLock.label")}
-            />
-            <Lock className={cn("size-3.5", value.startLocked ? "text-amber-300" : "text-muted-foreground")} />
-            {t("tickets.startLock.label")}
-          </label>
-          {!value.startDate && <p className="mt-0.5 text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
-        </dd>
-      </div>
-    </div>
-  );
-}
-
-/**
- * The checkpoint (the goal day and time, between the start and the due date): the date that matters most, so it is the
- * big one of the Planning panel, with the hue of its state.
- */
-function CheckpointField({ value, tone, onChange }: { value: { startDate: string | null; milestoneDate: string | null; milestoneTime: string | null }; tone: string; onChange: (p: { milestoneDate?: string | null; milestoneTime?: string | null }) => void }) {
-  const { t } = useTranslation();
-  const can = useCan();
-  const off = !can("tickets.edit");
-  return (
-    <div className={cn("rounded-xl border p-2.5", CP_TONE[tone] ?? CP_TONE.none)} title={t("tickets.milestone.hint")}>
-      <label htmlFor="milestone-date" className="flex items-center gap-1.5 text-xs font-semibold">
-        <Flag className="size-3.5" /> {t("tickets.milestone.label")}
-      </label>
-      <div className="mt-2 flex flex-wrap gap-2">
-        <Input
-          id="milestone-date"
-          type="date"
-          className="h-9 min-w-0 flex-1 text-sm font-medium"
-          disabled={off}
-          min={value.startDate ?? undefined}
-          value={value.milestoneDate ?? ""}
-          onChange={(e) => onChange({ milestoneDate: e.target.value || null })}
-        />
-        <Input
-          type="time"
-          className="h-9 w-32 text-sm font-medium"
-          disabled={off}
-          value={value.milestoneTime ?? ""}
-          aria-label={t("tickets.milestone.time")}
-          onChange={(e) => onChange(e.target.value && !value.milestoneDate ? { milestoneDate: value.startDate ?? todayLocal(), milestoneTime: e.target.value } : { milestoneTime: e.target.value || null })}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** A day (and, for the checkpoint, a time) changed in place from the ticket's header */
-function QuickDate({ icon: Icon, label, date, time, withTime, tone, disabled, min, onSave }: { tone?: string; icon: LucideIcon; label: string; date: string | null; time?: string | null; withTime?: boolean; disabled: boolean; min?: string | null; onSave: (date: string | null, time: string | null) => void }) {
-  const { t } = useTranslation();
-  const [d, setD] = useState(date ?? "");
-  const [h, setH] = useState(time ?? "");
-  useEffect(() => setD(date ?? ""), [date]);
-  useEffect(() => setH(time ?? ""), [time]);
-  const shown = date ? shortDate(date) + (withTime && time ? ` ${time}` : "") : "—";
-  const badge = (
-    <span
-      title={label}
-      className={cn(
-        "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground",
-        tone && cn("gap-1.5 px-2.5 py-0.5 text-xs font-semibold", CP_TONE[tone] ?? CP_TONE.none),
-        !disabled && "cursor-pointer hover:border-[color:var(--gold)]/60",
-      )}
-    >
-      <Icon className="size-3" />
-      {tone && <span className="text-[10px] font-medium uppercase tracking-wide opacity-70">{label}</span>}
-      {shown}
-    </span>
-  );
-  if (disabled) return badge;
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <button type="button" aria-label={label}>
-          {badge}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 space-y-2">
-        <p className="text-sm font-semibold">{label}</p>
-        <div className="flex gap-2">
-          <Input type="date" className="h-8 min-w-0 flex-1" value={d} min={min ?? undefined} onChange={(e) => (setD(e.target.value), !withTime && onSave(e.target.value || null, null))} />
-          {withTime && <Input type="time" className="h-8 w-28 shrink-0" value={h} aria-label={t("tickets.milestone.time")} onChange={(e) => setH(e.target.value)} />}
-        </div>
-        {withTime && (
-          <div className="flex justify-between gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => onSave(null, null)}>
-              {t("tickets.quickClear")}
-            </Button>
-            <Button type="button" size="sm" disabled={!d} onClick={() => onSave(d, h || null)}>
-              {t("common.save")}
-            </Button>
-          </div>
-        )}
-        {!withTime && date && (
-          <Button type="button" variant="ghost" size="sm" onClick={() => onSave(null, null)}>
-            {t("tickets.quickClear")}
-          </Button>
-        )}
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 type Staged = {
   status?: string;
   priority?: string;
   queue?: string;
   dueAt?: string;
   assigneeId?: string | null;
-  startDate?: string | null;
-  startTime?: string | null;
-  startLocked?: boolean;
-  milestoneDate?: string | null;
-  milestoneTime?: string | null;
 };
 /** A field changed but not saved yet */
 export const MODIFIED = "ring-2 ring-[color:var(--gold)]/80 ring-offset-1 ring-offset-background";

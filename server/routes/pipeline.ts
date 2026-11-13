@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { cleanDirection } from "../lib/aiDirection.ts";
+import { resetWatch, setWatchDays, watchOf } from "../lib/watch.ts";
+import { WATCH_MAX_DAYS } from "../../shared/watch.ts";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import type { SQL } from "drizzle-orm";
@@ -68,6 +70,8 @@ async function cards(rows: Task[], viewerId: string) {
   const d = db();
   const ids = rows.map((r) => r.id);
   const co = await coAssignees(ids);
+  // the "no activity" reminder: a task changes its updatedAt on every note, time entry, step and edit
+  const quiet = await watchOf("task", rows.map((r) => ({ id: r.id, due: r.dueDate, activityAt: r.updatedAt, open: r.status !== "done" })));
   const listRows = await d
     .select({ id: schema.pipelineLists.id, name: schema.pipelineLists.name, shared: schema.pipelineLists.shared, ownerId: schema.pipelineLists.ownerId })
     .from(schema.pipelineLists)
@@ -152,6 +156,7 @@ async function cards(rows: Task[], viewerId: string) {
       subtasks: { done: k.filter((x) => x.status === "done").reduce((n, x) => n + x.n, 0), total: k.reduce((n, x) => n + x.n, 0) },
       completedAt: t.completedAt,
       updatedAt: t.updatedAt,
+      ...quiet.get(t.id),
     };
   });
 }
@@ -695,6 +700,21 @@ export const pipelineRoutes = new Hono<AppEnv>()
     const text = (q.q ?? "").trim().toLowerCase();
     const shown = text ? rows.filter((r) => `${r.title} ${r.notes} ${r.ticketNumber ?? ""}`.toLowerCase().includes(text)) : rows;
     return c.json(await cards(shown, a.user.id));
+  })
+
+  /** Opening the task, or the reset button: the count of quiet days starts again */
+  .post("/tasks/:id/watch/reset", async (c) => {
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    await resetWatch("task", t.id);
+    return c.json({ ok: true });
+  })
+
+  /** The reminder delay of this task in working days (null: the default) */
+  .put("/tasks/:id/watch", requirePermission("pipeline.edit"), async (c) => {
+    const t = await taskOr404(c, zUuid.parse(c.req.param("id")));
+    const p = await body(c, z.object({ days: z.number().int().min(1).max(WATCH_MAX_DAYS).nullable() }));
+    await setWatchDays("task", t.id, p.days);
+    return c.json({ ok: true, days: p.days });
   })
 
   .get("/tasks/:id", async (c) => {

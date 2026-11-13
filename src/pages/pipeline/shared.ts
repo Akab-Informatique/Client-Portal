@@ -35,12 +35,12 @@ export type TaskCard = {
   /** Cannot start or finish: the task it waits for is not done */
   waiting: boolean;
   dueDate: string | null;
-  dueTime: string | null;
-  startDate: string | null;
-  startTime: string | null;
-  checkpointDate: string | null;
-  checkpointTime: string | null;
-  /** No due day: only a checkpoint, the checklist is the work */
+  /** No time of day any more (kept optional: old data) */
+  dueTime?: string | null;
+  /** The "no activity" reminder (server) */
+  stale?: boolean;
+  watchDays?: number;
+  watchOwn?: number | null;
   kind: TaskKind;
   /** kind is continuous */
   continuous: boolean;

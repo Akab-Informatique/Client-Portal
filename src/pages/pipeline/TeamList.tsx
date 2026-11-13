@@ -1,3 +1,4 @@
+import { STALE_ROW } from "@/components/WatchReminder";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -81,8 +82,8 @@ export function TeamList({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   };
   const byStatus = useMemo(() => Object.fromEntries(STATUSES.map((s) => [s, (data ?? []).filter((x) => x.status === s)])) as Record<TaskStatus, TaskCard[]>, [data]);
   const everyTask = list === ALL_LISTS;
-  const byDue = (a: TaskCard, b: TaskCard) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || (a.dueTime ?? "").localeCompare(b.dueTime ?? "") || a.title.localeCompare(b.title);
-  const rows = (data ?? []).filter((x) => !x.parentId || (data ?? []).every((p) => p.id !== x.parentId) || done).sort(everyTask ? byDue : () => 0);
+  const byDue = (a: TaskCard, b: TaskCard) => (a.dueDate ?? "9999-99-99").localeCompare(b.dueDate ?? "9999-99-99") || a.title.localeCompare(b.title);
+  const rows = (data ?? []).filter((x) => !x.parentId || (data ?? []).every((p) => p.id !== x.parentId) || done).sort(byDue);
 
   const Row = ({ task, child }: { task: TaskCard; child?: boolean }) => <TaskRow task={task} child={child} wide={everyTask} editable={editable} onOpen={() => onOpenTask(task.id)} onPatch={(p) => patch.mutate({ id: task.id, patch: p })} people={people.data ?? []} />;
 
@@ -281,10 +282,8 @@ function Meta({ task, plain }: { task: TaskCard; /** the list and the due day ar
       {!plain && task.dueDate && (
         <span className={cn("flex items-center gap-1", late && "text-red-300")}>
           <CalendarClock className="size-3" /> {dayLabel(task.dueDate)}
-          {task.dueTime ? ` ${task.dueTime}` : ""}
         </span>
       )}
-      {task.startDate && task.startDate > todayYmd() && <span>{t("pipeline.startsOn", { date: dayLabel(task.startDate) })}</span>}
       {task.recurrence && (
         <span className="flex items-center gap-1" title={t("pipeline.recurring")}>
           <Repeat className="size-3" />
@@ -334,7 +333,7 @@ function Meta({ task, plain }: { task: TaskCard; /** the list and the due day ar
 export function TaskRow({ task, child, wide, todo, editable, onOpen, onPatch, people }: { task: TaskCard; child?: boolean; wide?: boolean; /** a private to-do: nobody else has it */ todo?: boolean; editable: boolean; onOpen: () => void; onPatch: (p: Record<string, unknown>) => void; people: { id: string; name: string }[] }) {
   const { t } = useTranslation();
   return (
-    <div className={cn("group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.06),transparent_60%)]", child && "py-2")}>
+    <div className={cn("group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.06),transparent_60%)]", child && "py-2", task.stale && task.status !== "done" && STALE_ROW)}>
       <Checkbox checked={task.status === "done"} disabled={!editable} onCheckedChange={(v) => onPatch({ status: v === true ? "done" : "todo" })} aria-label={t("pipeline.complete")} />
       <span className={cn("size-2 shrink-0 rounded-full", PRIORITY_STYLE[task.priority].dot)} title={t(`pipeline.priority.${task.priority}`)} />
       <button type="button" onClick={onOpen} className="min-w-0 flex-1 space-y-0.5 text-left">
@@ -347,7 +346,7 @@ export function TaskRow({ task, child, wide, todo, editable, onOpen, onPatch, pe
             <ListBadge name={task.listShared === false && task.listOwner ? t("pipeline.lists.personalOf", { name: task.listOwner }) : task.listName} shared={task.listShared} />
           </span>
           <span className={cn("hidden w-28 shrink-0 font-mono text-xs sm:block", task.dueDate && task.dueDate < todayYmd() && task.status !== "done" ? "text-red-300" : "text-muted-foreground")}>
-            {task.dueDate ? `${dayLabel(task.dueDate)}${task.dueTime ? ` ${task.dueTime}` : ""}` : "—"}
+            {task.dueDate ? dayLabel(task.dueDate) : "—"}
           </span>
         </>
       )}
@@ -409,7 +408,7 @@ export function TaskRow({ task, child, wide, todo, editable, onOpen, onPatch, pe
 function Card({ task, editable, onOpen, onStatus }: { task: TaskCard; editable: boolean; onOpen: () => void; onStatus: (s: TaskStatus) => void }) {
   const { t } = useTranslation();
   return (
-    <div className="rounded-xl border bg-background/50 p-2.5 transition-colors hover:border-[color:var(--gold)]/40">
+    <div className={cn("rounded-xl border bg-background/50 p-2.5 transition-colors hover:border-[color:var(--gold)]/40", task.stale && task.status !== "done" && STALE_ROW)}>
       <button type="button" onClick={onOpen} className="block w-full space-y-1 text-left">
         <span className="flex items-start gap-1.5">
           <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", PRIORITY_STYLE[task.priority].dot)} />

@@ -14,7 +14,8 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
 import { useCan, useMe } from "@/lib/session";
-import { cpState, CP_TONE, CONFLICT_CLASS, dateConflict, PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
+import { STALE_ROW } from "@/components/WatchReminder";
+import { PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 import { HiddenBadge, ManagedBadge } from "./managed";
 import { ProjCompactRow } from "@/pages/proj/ProjRows";
 import type { ProjectRow } from "@/pages/proj/shared";
@@ -82,13 +83,13 @@ export function LayoutSwitch({ value, onChange }: { value: Layout; onChange: (l:
 }
 
 // ── Compact: one short line per ticket ───────────────────────────────────────────
-export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "managed" | "hiddenFromDelegates" | "company" | "priorityKind" | "priorityLabel" | "milestoneDate" | "milestoneTime" | "dueAt" | "statusKind" | "statusLabel">;
+export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "managed" | "hiddenFromDelegates" | "company" | "priorityKind" | "priorityLabel" | "stale" | "dueAt" | "statusKind" | "statusLabel">;
 
 // Its columns, like the standard view's: moved and resized from the titles, kept on this computer
-const COMPACT_COLUMNS = ["ticket", "company", "priority", "milestone", "due", "status"] as const;
+const COMPACT_COLUMNS = ["ticket", "company", "priority", "due", "status"] as const;
 type CompactCol = (typeof COMPACT_COLUMNS)[number];
 const COMPACT_KEY = "akab.tickets.compact.columns.v1";
-const COMPACT_WIDTHS: Record<CompactCol, number> = { ticket: 240, company: 150, priority: 112, milestone: 176, due: 136, status: 152 };
+const COMPACT_WIDTHS: Record<CompactCol, number> = { ticket: 240, company: 150, priority: 112, due: 136, status: 152 };
 
 
 function readColumns<C extends string>(key: string, all: readonly C[]): { order: C[]; widths: Partial<Record<C, number>> } {
@@ -239,7 +240,7 @@ export function ColumnHeader<C extends string>({ cols, labels, style }: { cols: 
   );
 }
 
-/** Name, client, priority, checkpoint, due date and status — one line each. With `facets`, each of them is changed in place. */
+/** Name, client, priority, due date and status — one line each. With `facets`, each of them is changed in place. */
 export function CompactList({
   items,
   activeIds,
@@ -268,13 +269,8 @@ export function CompactList({
   const gridStyle: CSSProperties = { gridTemplateColumns: cols.template };
   const refresh = () => void qc.invalidateQueries({ queryKey: ["tickets"] });
   const patch = useMutation({ mutationFn: ({ id, ...p }: { id: number; priority?: string; status?: string; dueAt?: string }) => api.patch(`/tickets/${id}`, p), onSuccess: refresh, onError: (e) => toast.error(ticketErrorText(t, e)) });
-  const checkpoint = useMutation({
-    mutationFn: ({ id, date, time }: { id: number; date: string | null; time: string | null }) => api.put(`/tickets/${id}/start-date`, { milestoneDate: date, milestoneTime: date ? time : null }),
-    onSuccess: refresh,
-    onError: (e) => toast.error(ticketErrorText(t, e)),
-  });
   const select = "h-7 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1 text-xs outline-none hover:border-border focus:border-[color:var(--gold)]/60";
-  const labels: Record<CompactCol, string> = { ticket: t("tickets.fields.ticket"), company: t("tickets.fields.company"), priority: t("tickets.fields.priority"), milestone: t("tickets.fields.milestone"), due: t("tickets.fields.due"), status: t("tickets.fields.status") };
+  const labels: Record<CompactCol, string> = { ticket: t("tickets.fields.ticket"), company: t("tickets.fields.company"), priority: t("tickets.fields.priority"), due: t("tickets.fields.due"), status: t("tickets.fields.status") };
   return (
     <div className="overflow-x-auto">
       <div style={{ minWidth: cols.minWidth }}>
@@ -299,7 +295,7 @@ export function CompactList({
                 {tk.company.name}
               </span>
             );
-            const rowClass = cn("relative grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", ticketTint && "bg-[color:var(--gold)]/[0.035]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
+            const rowClass = cn(tk.stale && !activeIds.has(tk.id) && STALE_ROW, "relative grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", ticketTint && "bg-[color:var(--gold)]/[0.035]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
             if (edit && facets) {
               const dueDay = new Date(tk.dueAt);
               const dueValue = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, "0")}-${String(dueDay.getDate()).padStart(2, "0")}`;
@@ -318,18 +314,6 @@ export function CompactList({
                       </option>
                     ))}
                   </select>
-                ),
-                milestone: (
-                  <input
-                    type="datetime-local"
-                    className={cn(select, "font-mono font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "text-muted-foreground", dateConflict(tk) && CONFLICT_CLASS)}
-                    value={tk.milestoneDate ? `${tk.milestoneDate}T${tk.milestoneTime ?? "00:00"}` : ""}
-                    onChange={(e) => {
-                      const [date, time] = e.target.value.split("T");
-                      checkpoint.mutate({ id: tk.id, date: date || null, time: time || null });
-                    }}
-                    aria-label={t("tickets.milestone.label")}
-                  />
                 ),
                 due: (
                   <input
@@ -370,8 +354,7 @@ export function CompactList({
                   <span className="truncate">{txt.priority({ label: tk.priorityLabel, kind: tk.priorityKind })}</span>
                 </span>
               ),
-              milestone: <span className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground", dateConflict(tk) && CONFLICT_CLASS)}>{tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}</span>,
-              due: <span className={cn("whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/70", dateConflict(tk) && cn(CONFLICT_CLASS, "px-1.5 font-semibold text-red-300"))}>{shortDate(tk.dueAt)}</span>,
+              due: <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-muted-foreground/70">{shortDate(tk.dueAt)}</span>,
               status: (
                 <span className={cn("inline-flex max-w-full items-center gap-1.5 truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_STYLE[tk.statusKind])}>
                   <span className="size-1.5 shrink-0 rounded-full bg-current" />
@@ -415,12 +398,12 @@ function moveCard(cards: Card[], ticketId: number, boardId: string | null, befor
   return [...rest.filter((c) => c.boardId !== boardId), ...target.map((id, i) => ({ ticketId: id, boardId, position: i }))];
 }
 
-// ── Kanban, three ways: by status, by checkpoint date, or on my own boards ───────
-type KanbanBy = "status" | "checkpoint" | "custom";
-const KANBAN_BY = ["status", "checkpoint", "custom"] as const;
+// ── Kanban, two ways: by status, or on my own boards ───────
+type KanbanBy = "status" | "custom";
+const KANBAN_BY = ["status", "custom"] as const;
 const BY_KEY = "akab.tickets.kanbanBy";
 
-/** The Kanban: the columns are the statuses, the checkpoint dates, or boards the technician made (their own). */
+/** The Kanban: the columns are the statuses, or boards the technician made (their own). */
 export function KanbanBoard({ items, canEdit, onOpen, facets }: { items: TicketSummary[]; canEdit: boolean; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
   const { t } = useTranslation();
   const [by, setByState] = useState<KanbanBy>(() => {
@@ -457,43 +440,21 @@ export function KanbanBoard({ items, canEdit, onOpen, facets }: { items: TicketS
   );
 }
 
-const ymdOf = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const plus = (n: number) => {
-  const d = new Date();
-  d.setDate(d.getDate() + n);
-  return d;
-};
 type FieldColumn = { id: string; label: string; items: TicketSummary[]; apply: (id: number) => Promise<unknown> | null };
 
-/** Columns that are the tickets' own fields: dropping a card changes the ticket (its status, or its checkpoint date). */
-function FieldBoard({ by, items, canEdit, onOpen, facets }: { by: "status" | "checkpoint"; items: TicketSummary[]; canEdit: boolean; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
+/** Columns that are the tickets' own fields: dropping a card changes the ticket (its status). */
+function FieldBoard({ by, items, canEdit, onOpen, facets }: { by: "status"; items: TicketSummary[]; canEdit: boolean; onOpen: (id: number) => void; facets?: TicketList["facets"] }) {
   const { t } = useTranslation();
   const txt = useChoiceText();
   const qc = useQueryClient();
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
-  const today = ymdOf(new Date());
-  const tomorrow = ymdOf(plus(1));
-  const sunday = ymdOf(plus((7 - new Date().getDay()) % 7));
-  const friday = ymdOf(plus(Math.max(2, (5 - new Date().getDay() + 7) % 7)));
-  const checkpoint = (date: string | null) => (id: number) => api.put(`/tickets/${id}/start-date`, { milestoneDate: date });
   const columns: FieldColumn[] = useMemo(() => {
-    const byDue = (a: TicketSummary, b: TicketSummary) => (a.milestoneDate ?? "9999").localeCompare(b.milestoneDate ?? "9999") || a.dueAt.localeCompare(b.dueAt);
-    if (by === "status")
-      return (facets?.statuses ?? [])
-        .filter((s) => !s.hidden)
-        .map((s) => ({ id: s.value, label: txt.status(s), items: items.filter((x) => x.status === s.value).sort(byDue), apply: (id: number) => api.patch(`/tickets/${id}`, { status: s.value }) }));
-    const bucket = (x: TicketSummary) => (!x.milestoneDate ? "none" : x.milestoneDate < today ? "late" : x.milestoneDate === today ? "today" : x.milestoneDate === tomorrow ? "tomorrow" : x.milestoneDate <= sunday ? "week" : "later");
-    const defs: [string, string | null, ((id: number) => Promise<unknown>) | null][] = [
-      ["late", null, null],
-      ["today", today, checkpoint(today)],
-      ["tomorrow", tomorrow, checkpoint(tomorrow)],
-      ["week", friday, checkpoint(friday)],
-      ["later", ymdOf(plus(14)), checkpoint(ymdOf(plus(14)))],
-      ["none", null, checkpoint(null)],
-    ];
-    return defs.map(([id, , apply]) => ({ id, label: t(`tickets.kanban.cp_${id}`), items: items.filter((x) => bucket(x) === id).sort(byDue), apply: apply as FieldColumn["apply"] }));
+    const byDue = (a: TicketSummary, b: TicketSummary) => a.dueAt.localeCompare(b.dueAt);
+    return (facets?.statuses ?? [])
+      .filter((s) => !s.hidden)
+      .map((s) => ({ id: s.value, label: txt.status(s), items: items.filter((x) => x.status === s.value).sort(byDue), apply: (id: number) => api.patch(`/tickets/${id}`, { status: s.value }) }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [by, items, facets, today]);
+  }, [by, items, facets]);
   const move = useMutation({
     mutationFn: ({ id, col }: { id: number; col: FieldColumn }) => col.apply(id) ?? Promise.resolve(),
     onSettled: () => void qc.invalidateQueries({ queryKey: ["tickets"] }),
@@ -791,7 +752,7 @@ function KanbanCard({ tk, canEdit, onOpen }: { tk: TicketSummary; canEdit: boole
       {...attributes}
       {...listeners}
       onClick={onOpen}
-      className="cursor-pointer touch-none select-none rounded-lg border bg-background/70 p-2.5 text-left shadow-sm transition-colors hover:border-[color:var(--gold)]/40"
+      className={cn("cursor-pointer touch-none select-none rounded-lg border bg-background/70 p-2.5 text-left shadow-sm transition-colors hover:border-[color:var(--gold)]/40", tk.stale && STALE_ROW)}
     >
       <p className="flex items-baseline gap-1.5 text-sm">
         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{tk.number}</span>

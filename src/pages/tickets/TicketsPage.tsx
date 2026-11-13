@@ -1,5 +1,5 @@
 import { forwardRef, Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ConfirmRow, DueEditor } from "./DueEditor";
+import { DueEditor } from "./DueEditor";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -38,7 +38,7 @@ import {
   UserX,
 
   X,
-  type LucideIcon, CalendarPlus, Star, Lock, GitMerge, ListChecks, Flag, AlertTriangle, Hand, FolderPlus } from "lucide-react";
+  type LucideIcon, CalendarPlus, Star, GitMerge, ListChecks, Flag, AlertTriangle, Hand, FolderPlus } from "lucide-react";
 import { HiddenBadge, ManagedBadge, useManagedCompanies, useTakeOver, type ManagedCompany } from "./managed";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -73,7 +73,8 @@ import { AcceptDialog } from "./AcceptDialog";
 import { AddToDayDialog } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
-import { cpState, CP_TONE, CONFLICT_CLASS, dateConflict, heatState, FILTER_KEYS, PRIORITY_STYLE, dueGlow, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
+import { STALE_ROW } from "@/components/WatchReminder";
+import { FILTER_KEYS, PRIORITY_STYLE, dueGlow, dueState, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
 import { AgendaCard } from "./Planning";
@@ -113,10 +114,10 @@ export function TicketsPage() {
   const [layout, setLayout] = useTicketLayout();
   const [params, setParams] = useSearchParams();
   const view = (VIEWS.includes(params.get("view") as View) ? params.get("view") : "mine") as View;
-  // the sort this person opens the list on (the checkpoint unless they chose another; kept on their account)
-  const [sortDefault, setSortDefault] = useSortDefault<string>("tickets.list", "milestone");
+  // the sort this person opens the list on (the due date unless they chose another; kept on their account)
+  const [sortDefault, setSortDefault] = useSortDefault<string>("tickets.list", "due");
   useEffect(() => {
-    if (sortDefault === "milestone" || params.get("sort")) return;
+    if (sortDefault === "due" || params.get("sort")) return;
     setParams((q) => {
       q.set("sort", sortDefault);
       return q;
@@ -323,9 +324,9 @@ export function TicketsPage() {
           )}
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <LayoutSwitch value={layout} onChange={setLayout} />
-            <SortMenu value={params.get("sort") ?? "milestone"} aiPlan={data?.aiPlan ?? null} onChange={(v) => {
-                set({ sort: v === "milestone" ? null : v });
-                setSortDefault(v === "milestone" ? null : v);
+            <SortMenu value={params.get("sort") ?? "due"} aiPlan={data?.aiPlan ?? null} onChange={(v) => {
+                set({ sort: v === "due" ? null : v });
+                setSortDefault(v === "due" ? null : v);
               }} />
           </div>
         </div>
@@ -414,12 +415,6 @@ export function TicketsPage() {
             ticket: t("tickets.fields.ticket"),
             status: t("tickets.fields.status"),
             company: t("tickets.fields.company"),
-            start: (
-              <span className="inline-flex flex-wrap items-center gap-1">
-                {t("tickets.fields.start")} <PortalTag />
-              </span>
-            ),
-            milestone: t("tickets.fields.milestone"),
             due: t("tickets.fields.due"),
             priority: t("tickets.fields.priority"),
             assignee: t("tickets.fields.assignee"),
@@ -992,7 +987,7 @@ function TicketRow({
   const { t } = useTranslation();
   const txt = useChoiceText();
   const me = useMe();
-  const heat = heatState(tk.dueAt, tk.statusKind, tk);
+  const heat = dueState(tk.dueAt, tk.statusKind);
   const [dueOpen, setDueOpen] = useState(false);
   const used = tk.statusKind === "complete" ? 0 : slaUsed(tk);
   // Load the ticket ahead only when the pointer rests on it (not when it just passes over)
@@ -1021,6 +1016,8 @@ function TicketRow({
           "hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]",
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
           picked && "bg-[color:var(--gold)]/[0.07]",
+          // a quiet ticket (nothing happened for its delay) flashes, unless it is the one open now
+          tk.stale && !active && STALE_ROW,
           // a faint amber tint: a ticket is gold, a project violet (see ProjRow)
           !picked && "bg-[color:var(--gold)]/[0.035]",
           // Critical pops and moves, high pops (open tickets only)
@@ -1032,7 +1029,7 @@ function TicketRow({
         <span className="absolute left-[18px] top-1/2 z-10 -translate-y-1/2" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           <Checkbox checked={picked} onCheckedChange={onPick} aria-label={t("tickets.bulk.pick", { number: tk.number })} className="size-3.5 rounded-[4px] border-muted-foreground/50" />
         </span>
-        {/* The line on the left: it glows with the checkpoint moment (the due date when there is none) and opens the row's menu (accept the ticket, open it, delete it) */}
+        {/* The line on the left: it glows with the due date and opens the row's menu (accept the ticket, open it, delete it) */}
         {(editable || onDelete || onMerge || onAddDay || onTake) && (
           // out of the grid (absolute): it must not take a column of the row
           <span className="absolute inset-y-0 left-0 z-10 flex" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
@@ -1114,7 +1111,7 @@ function TicketRow({
           </span>
         )}
         {/* Due date: a glowing hue fading out behind the number and title */}
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind, 1, tk)} />
+        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind, 1)} />
         <span className="min-w-0 xl:[order:var(--o-ticket)]">
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className="shrink-0 rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-mono text-[11px] font-semibold text-primary">{tk.number}</span>
@@ -1159,22 +1156,11 @@ function TicketRow({
             <span className="block break-words leading-snug">{tk.company.name}</span>
             {tk.contact && <span className="block break-words text-[11px] leading-snug text-muted-foreground">{tk.contact}</span>}
           </span>
-          <span className="min-w-0 xl:[order:var(--o-start)]">
-            <Stop>
-              <StartCell tk={tk} editable={editable} />
-            </Stop>
-          </span>
-          {/* the goal date between the start and the final due date (changed in the ticket's Planning) */}
-          <span className="min-w-0 xl:[order:var(--o-milestone)]" title={t("tickets.milestone.hint")}>
-            <Stop>
-              <CheckpointCell tk={tk} editable={editable} />
-            </Stop>
-          </span>
           <span className="min-w-0 xl:[order:var(--o-due)]">
             {(() => {
               const label = (
                 <span
-                  className={cn("block whitespace-nowrap rounded px-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70", editable && "hover:bg-accent/60 hover:text-muted-foreground", dateConflict(tk) && cn(CONFLICT_CLASS, "font-semibold text-red-300"))}
+                  className={cn("block whitespace-nowrap rounded px-0.5 font-mono text-[11px] tabular-nums text-muted-foreground/70", editable && "hover:bg-accent/60 hover:text-muted-foreground")}
                 >
                   {shortDate(tk.dueAt)}
                 </span>
@@ -1428,7 +1414,7 @@ function MultiFilter({ label, param, options, params, set, searchable }: { label
   );
 }
 
-const MORE_KEYS = ["priority", "dueFrom", "dueTo", "startFrom", "startTo"] as const;
+const MORE_KEYS = ["priority", "dueFrom", "dueTo"] as const;
 
 /** Less frequent filters in one panel: client, queue, start date, due date. */
 function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearchParams; set: SetFn }) {
@@ -1447,7 +1433,7 @@ function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearc
             className={cn("rounded-md px-2 py-1 font-medium", tab === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")}
           >
             {k === "dates" ? t("tickets.dates") : t("tickets.fields.priority")}
-            {(k === "dates" ? ["dueFrom", "dueTo", "startFrom", "startTo"].some((x) => params.get(x)) : params.get(k)) && (
+            {(k === "dates" ? ["dueFrom", "dueTo"].some((x) => params.get(x)) : params.get(k)) && (
               <span className="ml-1 inline-block size-1.5 rounded-full bg-[color:var(--gold)] align-middle" />
             )}
           </button>
@@ -1455,7 +1441,6 @@ function MoreFilters({ data, params, set }: { data: TicketList; params: URLSearc
       </div>
       {tab === "dates" && (
         <div className="divide-y">
-          <DateRange from="startFrom" to="startTo" title={t("tickets.fields.start")} tag params={params} set={set} />
           <DateRange from="dueFrom" to="dueTo" title={t("tickets.fields.due")} params={params} set={set} />
         </div>
       )}
@@ -1505,7 +1490,7 @@ function SortMenu({ value, onChange, aiPlan }: { value: string; onChange: (v: st
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-48 p-1">
-        {["milestone", "due", "priorities", "priority", "start", "updated"].map((s) => (
+        {["due", "priorities", "priority", "updated"].map((s) => (
           <button
             key={s}
             type="button"
@@ -1615,11 +1600,11 @@ function TeamFilter({ technicians, params, set }: { technicians: TicketList["fac
 }
 
 // ── Columns of the list: each technician resizes and moves them (kept on this computer) ──
-const TICKET_COLUMNS = ["ticket", "status", "company", "start", "milestone", "due", "priority", "assignee", "secondary"] as const;
+const TICKET_COLUMNS = ["ticket", "status", "company", "due", "priority", "assignee", "secondary"] as const;
 type ColumnId = (typeof TICKET_COLUMNS)[number];
-const COLS_KEY = "akab.tickets.columns.v2";
+const COLS_KEY = "akab.tickets.columns.v3";
 /** Usual widths (px); the ticket column is elastic (at least this, takes the rest) */
-const DEFAULT_WIDTHS: Record<ColumnId, number> = { ticket: 220, status: 144, company: 140, start: 64, milestone: 124, due: 104, priority: 86, assignee: 132, secondary: 64 };
+const DEFAULT_WIDTHS: Record<ColumnId, number> = { ticket: 220, status: 144, company: 140, due: 104, priority: 86, assignee: 132, secondary: 64 };
 const COL_MIN = 56;
 const COL_MAX = 480;
 type ColumnPrefs = { order: ColumnId[]; widths: Partial<Record<ColumnId, number>> };
@@ -1627,11 +1612,6 @@ type ColumnPrefs = { order: ColumnId[]; widths: Partial<Record<ColumnId, number>
 function readColumns(): ColumnPrefs {
   try {
     const v = JSON.parse(localStorage.getItem(COLS_KEY) ?? "null") as ColumnPrefs | null;
-    // a column added later (the milestone) takes its usual place, after the start; what a person arranged stays
-    if (v && Array.isArray(v.order) && !v.order.includes("milestone")) {
-      const at = v.order.indexOf("start");
-      v.order = at >= 0 ? [...v.order.slice(0, at + 1), "milestone", ...v.order.slice(at + 1)] : [...v.order, "milestone"];
-    }
     if (v && Array.isArray(v.order) && v.order.length === TICKET_COLUMNS.length && TICKET_COLUMNS.every((c) => v.order.includes(c))) return { order: v.order, widths: v.widths ?? {} };
   } catch {
     /* defaults */
@@ -1889,7 +1869,7 @@ function AiPlanButton({ visibleIds }: { visibleIds: number[] }) {
       <Button variant="outline" size="icon" onClick={() => setAssistant(true)} disabled={run.isPending} className="border-violet-500/40 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20" aria-label={t("tickets.assistant.title")} title={t("tickets.assistant.title")}>
         {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
       </Button>
-      {assistant && <AssistantDialog visibleIds={visibleIds} onClose={() => setAssistant(false)} onPlan={() => run.mutate()} onSort={(v) => setParams((q) => { if (v === "milestone") q.delete("sort"); else q.set("sort", v); return q; }, { replace: true })} />}
+      {assistant && <AssistantDialog visibleIds={visibleIds} onClose={() => setAssistant(false)} onPlan={() => run.mutate()} onSort={(v) => setParams((q) => { if (v === "due") q.delete("sort"); else q.set("sort", v); return q; }, { replace: true })} />}
       <Dialog open={Boolean(plan)} onOpenChange={(o) => !o && setPlan(null)}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -1985,148 +1965,10 @@ function filterLabel(key: string, value: string, data: TicketList | undefined, t
       return t("tickets.metricsHint.attention");
     case "dueFrom":
     case "dueTo":
-    case "startFrom":
-    case "startTo":
       return shortDate(value);
     default:
       return parts.join(", ");
   }
-}
-
-/** The start date from the list: a day (or none), its time and the restriction, saved by ✓. */
-function StartCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const current = { startDate: tk.startDate ?? null, startTime: tk.startTime ?? null, startLocked: Boolean(tk.startLocked) };
-  const [draft, setDraft] = useState(current);
-  const save = useMutation({
-    mutationFn: (p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean }) => api.put(`/tickets/${tk.id}/start-date`, p),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["tickets"] });
-      toast.success(t("common.saved"));
-      setOpen(false);
-    },
-    onError: (e) => toast.error(ticketErrorText(t, e)),
-  });
-  const confirm = () => {
-    const p: { startDate?: string | null; startTime?: string | null; startLocked?: boolean } = {};
-    for (const k of ["startDate", "startTime", "startLocked"] as const) if (draft[k] !== current[k]) Object.assign(p, { [k]: draft[k] });
-    if (Object.keys(p).length) save.mutate(p);
-    else setOpen(false);
-  };
-  const label = (
-    <span className={cn("flex items-center gap-1 whitespace-nowrap rounded px-0.5 font-mono text-xs tabular-nums text-muted-foreground", editable && "hover:bg-accent/60")}>
-      {tk.startDate ? shortDate(tk.startDate) : "—"}
-      {tk.startLocked && <Lock className="size-3 shrink-0 text-amber-300" aria-label={t("tickets.startLock.on")} />}
-    </span>
-  );
-  if (!editable) return label;
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(o) => {
-        // each opening starts from the ticket as it is
-        if (o) setDraft(current);
-        setOpen(o);
-      }}
-    >
-      <PopoverTrigger asChild>
-        <button type="button" className="text-left" aria-label={t("tickets.fields.start")} title={t("tickets.fields.start")}>
-          {label}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 space-y-2">
-        <p className="text-sm font-semibold">
-          {t("tickets.fields.start")} · <span className="font-mono text-xs text-muted-foreground">{tk.number}</span>
-        </p>
-        <div className="flex gap-2">
-          <Input
-            type="date"
-            className="h-8 flex-1"
-            autoFocus
-            disabled={save.isPending}
-            value={draft.startDate ?? ""}
-            onChange={(e) => setDraft((d) => (e.target.value ? { ...d, startDate: e.target.value } : { startDate: null, startTime: null, startLocked: false }))}
-            aria-label={t("tickets.fields.start")}
-          />
-          {draft.startDate && (
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-8"
-              disabled={save.isPending}
-              onClick={() => setDraft({ startDate: null, startTime: null, startLocked: false })}
-            >
-              {t("tickets.startClear")}
-            </Button>
-          )}
-        </div>
-        <label className={cn("flex items-center gap-2 text-xs", !draft.startDate && "opacity-60")} title={t("tickets.startLock.hint")}>
-          <Switch
-            checked={draft.startLocked}
-            disabled={save.isPending || !draft.startDate}
-            onCheckedChange={(v) => setDraft((d) => ({ ...d, startLocked: v }))}
-            aria-label={t("tickets.startLock.label")}
-          />
-          <Lock className={cn("size-3.5", draft.startLocked ? "text-amber-300" : "text-muted-foreground")} />
-          {t("tickets.startLock.label")}
-        </label>
-        {!draft.startDate && <p className="text-[10px] text-muted-foreground">{t("tickets.startLock.needsDate")}</p>}
-        <ConfirmRow saving={save.isPending} onSave={confirm} onCancel={() => setOpen(false)} />
-      </PopoverContent>
-    </Popover>
-  );
-}
-
-/** The checkpoint from the list: a day and a time, saved by ✓. */
-function CheckpointCell({ tk, editable }: { tk: TicketSummary; editable: boolean }) {
-  const { t } = useTranslation();
-  const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const current = { date: tk.milestoneDate ?? "", time: tk.milestoneTime ?? "" };
-  const [draft, setDraft] = useState(current);
-  const save = useMutation({
-    mutationFn: () => api.put(`/tickets/${tk.id}/start-date`, { milestoneDate: draft.date || null, milestoneTime: draft.date ? draft.time || null : null }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["tickets"] });
-      toast.success(t("common.saved"));
-      setOpen(false);
-    },
-    onError: (e) => toast.error(ticketErrorText(t, e)),
-  });
-  const label = (
-    <span className={cn("block w-fit whitespace-nowrap rounded-full border px-2 py-0.5 font-mono text-xs font-semibold tabular-nums", tk.milestoneDate ? CP_TONE[cpState(tk)] : "border-transparent font-normal text-muted-foreground", editable && "hover:brightness-125", dateConflict(tk) && CONFLICT_CLASS)}>
-      {tk.milestoneDate ? `${shortDate(tk.milestoneDate)}${tk.milestoneTime ? ` ${tk.milestoneTime}` : ""}` : "—"}
-    </span>
-  );
-  if (!editable) return label;
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(o) => {
-        if (o) setDraft(current);
-        setOpen(o);
-      }}
-    >
-      <PopoverTrigger asChild>
-        <button type="button" className="text-left" aria-label={t("tickets.milestone.label")} title={t("tickets.milestone.hint")}>
-          {label}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 space-y-2">
-        <p className="text-sm font-semibold">
-          {t("tickets.milestone.label")} · <span className="font-mono text-xs text-muted-foreground">{tk.number}</span>
-        </p>
-        <div className="flex gap-2">
-          <Input type="date" className="h-8 min-w-0 flex-1" autoFocus disabled={save.isPending} value={draft.date} min={tk.startDate ?? undefined} onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value, time: e.target.value ? d.time : "" }))} aria-label={t("tickets.milestone.label")} />
-          <Input type="time" className="h-8 w-28 shrink-0" disabled={save.isPending} value={draft.time} onChange={(e) => setDraft((d) => ({ ...d, time: e.target.value, date: d.date || (e.target.value ? new Date().toLocaleDateString("en-CA") : "") }))} aria-label={t("tickets.milestone.time")} />
-        </div>
-        <ConfirmRow saving={save.isPending} onSave={() => save.mutate()} onCancel={() => setOpen(false)} />
-      </PopoverContent>
-    </Popover>
-  );
 }
 
 /**

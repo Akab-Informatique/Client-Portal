@@ -13,6 +13,8 @@ import { listQuotes } from "../lib/quotes.ts";
 import { archiveProjects, billProj, importArchiveProject, MAX_FILE_BYTES, pendingFiles, ProjBillError, projBilling, projectFromQuote, projectFromTicket, takeFiles } from "../lib/projBilling.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { ticketScopeOf } from "../lib/selfManaged.ts";
+import { resetWatch, setWatchDays } from "../lib/watch.ts";
+import { WATCH_MAX_DAYS } from "../../shared/watch.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { hourlyRateOf } from "../lib/contracts.ts";
@@ -412,6 +414,21 @@ export const projRoutes = new Hono<AppEnv>()
       }
     }
     return c.json({ ...(await viewFor(await loadProj(row.id), a)), billed }, 201);
+  })
+
+  /** Opening the project, or the reset button: the count of quiet days starts again */
+  .post("/:id/watch/reset", requirePermission("proj.view"), async (c) => {
+    const p = await loadProj(c.req.param("id"));
+    await resetWatch("proj", p.id);
+    return c.json({ ok: true });
+  })
+
+  /** The reminder delay of this project in working days (null: the default) */
+  .put("/:id/watch", requirePermission("proj.edit"), async (c) => {
+    const p = await loadProj(c.req.param("id"));
+    const w = await body(c, z.object({ days: z.number().int().min(1).max(WATCH_MAX_DAYS).nullable() }));
+    await setWatchDays("proj", p.id, w.days);
+    return c.json({ ok: true, days: w.days });
   })
 
   /** The opened project */

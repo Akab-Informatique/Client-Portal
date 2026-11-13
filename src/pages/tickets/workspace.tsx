@@ -17,7 +17,7 @@ import { dueGlow, priorityGlow, usePresence, type PriorityKind as Priority, type
  * going to another page). Minimized tickets keep their presence: the others
  * still see that you are on them. Kept for the browser tab (sessionStorage).
  */
-type Docked = { id: number; number: string; title: string; priority?: Priority; dueAt?: string; statusKind?: StatusKind; milestoneDate?: string | null; milestoneTime?: string | null };
+type Docked = { id: number; number: string; title: string; priority?: Priority; dueAt?: string; statusKind?: StatusKind };
 type Ws = {
   openId: number | null;
   docked: Docked[];
@@ -74,7 +74,7 @@ export function TicketWorkspaceProvider({ enabled, children }: { enabled: boolea
     setDocked((d) =>
       [
         ...d.filter((x) => x.id !== tk.id),
-        { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind, dueAt: tk.dueAt, statusKind: tk.statusKind, milestoneDate: tk.milestoneDate, milestoneTime: tk.milestoneTime },
+        { id: tk.id, number: tk.number, title: tk.title, priority: tk.priorityKind, dueAt: tk.dueAt, statusKind: tk.statusKind },
       ].slice(-6),
     );
     setOpenId(null);
@@ -289,7 +289,7 @@ function DockItem({
   const pos = draggable ? (live ?? (place.x !== undefined && place.y !== undefined ? place : null)) : null;
   const size = compact ? { w: 104, h: 116 } : { w: 288, h: 52 };
   const at2 = pos ? clamp(pos.x!, pos.y!, size.w, size.h) : null;
-  const glow = d.dueAt && d.statusKind ? dueGlow(d.dueAt, d.statusKind, 0.9, d) : priorityGlow(d.priority ?? "medium", 0.9);
+  const glow = d.dueAt && d.statusKind ? dueGlow(d.dueAt, d.statusKind, 0.9) : priorityGlow(d.priority ?? "medium", 0.9);
   const running = timer?.state === "running";
 
   const controls = (

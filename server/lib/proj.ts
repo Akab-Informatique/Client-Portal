@@ -6,6 +6,7 @@ import { escapeHtml, sendMail } from "./mail.ts";
 import { labourType, editable, sheetOf, weekStartOf } from "./timesheets.ts";
 import { splitBillable } from "./hr.ts";
 import { zUuid } from "./validate.ts";
+import { watchOf } from "./watch.ts";
 import type { ProjQuoteSnapshot } from "../db/schema.ts";
 
 /**
@@ -36,6 +37,9 @@ export type ProjectView = {
   taskDone: number;
   memberIds: string[];
   updatedAt: string;
+  stale?: boolean;
+  watchDays?: number;
+  watchOwn?: number | null;
 };
 
 export type TaskView = {
@@ -215,7 +219,7 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
     clientIds.length ? d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, clientIds)) : Promise.resolve([]),
     namesOf(rows.map((r) => r.leadId)),
     d.select({ projectId: schema.projMembers.projectId, userId: schema.projMembers.userId }).from(schema.projMembers).where(inArray(schema.projMembers.projectId, ids)),
-    d.select({ projectId: schema.projTasks.projectId, status: schema.projTasks.status }).from(schema.projTasks).where(inArray(schema.projTasks.projectId, ids)),
+    d.select({ projectId: schema.projTasks.projectId, status: schema.projTasks.status, updatedAt: schema.projTasks.updatedAt }).from(schema.projTasks).where(inArray(schema.projTasks.projectId, ids)),
     d
       .select({ projectId: schema.timesheetEntries.projId, h: sql<number>`sum(${schema.timesheetEntries.hoursX100})::int` })
       .from(schema.timesheetEntries)
@@ -223,6 +227,14 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
       .groupBy(schema.timesheetEntries.projId),
   ]);
   const clientName = new Map(clients.map((c) => [c.id, c.name]));
+  // the last activity: the project's own (notes, time, edits) or a task's
+  const quiet = await watchOf(
+    "proj",
+    rows.map((p) => {
+      const lastTask = tasks.filter((t) => t.projectId === p.id).reduce<Date>((m, t) => (t.updatedAt > m ? t.updatedAt : m), p.updatedAt);
+      return { id: p.id, due: p.dueDate, activityAt: lastTask, open: p.status === "planning" || p.status === "active" };
+    }),
+  );
   return rows.map((p) => {
     const worked = hours.find((h) => h.projectId === p.id)?.h ?? 0;
     const mine = tasks.filter((t) => t.projectId === p.id);
@@ -243,6 +255,7 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
       taskDone: mine.filter((t) => t.status === "done").length,
       memberIds: members.filter((m) => m.projectId === p.id).map((m) => m.userId),
       updatedAt: p.updatedAt.toISOString(),
+      ...quiet.get(p.id),
     };
   });
 }

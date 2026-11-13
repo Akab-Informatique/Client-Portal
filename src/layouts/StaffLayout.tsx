@@ -23,6 +23,7 @@ import { Logo, LogoMark } from "@/components/brand/Logo";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { CommandPalette } from "@/components/CommandPalette";
 import { AssistantButton } from "@/components/assistant/AssistantButton";
+import { WhatsNewButton } from "@/components/WhatsNew";
 import { TodoBar } from "@/pages/pipeline/TodoBar";
 import { ViewClientPicker, ViewMenuItems } from "@/components/ViewSwitcher";
 import { NotificationBell } from "@/components/NotificationBell";
@@ -425,6 +426,7 @@ function TopBar({ onMenu }: { onMenu: () => void }) {
       </Button>
       <AssistantButton />
       <div className="ml-auto flex items-center gap-3">
+        <WhatsNewButton />
         <QuickAdd />
         <NotificationBell />
         <LanguageToggle persist className="hidden sm:flex" />

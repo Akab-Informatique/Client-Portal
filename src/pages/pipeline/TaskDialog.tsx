@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ListTree, BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Minus, Paperclip, PlayCircle, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
+import { ListTree, BellRing, Check, CalendarClock, CalendarPlus, CheckCircle2, CircleDashed, Clock3, ListChecks, Loader2, Lock, MessageSquare, Minus, Paperclip, Repeat, Tag, Trash2, UserRound, Workflow, Ticket as TicketIcon, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AddToDayDialog } from "@/pages/tickets/AddToDayDialog";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -21,6 +21,7 @@ import { newStep, TaskSteps, type Step } from "./TaskSteps";
 import { TaskNotify } from "./TaskNotify";
 import { PickEntryDialog, TaskActivity } from "./TaskActivity";
 import { todoDock } from "@/lib/todoDock";
+import { WatchReminder, useWatchOnOpen } from "@/components/WatchReminder";
 
 const selectCls = "h-9 w-full rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40";
 const KNOWN_ERRORS = ["task_blocked", "task_open_children", "task_cycle", "invalid_assignee", "invalid_ticket", "forbidden", "checklist_open", "item_blocked", "item_not_started", "item_cycle", "item_has_done_dependents", "item_invalid", "no_recipient"];
@@ -51,9 +52,6 @@ type Values = {
   recurrence: Recurrence | null;
   remindEveryDays: number | null;
   dueDate: string | null;
-  startDate: string | null;
-  checkpointDate: string | null;
-  checkpointTime: string | null;
   estimateMinutes: number | null;
   tags: string[];
   visibility: Visibility;
@@ -95,6 +93,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   const can = useCan();
   const confirm = useConfirm();
   const isNew = !taskId;
+  useWatchOnOpen("task", taskId);
   const editable = can("pipeline.edit");
   const people = usePeople();
   const open = useOpenTasks();
@@ -146,7 +145,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
 
   // ── a new task: its values and steps stay here until "Create" ──
   const lists = useTaskLists();
-  const [f, setF] = useState<Values & { waitsOn: string }>({ listId: defaults?.listId ?? "", kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, startDate: null, checkpointDate: null, checkpointTime: null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
+  const [f, setF] = useState<Values & { waitsOn: string }>({ listId: defaults?.listId ?? "", kind: "normal", recurrence: null, remindEveryDays: null, dueDate: defaults?.dueDate ?? null, estimateMinutes: null, tags: [], visibility: "team", viewerIds: [], assigneeId: defaults?.assigneeId ?? me.id, assigneeIds: defaults?.assigneeId === null ? [] : [defaults?.assigneeId ?? me.id], priority: "normal", waitsOn: "" });
   const [newSteps, setNewSteps] = useState<Step[]>([]);
   const [staged, setStaged] = useState<File[]>([]);
   const [counter, setCounter] = useState(0);
@@ -154,7 +153,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   // a to-do is private: no timer, not assigned to anyone else, on no list or one of the person's own
   const isTodo = task ? task.todo : defaults?.space === "todo";
   const v: Values = task
-    ? { listId: task.listId ?? "", kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, startDate: task.startDate, checkpointDate: task.checkpointDate, checkpointTime: task.checkpointTime, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, assigneeIds: task.assignees.map((x) => x.id), priority: task.priority }
+    ? { listId: task.listId ?? "", kind: task.kind, recurrence: task.recurrence, remindEveryDays: task.remindEveryDays, dueDate: task.dueDate, estimateMinutes: task.estimateMinutes, tags: task.tags, visibility: task.visibility, viewerIds: task.viewerIds, assigneeId: task.assigneeId, assigneeIds: task.assignees.map((x) => x.id), priority: task.priority }
     : f;
   // (an open task moved to "no list" sends null: it becomes a to-do on its own)
   const set = (p: Partial<Values>) => (isNew ? setF((old) => ({ ...old, ...p })) : patch.mutate(p.listId === "" ? ({ ...p, listId: null } as never) : p));
@@ -182,7 +181,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
   };
 
   const steps: Step[] = useMemo(
-    () => (task ? task.checklistItems.map((c) => ({ id: c.id, text: c.text, done: c.done, priority: c.priority, assigneeId: c.assigneeId, startDate: c.startDate, dueDate: c.dueDate, dueTime: c.dueTime, dependsOnId: c.dependsOnId })) : newSteps),
+    () => (task ? task.checklistItems.map((c) => ({ id: c.id, text: c.text, done: c.done, priority: c.priority, assigneeId: c.assigneeId, dueDate: c.dueDate, dependsOnId: c.dependsOnId })) : newSteps),
     [task, newSteps],
   );
   const stepHandlers = {
@@ -216,9 +215,6 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         dueDate: f.kind !== "normal" ? null : f.dueDate,
         kind: f.kind,
         remindEveryDays: f.kind === "continuous" ? f.remindEveryDays : null,
-        startDate: f.startDate,
-        checkpointDate: f.checkpointDate,
-        checkpointTime: f.checkpointDate ? f.checkpointTime : null,
         tags: f.tags,
         recurrence: f.kind === "normal" ? f.recurrence : null,
         visibility: f.visibility,
@@ -228,7 +224,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
         estimateMinutes: f.kind === "continuous" ? null : v.estimateMinutes,
         checklist: newSteps
           .filter((s) => s.text.trim())
-          .map((s) => ({ text: s.text.trim(), priority: s.priority, dueDate: s.dueDate, dueTime: s.dueDate ? s.dueTime : null, assigneeId: s.assigneeId, startDate: s.startDate, dependsOn: s.dependsOnId ? newSteps.filter((x) => x.text.trim()).findIndex((x) => x.id === s.dependsOnId) : null })),
+          .map((s) => ({ text: s.text.trim(), priority: s.priority, dueDate: s.dueDate, assigneeId: s.assigneeId, dependsOn: s.dependsOnId ? newSteps.filter((x) => x.text.trim()).findIndex((x) => x.id === s.dependsOnId) : null })),
       }),
     onSuccess: async (r) => {
       for (const x of staged) {
@@ -377,6 +373,7 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
 
   const aside = (
     <aside className="min-h-0 space-y-5 overflow-y-auto border-t bg-muted/20 px-5 py-6 lg:border-l lg:border-t-0">
+      {task && <WatchReminder kind="task" id={task.id} info={task} canEdit={editable} />}
       {/* how it is planned */}
       <div className="space-y-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t("pipeline.schedule.title")}</span>
@@ -419,20 +416,11 @@ export function TaskDialog({ taskId, defaults, onClose, onOpenTask }: { taskId: 
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <Field label={t("pipeline.startDate")} icon={PlayCircle}>
-          <Input type="date" disabled={locked} value={v.startDate ?? ""} onChange={(e) => set({ startDate: e.target.value || null })} />
-        </Field>
         {schedule !== "continuous" && schedule !== "daily" && (
           <Field label={schedule === "recurring" ? t("pipeline.firstDue") : t("pipeline.due")} icon={CalendarClock}>
             <Input type="date" disabled={locked} value={v.dueDate ?? ""} onChange={(e) => set({ dueDate: e.target.value || null })} />
           </Field>
         )}
-        <Field label={t("pipeline.checkpoint")} icon={CalendarClock}>
-          <Input type="date" disabled={locked} value={v.checkpointDate ?? ""} onChange={(e) => set({ checkpointDate: e.target.value || null })} />
-        </Field>
-        <Field label={t("pipeline.checkpointTime")}>
-          <Input type="time" disabled={locked || !v.checkpointDate} value={v.checkpointTime ?? ""} onChange={(e) => set({ checkpointTime: e.target.value || null })} />
-        </Field>
         {schedule !== "continuous" && (
           <Field label={t("pipeline.estimate")} icon={Clock3}>
             <Input disabled={locked} value={estimate} onChange={(e) => setEstimate(e.target.value)} onBlur={commitEstimate} placeholder="1:30" inputMode="text" />

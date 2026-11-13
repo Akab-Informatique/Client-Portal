@@ -10089,22 +10089,13 @@ describe("checkpoint with a time, default sort, one-time charge, meeting points 
     expect(back.doneAt).toBeNull();
   });
 
-  it("a ticket's checkpoint has a time; the list is sorted by checkpoint by default; a one-time charge needs no inventory item", async () => {
+  it("the tickets list is sorted by the due date by default; a one-time charge needs no inventory item", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");
-    const [a, b, c] = (await tech.get("/api/tickets?view=all")).json.items.filter((x: any) => x.statusKind !== "complete").slice(0, 3);
-    const set = (id: number, body: object) => tech.put(`/api/tickets/${id}/start-date`, body);
-    expect((await set(a.id, { milestoneDate: "2030-01-10", milestoneTime: "15:30" })).json).toMatchObject({ milestoneDate: "2030-01-10", milestoneTime: "15:30" });
-    expect((await set(b.id, { milestoneDate: "2030-01-10", milestoneTime: "09:00" })).status).toBe(200);
-    expect((await set(c.id, { milestoneDate: "2030-01-09" })).status).toBe(200);
-    expect((await tech.get(`/api/tickets/${a.id}`)).json).toMatchObject({ milestoneDate: "2030-01-10", milestoneTime: "15:30" });
-    // the default order is the checkpoint, date then time
-    const order = (await tech.get("/api/tickets?view=all")).json.items.map((x: any) => x.id);
-    expect(order.slice(0, 3)).toEqual([c.id, b.id, a.id]);
-    // a time on the same day as the start cannot come before the start's
-    expect((await set(a.id, { startDate: "2030-01-10", startTime: "16:00" })).status).toBe(400);
-    // no day, no time
-    expect((await set(a.id, { milestoneDate: null })).json.milestoneTime).toBeNull();
+    const items = (await tech.get("/api/tickets?view=all")).json.items;
+    const dues = items.map((x: any) => x.dueAt);
+    expect(dues).toEqual([...dues].sort());
+    const [b] = items.filter((x: any) => x.statusKind !== "complete");
     // a one-time charge: a name and a price, no inventory item
     const charge = await tech.post(`/api/tickets/${b.id}/charges`, { name: "Frais de déplacement", quantity: 1, unitPrice: 85, billable: true });
     expect(charge.status).toBe(201);
@@ -13122,5 +13113,80 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     const prospect = (await admin.post("/api/quotes", { prospectName: "Prospect inc.", title: "P", lines: [{ description: "x", quantityX100: 100, unitPriceCents: 100, recurrence: "once" }] })).json;
     expect((await admin.post(`/api/proj/from-quote/${prospect.id}`, {})).json.error).toBe("project_needs_client");
     expect((await admin.post("/api/proj/from-quote/00000000-0000-4000-8000-000000000000", {})).status).toBe(404);
+  });
+});
+
+describe("the no-activity reminder (tickets, tasks, projects)", () => {
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
+
+  it("a task quiet for its delay flashes; opening it, the reset button or any change stops it; the delay can be set on it", async () => {
+    const tech = await signIn("tech@akab.local");
+    const made = (await tech.post("/api/pipeline/tasks", { title: "Silence", dueDate: "2026-11-20" })).json;
+    // fresh: not flashing, default delay 3
+    const fresh = (await tech.get(`/api/pipeline/tasks/${made.id}`)).json;
+    expect(fresh).toMatchObject({ stale: false, watchDays: 3, watchOwn: null });
+    // a long quiet time (10 days is at least 6 working days)
+    await db().update(schema.pipelineTasks).set({ updatedAt: daysAgo(10) }).where(eq(schema.pipelineTasks.id, made.id));
+    expect((await tech.get(`/api/pipeline/tasks/${made.id}`)).json.stale).toBe(true);
+    expect((await tech.get("/api/pipeline/tasks")).json.find((t: any) => t.id === made.id).stale).toBe(true);
+    // the reset button
+    expect((await tech.post(`/api/pipeline/tasks/${made.id}/watch/reset`, {})).status).toBe(200);
+    expect((await tech.get(`/api/pipeline/tasks/${made.id}`)).json.stale).toBe(false);
+    // its own delay (a long one never flashes), then back to the default
+    await db().update(schema.pipelineTasks).set({ updatedAt: daysAgo(10) }).where(eq(schema.pipelineTasks.id, made.id));
+    await db().delete(schema.watchState).where(eq(schema.watchState.itemId, made.id));
+    expect((await tech.put(`/api/pipeline/tasks/${made.id}/watch`, { days: 40 })).json.days).toBe(40);
+    expect((await tech.get(`/api/pipeline/tasks/${made.id}`)).json).toMatchObject({ stale: false, watchDays: 40, watchOwn: 40 });
+    expect((await tech.put(`/api/pipeline/tasks/${made.id}/watch`, { days: 0 })).status).toBe(400);
+    // a done task never flashes
+    await db().update(schema.pipelineTasks).set({ updatedAt: daysAgo(10), status: "done", completedAt: new Date() }).where(eq(schema.pipelineTasks.id, made.id));
+    await tech.put(`/api/pipeline/tasks/${made.id}/watch`, { days: 1 });
+    await db().update(schema.watchState).set({ resetAt: daysAgo(10) }).where(eq(schema.watchState.itemId, made.id));
+    expect((await tech.get(`/api/pipeline/tasks?status=all`)).json.find((t: any) => t.id === made.id).stale).toBe(false);
+  });
+
+  it("a project: quiet flashes, a task change or a reset stops it; a far due day waits 6 working days", async () => {
+    const tech = await signIn("tech@akab.local");
+    const near = (await tech.post("/api/proj", { name: "Silence proche", dueDate: "2026-11-20" })).json;
+    const far = (await tech.post("/api/proj", { name: "Silence loin", dueDate: new Date(Date.now() + 40 * 86_400_000).toISOString().slice(0, 10) })).json;
+    for (const p of [near, far]) await db().update(schema.projProjects).set({ updatedAt: daysAgo(5) }).where(eq(schema.projProjects.id, p.id));
+    const list = (await tech.get("/api/proj")).json;
+    const of = (id: string) => list.find((p: any) => p.id === id);
+    // 5 calendar days always hold at least 3 working days; far projects wait 6 (5 days hold at most 5)
+    expect(of(near.id)).toMatchObject({ stale: true, watchDays: 3 });
+    expect(of(far.id)).toMatchObject({ stale: false, watchDays: 6 });
+    expect((await tech.post(`/api/proj/${near.id}/watch/reset`, {})).status).toBe(200);
+    expect((await tech.get(`/api/proj/${near.id}`)).json.stale).toBe(false);
+    expect((await tech.put(`/api/proj/${far.id}/watch`, { days: 2 })).json.days).toBe(2);
+  });
+
+  it("a ticket: the list carries the flag and the delay; reset and the delay are routes; the default order is the due date", async () => {
+    const tech = await signIn("tech@akab.local");
+    const first = (await tech.get("/api/tickets?view=all")).json.items[0];
+    expect(first).toBeDefined();
+    expect(typeof first.watchDays).toBe("number");
+    expect(typeof first.stale).toBe("boolean");
+    expect((await tech.post(`/api/tickets/${first.id}/watch/reset`, {})).status).toBe(200);
+    expect((await tech.put(`/api/tickets/${first.id}/watch`, { days: 8 })).json.days).toBe(8);
+    expect((await tech.get(`/api/tickets/${first.id}/watch`)).json).toMatchObject({ watchDays: 8, watchOwn: 8, stale: false });
+    expect((await tech.put(`/api/tickets/${first.id}/watch`, { days: 0 })).status).toBe(400);
+    const dues = (await tech.get("/api/tickets?view=all")).json.items.map((t: any) => t.dueAt);
+    expect(dues).toEqual([...dues].sort());
+  });
+});
+
+describe("what's new", () => {
+  it("lists the revisions, remembers the newest one read per person, refuses an unknown revision", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const first = (await tech.get("/api/me/whatsnew")).json;
+    expect(first.entries.length).toBeGreaterThan(0);
+    expect(first.latest).toBe(first.entries[0].id);
+    expect(first.seen).toBeNull();
+    expect((await tech.put("/api/me/whatsnew/seen", { id: "nope" })).status).toBe(400);
+    expect((await tech.put("/api/me/whatsnew/seen", { id: first.latest })).status).toBe(200);
+    expect((await tech.get("/api/me/whatsnew")).json.seen).toBe(first.latest);
+    // another person has not read it
+    expect((await admin.get("/api/me/whatsnew")).json.seen).toBeNull();
   });
 });

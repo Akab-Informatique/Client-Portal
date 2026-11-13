@@ -307,11 +307,11 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
   );
 }
 
-const LIST_SORTS = ["checkpoint", "priority", "name", "custom"] as const;
+const LIST_SORTS = ["due", "priority", "name", "custom"] as const;
 type ListSort = (typeof LIST_SORTS)[number];
 const PRIO_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
-/** A list of tasks of the day: checkpoint order by default; the technician picks the sort (their default for this list) or drags their own order. */
+/** A list of tasks of the day: due-day order by default; the technician picks the sort (their default for this list) or drags their own order. */
 /** What is late and not done is not planned in the day: a reminder on top to look at its dates again */
 function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) => void }) {
   const { t } = useTranslation();
@@ -335,7 +335,7 @@ function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) 
                   <span className={cn("size-2 shrink-0 rounded-full", i.kind === "ticket" ? "bg-[color:var(--gold)]" : i.kind === "ptask" ? "bg-teal-400" : "bg-violet-400")} />
                   {i.ticketNumber && <span className="shrink-0 font-mono text-xs text-primary">{i.ticketNumber}</span>}
                   <span className="min-w-0 flex-1 truncate">{i.title}</span>
-                  <span className="shrink-0 text-[11px] text-orange-300">{t("pipeline.day.reevaluate.since", { date: (i.checkpoint ?? i.due ?? "").slice(0, 10) })}</span>
+                  <span className="shrink-0 text-[11px] text-orange-300">{t("pipeline.day.reevaluate.since", { date: (i.due ?? i.checkpoint ?? "").slice(0, 10) })}</span>
                 </button>
               </li>
             ))}
@@ -348,10 +348,10 @@ function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) 
 
 function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty, sortView, toolbar }: { title: string; icon: typeof Workflow; items: DayItem[]; loading: boolean; onOpen: (i: DayItem) => void; onComplete?: (i: DayItem) => void; empty: string; sortView: string; toolbar?: React.ReactNode }) {
   const { t } = useTranslation();
-  const [sort, setSort] = useSortDefault<ListSort>(`day.${sortView}`, "checkpoint", LIST_SORTS);
+  const [sort, setSort] = useSortDefault<ListSort>(`day.${sortView}`, "due", LIST_SORTS);
   const { keys, save } = useCustomOrder(`day:${sortView}`, sort === "custom");
-  // "checkpoint": the order the list comes in (checkpoint day and time, then the due day)
-  const shown = sort === "custom" ? byCustom(items, (i) => i.key, keys) : sort === "priority" ? [...items].sort((a, b) => PRIO_RANK[a.priority] - PRIO_RANK[b.priority]) : sort === "name" ? [...items].sort((a, b) => a.title.localeCompare(b.title)) : items;
+  // "due": by due day (none last)
+  const shown = sort === "custom" ? byCustom(items, (i) => i.key, keys) : sort === "priority" ? [...items].sort((a, b) => PRIO_RANK[a.priority] - PRIO_RANK[b.priority]) : sort === "name" ? [...items].sort((a, b) => a.title.localeCompare(b.title)) : [...items].sort((a, b) => (a.due ?? "9999").localeCompare(b.due ?? "9999"));
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const onEnd = (e: DragEndEvent) => {
     if (!e.over || e.active.id === e.over.id) return;
@@ -372,7 +372,7 @@ function ItemList({ title, icon: Icon, items, loading, onOpen, onComplete, empty
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {LIST_SORTS.map((s) => (
-                <DropdownMenuItem key={s} onClick={() => setSort(s === "checkpoint" ? null : s)} className={cn(s === sort && "font-semibold text-primary")}>
+                <DropdownMenuItem key={s} onClick={() => setSort(s === "due" ? null : s)} className={cn(s === sort && "font-semibold text-primary")}>
                   {t(`pipeline.day.listSort.${s}`)}
                 </DropdownMenuItem>
               ))}

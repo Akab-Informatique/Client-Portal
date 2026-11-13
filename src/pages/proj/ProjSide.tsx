@@ -88,8 +88,6 @@ export function ProjSide({ project }: { project: ProjDetail }) {
       <div className="space-y-1">
         <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("proj.side.dates")}</div>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
-          <dt className="text-muted-foreground">{t("proj.side.start")}</dt>
-          <dd className="tabular-nums">{fmtDate(project.startDate)}</dd>
           <dt className="text-muted-foreground">{t("proj.side.due")}</dt>
           <dd className="tabular-nums">{fmtDate(project.dueDate)}</dd>
         </dl>

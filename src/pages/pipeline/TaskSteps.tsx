@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CalendarClock, ChevronRight, Lock, PlayCircle, Plus, Trash2, UserRound } from "lucide-react";
+import { CalendarClock, ChevronRight, Lock, Plus, Trash2, UserRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -14,13 +14,11 @@ export type Step = {
   done: boolean;
   priority: TaskPriority;
   assigneeId: string | null;
-  startDate: string | null;
   dueDate: string | null;
-  dueTime: string | null;
   dependsOnId: string | null;
 };
 
-export const newStep = (id: string, text = ""): Step => ({ id, text, done: false, priority: "normal", assigneeId: null, startDate: null, dueDate: null, dueTime: null, dependsOnId: null });
+export const newStep = (id: string, text = ""): Step => ({ id, text, done: false, priority: "normal", assigneeId: null, dueDate: null, dependsOnId: null });
 
 const selectCls = "h-8 w-full rounded-md border bg-transparent px-2 text-xs outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40 disabled:opacity-60";
 
@@ -28,7 +26,6 @@ const selectCls = "h-8 w-full rounded-md border bg-transparent px-2 text-xs outl
 function holdOf(s: Step, all: Step[]): { kind: "waits"; title: string } | { kind: "starts"; date: string } | null {
   const dep = s.dependsOnId ? all.find((x) => x.id === s.dependsOnId) : null;
   if (dep && !dep.done) return { kind: "waits", title: dep.text };
-  if (s.startDate && s.startDate > todayYmd()) return { kind: "starts", date: s.startDate };
   return null;
 }
 
@@ -128,22 +125,12 @@ export function TaskSteps({
                         ))}
                       </select>
                     </label>
-                    <label className="space-y-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                      <span className="flex items-center gap-1">
-                        <PlayCircle className="size-3" /> {t("pipeline.steps.start")}
-                      </span>
-                      <Input type="date" className="h-8 px-2 text-xs" disabled={disabled} value={s.startDate ?? ""} onChange={(e) => onChange(s.id, { startDate: e.target.value || null })} />
-                    </label>
-                    <div className="grid grid-cols-[1fr_5.5rem] gap-1.5">
+                    <div className="grid gap-1.5">
                       <label className="space-y-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <CalendarClock className="size-3" /> {t("pipeline.itemDue")}
                         </span>
                         <Input type="date" className="h-8 px-2 text-xs" disabled={disabled} value={s.dueDate ?? ""} onChange={(e) => onChange(s.id, { dueDate: e.target.value || null })} />
-                      </label>
-                      <label className="space-y-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                        {t("pipeline.itemDueTime")}
-                        <Input type="time" className="h-8 px-1.5 text-xs" disabled={disabled || !s.dueDate} value={s.dueTime ?? ""} onChange={(e) => onChange(s.id, { dueTime: e.target.value || null })} />
                       </label>
                     </div>
                   </div>

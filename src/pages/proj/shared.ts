@@ -16,8 +16,10 @@ export type ProjectRow = {
   status: ProjStatus;
   client: PersonRef | null;
   lead: PersonRef | null;
-  startDate: string | null;
   dueDate: string | null;
+  stale?: boolean;
+  watchDays?: number;
+  watchOwn?: number | null;
   soldHours: number | null;
   billingMode: ProjBillingMode;
   workedHours: number;

@@ -1,4 +1,6 @@
 import { Hono, type Context } from "hono";
+import { resetWatch, setWatchDays, watchOf } from "../lib/watch.ts";
+import { WATCH_MAX_DAYS } from "../../shared/watch.ts";
 import { HTTPException } from "hono/http-exception";
 import { localAssets } from "../lib/queues.ts";
 import { clientInfo } from "../lib/clientHours.ts";
@@ -195,6 +197,28 @@ async function startDates(ids: number[]) {
   }
   return out;
 }
+/** Per ticket: the last activity (its last change, note or time entry) → whether it has been quiet longer than its delay */
+async function ticketWatch(rows: { id: number; due: string; updatedAt: string; open: boolean }[]) {
+  const last = new Map<number, Date>();
+  const keep = (id: number, d: Date | string | null) => {
+    if (!d) return;
+    const x = new Date(d);
+    if (!Number.isNaN(x.getTime()) && x > (last.get(id) ?? new Date(0))) last.set(id, x);
+  };
+  for (const r of rows) keep(r.id, r.updatedAt);
+  const open = rows.filter((r) => r.open).map((r) => r.id);
+  for (let i = 0; i < open.length; i += 500) {
+    const ids = open.slice(i, i + 500);
+    const [notes, times] = await Promise.all([
+      db().select({ id: schema.ticketNotes.ticketId, at: sql<Date>`max(${schema.ticketNotes.createdAt})` }).from(schema.ticketNotes).where(inArray(schema.ticketNotes.ticketId, ids)).groupBy(schema.ticketNotes.ticketId),
+      db().select({ id: schema.ticketTimeEntries.ticketId, at: sql<Date>`max(${schema.ticketTimeEntries.createdAt})` }).from(schema.ticketTimeEntries).where(inArray(schema.ticketTimeEntries.ticketId, ids)).groupBy(schema.ticketTimeEntries.ticketId),
+    ]);
+    for (const n of notes) keep(n.id, n.at);
+    for (const t of times) keep(t.id, t.at);
+  }
+  return watchOf("ticket", rows.map((r) => ({ id: r.id, due: r.due, activityAt: last.get(r.id) ?? null, open: r.open })));
+}
+
 /** Today in Québec, YYYY-MM-DD */
 const todayQuebec = () => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto" }).format(new Date());
 /** Now in Québec, "YYYY-MM-DD HH:MM" */
@@ -620,7 +644,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     const managed = await managedOf(selected.map((t) => t.id));
     // the delegate and "hidden from delegates" of the same tickets (one query)
     const delegates = await delegateInfoOf(selected.map((t) => t.id));
-    const items = selected.map((t) => ({ ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null, managed: managed.get(t.id), ...(delegates.has(t.id) ? { delegate: delegates.get(t.id)!.delegate, hiddenFromDelegates: delegates.get(t.id)!.hiddenFromDelegates } : {}) }));
+    const quiet = await ticketWatch(selected.map((t) => ({ id: t.id, due: t.dueAt, updatedAt: t.updatedAt, open: L.statusKind(t.status) !== "complete" })));
+    const items = selected.map((t) => ({ ...quiet.get(String(t.id)), ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null, managed: managed.get(t.id), ...(delegates.has(t.id) ? { delegate: delegates.get(t.id)!.delegate, hiddenFromDelegates: delegates.get(t.id)!.hiddenFromDelegates } : {}) }));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -655,7 +680,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       if (p) it.myPriority = p.horizon;
     }
 
-    const sort = q.sort ?? "milestone";
+    // the default order is the due date (start dates and checkpoints are gone)
+    const sort = q.sort ?? "due";
     // the order the AI planned (the last plan applied): its tickets in that order, the others after, by due date
     const aiRows = await db().select().from(schema.ticketAiPlan).where(eq(schema.ticketAiPlan.userId, a.user.id));
     const aiPos = new Map(aiRows.map((r) => [r.ticketId, r.position]));
@@ -2169,6 +2195,41 @@ export const ticketRoutes = new Hono<AppEnv>()
     const made = await run(() => src.addAttachment(id, p, a));
     await audit(a.user.id, "ticket.attachment_added", String(id), { name: p.name, bytes: Math.floor((p.data.length * 3) / 4) });
     return c.json({ ok: true, id: made && "id" in made ? made.id : null }, 201);
+  })
+
+  /** The reminder of this ticket: its delay, the one set on it (if any) and whether it is quiet now */
+  .get("/:id/watch", requirePermission("tickets.view"), async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isSafeInteger(id) || id <= 0) throw new HTTPException(404, { message: "not_found" });
+    const src = await ticketSource(ticketScopeOf(c));
+    let found: Awaited<ReturnType<typeof src.get>> | null = null;
+    try {
+      found = await src.get(id);
+    } catch {
+      found = null;
+    }
+    if (!found) throw new HTTPException(404, { message: "not_found" });
+    const t = found;
+    const L = lookup(await src.options());
+    const w = await ticketWatch([{ id, due: t.dueAt, updatedAt: t.updatedAt, open: L.statusKind(t.status) !== "complete" }]);
+    return c.json(w.get(String(id)));
+  })
+
+  /** Opening the ticket, or the reset button: the count of quiet days starts again */
+  .post("/:id/watch/reset", requirePermission("tickets.view"), async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isSafeInteger(id) || id <= 0) throw new HTTPException(404, { message: "not_found" });
+    await resetWatch("ticket", id);
+    return c.json({ ok: true });
+  })
+
+  /** The reminder delay of this ticket in working days (null: the default, 3 or 6 for a far due date) */
+  .put("/:id/watch", requirePermission("tickets.edit"), async (c) => {
+    const id = Number(c.req.param("id"));
+    if (!Number.isSafeInteger(id) || id <= 0) throw new HTTPException(404, { message: "not_found" });
+    const p = await body(c, z.object({ days: z.number().int().min(1).max(WATCH_MAX_DAYS).nullable() }));
+    await setWatchDays("ticket", id, p.days);
+    return c.json({ ok: true, days: p.days });
   })
 
   .put("/:id/start-date", requirePermission("tickets.edit"), async (c) => {

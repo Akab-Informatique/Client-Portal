@@ -1,3 +1,4 @@
+import { STALE_ROW } from "@/components/WatchReminder";
 import type { CSSProperties, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
@@ -135,6 +136,7 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
           // a violet tint and a violet left bar (border + 4px less padding keeps the columns aligned with the tickets)
           "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 border-l-4 border-violet-500 bg-violet-500/[0.07] py-2.5 pl-9 pr-5 text-left transition-colors hover:bg-violet-500/[0.13] xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
           active && "bg-violet-500/[0.14]",
+          p.stale && p.status !== "done" && p.status !== "cancelled" && STALE_ROW,
         )}
       >
         <span aria-hidden className="pointer-events-none absolute left-[11px] top-1/2 -translate-y-1/2 text-violet-300">
@@ -157,7 +159,7 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
           <span className="min-w-0 text-xs xl:[order:var(--o-company)]">
             {p.client ? <span className="block break-words leading-snug">{p.client.name}</span> : <span className="text-muted-foreground/60">—</span>}
           </span>
-          <span className="min-w-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 xl:[order:var(--o-start)]">{p.startDate ? shortDate(p.startDate) : "—"}</span>
+          <span className="min-w-0 font-mono text-[11px] tabular-nums text-muted-foreground/70 xl:[order:var(--o-start)]">—</span>
           <span className="min-w-0 text-muted-foreground/60 xl:[order:var(--o-milestone)]">—</span>
           <span className={cn("min-w-0 whitespace-nowrap font-mono text-[11px] tabular-nums xl:[order:var(--o-due)]", late ? "font-semibold text-red-300" : "text-muted-foreground/70")}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
           <span className="min-w-0 text-muted-foreground/60 xl:[order:var(--o-priority)]">—</span>

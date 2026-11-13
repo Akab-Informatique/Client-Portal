@@ -16,6 +16,7 @@ import { ProjTaskDialog } from "./ProjTaskDialog";
 import { ProjInfoDialog } from "./ProjInfoDialog";
 import { ProjComposer } from "./ProjComposer";
 import { ProjNotes } from "./ProjNotes";
+import { WatchReminder, useWatchOnOpen } from "@/components/WatchReminder";
 import { ProjCalendar } from "./ProjCalendar";
 import { ProjSide } from "./ProjSide";
 import { ProjGauge } from "./ProjGauge";
@@ -163,6 +164,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
   const confirm = useConfirm();
   const { data: d, isLoading, isError } = useProject(id);
+  useWatchOnOpen("proj", id);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [askTask, setAskTask] = useState<ProjTask | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -255,6 +257,8 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                     </span>
                   </button>
                 </div>
+
+                <WatchReminder kind="proj" id={d.id} info={d} canEdit={canEdit} compact />
 
                 <div className="ml-auto flex items-center gap-1">
                   {d.canManage && (

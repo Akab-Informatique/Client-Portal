@@ -645,6 +645,8 @@ export const userPreferences = pgTable("user_preferences", {
   /** The lock screen of the phone shows the detail of a notification (number, title, text); off = only its kind */
   pushDetails: boolean("push_details").notNull().default(false),
   /** Sidebar entries the person starred (module keys, in the order added): shown at the top of the sidebar */
+  /** The newest "What's new" revision the person has read (shared/whatsnew.ts); it opens by itself at sign-in until they have */
+  whatsNewSeen: text("whats_new_seen"),
   navFavorites: jsonb("nav_favorites").$type<string[]>().notNull().default(sql`'[]'::jsonb`),
   notifyDefaults: jsonb("notify_defaults").$type<{ email: boolean; sms: boolean; teams: boolean }>().notNull().default({ email: true, sms: false, teams: false }),
   updatedAt: updated(),
@@ -3878,4 +3880,16 @@ export const projTimers = pgTable(
     pausedAt: timestamp("paused_at", { withTimezone: true }),
   },
   (t) => [primaryKey({ columns: [t.projectId, t.userId] })],
+);
+
+/** The "no activity" reminder of tickets, tasks (to-do) and new-format projects: when the item was last opened or reset, and its own delay in working days (null: the default) */
+export const watchState = pgTable(
+  "watch_state",
+  {
+    kind: text("kind", { enum: ["ticket", "task", "proj"] }).notNull(),
+    itemId: text("item_id").notNull(),
+    resetAt: timestamp("reset_at", { withTimezone: true }).notNull().defaultNow(),
+    days: integer("days"),
+  },
+  (t) => [primaryKey({ columns: [t.kind, t.itemId] })],
 );

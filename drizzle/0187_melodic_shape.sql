@@ -1,0 +1,1 @@
+ALTER TABLE "user_preferences" ADD COLUMN "whats_new_seen" text;
