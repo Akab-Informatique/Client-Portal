@@ -238,15 +238,15 @@ export function createApp() {
     );
     // Other files and the page itself: always revalidated, so an update shows
     // up right away (the hashed /assets above stay cached for a year)
-    app.use(
-      "*",
-      serveStatic({
-        root: path.relative(process.cwd(), dist),
-        onFound: (_p, c) => {
-          c.header("Cache-Control", "no-cache");
-        },
-      }),
-    );
+    const files = serveStatic({
+      root: path.relative(process.cwd(), dist),
+      onFound: (_p, c) => {
+        c.header("Cache-Control", "no-cache");
+      },
+    });
+    // only real files (a name with an extension): a page address such as /tv must be the app's page,
+    // never a folder of dist served as its index.html (dist/tv/ is the lobby screen, reached by /tv/index.html)
+    app.use("*", (c, next) => (/\.[a-z0-9]+$/i.test(c.req.path) ? files(c, next) : next()));
     app.get("*", (c) => {
       c.header("Cache-Control", "no-cache");
       return c.html(indexHtml);
