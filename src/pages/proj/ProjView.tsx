@@ -3,7 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Info, Plus, Receipt, Trash2, Users, X } from "lucide-react";
+import { Info, Minus, Plus, Receipt, Trash2, Users, X } from "lucide-react";
+import { projDock } from "@/lib/projDock";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -166,6 +167,8 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
   const confirm = useConfirm();
   const { data: d, isLoading, isError } = useProject(id);
   useWatchOnOpen("proj", id);
+  // an open project is no longer waiting in the drawer
+  useEffect(() => projDock.remove(id), [id]);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [askTask, setAskTask] = useState<ProjTask | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -282,6 +285,19 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                       <Trash2 className="size-4 text-red-300" aria-hidden />
                     </Button>
                   )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    aria-label={t("proj.minimize")}
+                    title={t("proj.minimize")}
+                    onClick={() => {
+                      projDock.add({ id: d.id, number: d.number, name: d.name });
+                      onClose();
+                    }}
+                  >
+                    <Minus className="size-4" aria-hidden />
+                  </Button>
                   <Button type="button" variant="ghost" size="icon" aria-label={t("proj.close")} title={t("proj.close")} onClick={onClose}>
                     <X className="size-4" aria-hidden />
                   </Button>

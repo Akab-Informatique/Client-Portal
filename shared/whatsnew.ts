@@ -8,6 +8,17 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-16.2",
+    date: "2026-11-16",
+    sections: [
+      {
+        fr: "Projets",
+        en: "Projects",
+        items: [{ fr: "La fenêtre d'un projet a un bouton Réduire (en haut) : le projet reste dans le tiroir, comme un billet, et se rouvre en un clic.", en: "A project window has a Minimize button (top): the project waits in the drawer like a ticket and reopens in one click." }],
+      },
+    ],
+  },
+  {
     id: "2026-11-16.1",
     date: "2026-11-16",
     sections: [

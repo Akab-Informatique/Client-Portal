@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
 import { Flag, FolderKanban, ListTodo, Maximize2, Pause, Play, X } from "lucide-react";
 import { dockBus, useDockBus } from "@/lib/dockBus";
+import { projDock, useProjDock } from "@/lib/projDock";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TaskDialog, type DockedTask } from "./TaskDialog";
@@ -112,8 +113,9 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
   const { slot } = useDockBus();
   const navigate = useNavigate();
   // a minimized phase (its timer runs) reopens the project folder on that phase
-  const restoreItem = (d: { projectId: string; taskId: string; phase: boolean; folder?: boolean }) =>
-    d.folder ? (onRestoreFolder(d.projectId), navigate(`/projects?project=${d.projectId}&tab=milestones`)) : d.phase ? navigate(`/projects?project=${d.projectId}&tab=milestones&milestone=${d.taskId}`) : onRestore(d.projectId, d.taskId);
+  const pvs = useProjDock();
+  const restoreItem = (d: { projectId: string; taskId: string; phase: boolean; folder?: boolean; pv?: boolean }) =>
+    d.pv ? (projDock.remove(d.projectId), navigate(`/pipeline?section=tickets&pj=${d.projectId}`)) : d.folder ? (onRestoreFolder(d.projectId), navigate(`/projects?project=${d.projectId}&tab=milestones`)) : d.phase ? navigate(`/projects?project=${d.projectId}&tab=milestones&milestone=${d.taskId}`) : onRestore(d.projectId, d.taskId);
   const qc = useQueryClient();
   const { data: timers = [] } = useQuery({ queryKey: [...KEY, "timers"], queryFn: () => api.get<RunningTimer[]>("/projects/timers"), refetchInterval: 30_000 });
   // pause / play from the card: a phase's timer (its id is the milestone's) or a task's
@@ -132,6 +134,8 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
   }, [timers.length]);
   const folderIds = new Set(folders.map((f) => f.projectId));
   const items = [
+    // a new-format project minimized from its window
+    ...pvs.map((p) => ({ projectId: p.id, taskId: `pv:${p.id}`, number: p.number, project: p.name, title: "", milestone: "", status: "doing" as const, folder: true as boolean | undefined, pv: true as boolean | undefined, phase: false, timer: undefined as RunningTimer | undefined })),
     // a minimized project folder: its running phase timer (the earliest) is shown on its card
     ...folders.map((f) => ({ projectId: f.projectId, taskId: `folder:${f.projectId}`, number: f.number, project: f.name, title: "", milestone: "", status: "doing" as const, folder: true as boolean | undefined, phase: false, timer: timers.filter((x) => x.projectId === f.projectId).sort((a, b) => a.startedAt.localeCompare(b.startedAt))[0] })),
     ...docked.map((d) => ({ ...d, phase: false, folder: undefined as boolean | undefined, timer: timers.find((x) => x.taskId === d.taskId) })),
@@ -188,7 +192,7 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
                 <Maximize2 className="size-3.5" />
               </button>
               {!running && (
-                <button type="button" onClick={() => (d.folder ? onRestoreFolder(d.projectId) : onDismiss(d.taskId))} aria-label={t("common.close")} title={t("common.close")} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+                <button type="button" onClick={() => ("pv" in d && d.pv ? projDock.remove(d.projectId) : d.folder ? onRestoreFolder(d.projectId) : onDismiss(d.taskId))} aria-label={t("common.close")} title={t("common.close")} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
                   <X className="size-3.5" />
                 </button>
               )}

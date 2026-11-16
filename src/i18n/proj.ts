@@ -3,6 +3,7 @@ export const fr = {
   proj: {
     tag: "Projet",
     close: "Fermer",
+    minimize: "Réduire dans le tiroir",
     loading: "Chargement…",
     loadError: "Ce projet est introuvable ou vous n'y avez pas accès.",
     name: "Nom du projet",
@@ -131,6 +132,7 @@ export const en = {
   proj: {
     tag: "Project",
     close: "Close",
+    minimize: "Minimize to the drawer",
     loading: "Loading…",
     loadError: "This project cannot be found or you do not have access to it.",
     name: "Project name",
