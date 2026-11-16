@@ -9407,6 +9407,60 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     expect((await admin.post("/api/billables/rates", { from: "2026-10-01", to: "2026-10-31" })).json).toMatchObject({ updated: 0 });
   });
 
+  it("contract lines: adding units mid-period is a prorated line to approve, taking them off credits what was approved", async () => {
+    const admin = await signIn("admin@akab.local");
+    const { contractBillables } = await import("../server/lib/contractBills.ts");
+    const { addDaysYmd } = await import("../shared/invoiceDue.ts");
+    // the sample ticket source: no background copy of the work to bill races with the lines inserted by hand below
+    const [prevMode] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "sample" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "sample" } } });
+    const { resetTicketMode } = await import("../server/lib/localTickets.ts");
+    resetTicketMode();
+    const [adminRow] = await db().select().from(schema.users).where(eq(schema.users.email, "admin@akab.local"));
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+    const first = `${addDaysYmd(today.slice(0, 7) + "-01", -20).slice(0, 7)}-01`;
+    const mid = `${first.slice(0, 7)}-16`;
+    const [client] = await db().insert(schema.clients).values({ name: "Ajuster unités inc.", autotaskId: 912345601 }).returning();
+    const [svc] = await db().insert(schema.services).values({ name: "Endpoint", kind: "recurring", priceCents: 4500, taxable: true }).returning();
+    const made = async (name: string) => (await admin.post(`/api/crm/clients/${client!.id}/contracts`, { name, typeKey: "recurring", startDate: first, endDate: addDaysYmd(first, 400), services: [{ serviceId: svc!.id, addedOn: first, quantity: 2 }] })).json;
+    const lineOf = async (kid: string) => ((await admin.get(`/api/crm/clients/${client!.id}/contracts/${kid}/services`)).json as any[]);
+
+    // 2 endpoints billed since the 1st, a third is added on the 16th: its prorated part is its own line, never forgotten
+    const up = await made("Ajout");
+    const [a1] = await lineOf(up.id);
+    expect((await admin.post(`/api/crm/clients/${client!.id}/contracts/${up.id}/services/${a1.id}/adjust`, { quantity: 3, effectiveOn: mid })).status).toBe(200);
+    const rows = await lineOf(up.id);
+    expect(rows.map((r: any) => [r.quantity, r.addedOn, r.endedOn])).toEqual([[2, first, null], [1, mid, null]]);
+    const lines = (await contractBillables("2000-01-01")).filter((l) => l.contractSourceId === up.autotaskId);
+    const extra = lines.find((l) => l.date === mid)!;
+    expect(extra.description).toContain("prorata");
+    expect(extra.unitPriceCents).toBeGreaterThan(0);
+    expect(extra.unitPriceCents).toBeLessThan(4500);
+    // the same quantity again, or an adjust before the line began, is refused
+    expect((await admin.post(`/api/crm/clients/${client!.id}/contracts/${up.id}/services/${a1.id}/adjust`, { quantity: 2, effectiveOn: mid })).status).toBe(400);
+
+    // taking one off from the 16th after the month was approved in full: the old line stops, the rest is credited
+    const down = await made("Retrait");
+    const [b1] = await lineOf(down.id);
+    await db().insert(schema.billingItems).values({ clientId: client!.id, kind: "contract", source: "autotask", sourceId: `contract:${down.id}:${b1.id}:${first}`, date: first, description: "Endpoint", quantityX100: 200, unitPriceCents: 4500, amountCents: 9000, status: "approved", approvedBy: adminRow!.id, approvedAt: new Date() });
+    expect((await admin.post(`/api/crm/clients/${client!.id}/contracts/${down.id}/services/${b1.id}/adjust`, { quantity: 1, effectiveOn: mid })).status).toBe(200);
+    const after = await lineOf(down.id);
+    expect(after.map((r: any) => [r.quantity, r.addedOn, r.endedOn])).toEqual([[2, first, `${first.slice(0, 7)}-15`], [1, mid, null]]);
+    const dl = (await contractBillables("2000-01-01")).filter((l) => l.contractSourceId === down.autotaskId);
+    const credit = dl.find((l) => l.id.endsWith(":credit"))!;
+    expect(credit.unitPriceCents).toBeLessThan(0);
+    expect(credit.description).toContain("Crédit");
+    // the stopped line no longer counts in what the contract charges per month
+    expect((await admin.get(`/api/crm/clients/${client!.id}/contracts/${down.id}`)).json.summary.perPeriodCents).toBe(4500);
+    // taking all of them off stops the line with nothing new
+    const [b2] = after.filter((r: any) => !r.endedOn);
+    expect((await admin.post(`/api/crm/clients/${client!.id}/contracts/${down.id}/services/${b2.id}/adjust`, { quantity: 0, effectiveOn: addDaysYmd(mid, 5) })).status).toBe(200);
+    expect((await lineOf(down.id)).filter((r: any) => !r.endedOn)).toHaveLength(0);
+    if (prevMode) await db().update(schema.integrations).set({ enabled: prevMode.enabled, config: prevMode.config }).where(eq(schema.integrations.provider, "tickets"));
+    else await db().delete(schema.integrations).where(eq(schema.integrations.provider, "tickets"));
+    resetTicketMode();
+  });
+
   it("approval: the recurring charges of a contract are lines to approve — quantity × unit price, one group per contract; old unapproved imports go", async () => {
     const admin = await signIn("admin@akab.local");
     const { contractBillables } = await import("../server/lib/contractBills.ts");

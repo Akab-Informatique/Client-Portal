@@ -8,6 +8,17 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-16.3",
+    date: "2026-11-16",
+    sections: [
+      {
+        fr: "Contrats",
+        en: "Contracts",
+        items: [{ fr: "Une ligne de contrat peut recevoir ou perdre des unités à partir d'un jour : une unité ajoutée en milieu de mois est facturée au prorata (à approuver dans Approbation), une unité retirée crédite ce qui était déjà approuvé.", en: "A contract line can gain or lose units from a given day: a unit added mid-month is billed prorated (queued in Approbation), a unit taken off credits what was already approved." }],
+      },
+    ],
+  },
+  {
     id: "2026-11-16.2",
     date: "2026-11-16",
     sections: [

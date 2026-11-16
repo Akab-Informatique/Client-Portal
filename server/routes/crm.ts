@@ -24,7 +24,7 @@ import { pushInvoice } from "../lib/quickbooks.ts";
 import { DraftError, recalcInvoiceTaxes, renumberInvoice, taxesByLine } from "../lib/billables.ts";
 import { applyToLines, contractsIn, runningLinesOf } from "../lib/servicePrices.ts";
 import { InvoiceMailError, invoicePdfFor, sendInvoiceMail, sendStatement, sendStatements, statementOf, statementTargets } from "../lib/invoiceMail.ts";
-import { applyAutoApprove } from "../lib/billables.ts";
+import { applyAutoApprove, syncBillablesNow } from "../lib/billables.ts";
 import { BILLING_MODES, KIND_MODE, adjustmentsOf, usageByCompanyOf, bankRowsOf, banksOf, topupHoursOf, contractTypes, usedByMonthOf, usedHoursOf, type ContractKind } from "../lib/contracts.ts";
 import { BANK_ROLLOVERS, bankBundle, withTopupCharges } from "../../shared/bank.ts";
 import { bpsOfPercent, combineBps, netCents } from "../../shared/rebate.ts";
@@ -101,7 +101,7 @@ async function contractOr404(clientId: string, id: string) {
 /** A service on a contract, with the prorata worked out on the contract's term (none while it has no term). */
 function serviceLine(r: typeof schema.contractServices.$inferSelect, k: ContractRow) {
   const net = netCents(r.priceCents, combineBps(r.rebateBps, k.rebateBps));
-  const plan = k.startDate && k.endDate ? prorata({ period: (r.kind === "recurring_yearly" ? "yearly" : "monthly") as ServicePeriod, priceCents: net * r.quantity, addedOn: r.addedOn, start: k.startDate, end: k.endDate }) : "dates";
+  const plan = k.startDate && k.endDate ? prorata({ period: (r.kind === "recurring_yearly" ? "yearly" : "monthly") as ServicePeriod, priceCents: net * r.quantity, addedOn: r.addedOn, start: k.startDate, end: r.endedOn && r.endedOn < k.endDate ? r.endedOn : k.endDate }) : "dates";
   return { ...r, contractRebateBps: k.rebateBps, netPriceCents: net, firstCents: typeof plan === "string" ? null : plan.firstCents, totalCents: typeof plan === "string" ? null : plan.totalCents, periods: typeof plan === "string" ? [] : plan.periods };
 }
 
@@ -133,7 +133,7 @@ async function deleteCheck(client: { id: string; autotaskId: number | null }) {
   return { invoices, tickets, contacts, contracts, portalUsers, workToBill, projects, quotes };
 }
 type ServiceRow = typeof schema.contractServices.$inferSelect;
-const chargeLines = (rows: ServiceRow[]): ChargeLine[] => rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: r.priceCents, quantity: r.quantity, addedOn: r.addedOn, rebateBps: r.rebateBps }));
+const chargeLines = (rows: ServiceRow[]): ChargeLine[] => rows.map((r) => ({ id: r.id, name: r.name, kind: r.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: r.priceCents, quantity: r.quantity, addedOn: r.addedOn, endedOn: r.endedOn, rebateBps: r.rebateBps }));
 /** What a contract charges (per full period, over its term) and what comes next, from its services */
 function summaryOf(k: ContractRow, rows: ServiceRow[], today: string, topup?: Map<string, number>) {
   const period = k.billingPeriod === "yearly" ? "yearly" : "monthly";
@@ -940,6 +940,45 @@ export const crmRoutes = new Hono<AppEnv>()
       await audit(a.user.id, "crm.contract_service_price_to_service", k.id, { service: cur.name, priceCents: next.priceCents, scope, contracts: scope === "all" ? contractsIn(others) : 0 });
     }
     return c.json(serviceLine(row, k));
+  })
+  /**
+   * Changes how many of a line the client has, from a day (crm.billing). More units: a new line for the extra ones starts
+   * that day (prorated to the end of the period, so it is work to approve and bill like any other). Fewer: the old line
+   * stops the day before and a line for what is kept starts that day; what was already approved for the rest of the period
+   * is credited. Nothing is ever forgotten.
+   */
+  .post("/clients/:id/contracts/:kid/services/:sid/adjust", requirePermission("crm.billing"), async (c) => {
+    const a = auth(c);
+    const client = await clientOr404(c.req.param("id"));
+    const k = await contractOr404(client.id, c.req.param("kid"));
+    const sid = zUuid.parse(c.req.param("sid"));
+    const p = await body(c, z.object({ quantity: z.number().int().min(0).max(100_000), effectiveOn: zDay }));
+    const [cur] = await db().select().from(schema.contractServices).where(and(eq(schema.contractServices.id, sid), eq(schema.contractServices.contractId, k.id)));
+    if (!cur) throw new HTTPException(404, { message: "not_found" });
+    if (cur.source) throw new HTTPException(409, { message: "service_from_vendor" });
+    if (cur.endedOn) throw new HTTPException(409, { message: "line_ended" });
+    if (!k.startDate || !k.endDate) throw new HTTPException(400, { message: "contract_no_term" });
+    if (p.effectiveOn < k.startDate || p.effectiveOn > k.endDate || p.effectiveOn < cur.addedOn) throw new HTTPException(400, { message: "service_outside_term" });
+    const delta = p.quantity - cur.quantity;
+    if (delta === 0) throw new HTTPException(400, { message: "no_change" });
+    const plan = prorata({ period: cur.kind === "recurring_yearly" ? "yearly" : "monthly", priceCents: 1, addedOn: p.effectiveOn, start: k.startDate, end: k.endDate });
+    if (typeof plan === "string") throw new HTTPException(400, { message: plan === "outside" ? "service_outside_term" : "contract_dates" });
+    const copy = (quantity: number) => ({ contractId: k.id, serviceId: cur.serviceId, name: cur.name, kind: cur.kind, priceCents: cur.priceCents, costCents: cur.costCents, addedOn: p.effectiveOn, quantity, rebateBps: cur.rebateBps, createdBy: a.user.id });
+    if (delta > 0) {
+      await db().insert(schema.contractServices).values(copy(delta));
+    } else {
+      const day = new Date(`${p.effectiveOn}T00:00:00Z`);
+      day.setUTCDate(day.getUTCDate() - 1);
+      await db().update(schema.contractServices).set({ endedOn: day.toISOString().slice(0, 10) }).where(eq(schema.contractServices.id, cur.id));
+      if (p.quantity > 0) await db().insert(schema.contractServices).values(copy(p.quantity));
+    }
+    await audit(a.user.id, "crm.contract_service_adjusted", k.id, { service: cur.name, from: cur.quantity, to: p.quantity, effectiveOn: p.effectiveOn });
+    await recordContractEvent(k.id, "service_changed", { name: cur.name, changes: { quantity: [cur.quantity, p.quantity] }, effectiveOn: p.effectiveOn }, { userId: a.user.id });
+    await syncMonthlyRate(k.id);
+    // the prorated charge (or the credit) is work to approve at once, not at the next 15-minute copy
+    await syncBillablesNow();
+    const rows = await servicesOf(k.id);
+    return c.json(rows.map((r) => serviceLine(r, k)));
   })
   // ── ITCloud services of the client that wait for a contract: map them to this one ──
   .get("/clients/:id/contracts/:kid/itcloud-services", requirePermission("crm.billing"), async (c) => {

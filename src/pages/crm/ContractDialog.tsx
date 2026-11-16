@@ -42,6 +42,7 @@ type Line = {
   quantity: number;
   source: string | null;
   addedOn: string;
+  endedOn?: string | null;
   firstCents: number | null;
   totalCents: number | null;
   periods: { from: string; to: string; days: number; periodDays: number; full: boolean; amountCents: number }[];
@@ -55,7 +56,7 @@ const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "Ameri
 const toCents = (v: string) => (v.trim() === "" ? null : Math.round((Number(v.replace(",", ".")) || 0) * 100));
 
 function contractError(t: (k: string, o?: Record<string, unknown>) => string, e: unknown) {
-  if (e instanceof ApiError && ["contract_dates", "contract_dates_services", "service_outside_term", "service_from_vendor", "service_not_recurring", "contract_no_term", "contract_inactive", "invalid_type", "no_parent", "not_banked"].includes(e.code)) return t(`crm.contracts.errors.${e.code}`);
+  if (e instanceof ApiError && ["contract_dates", "contract_dates_services", "service_outside_term", "service_from_vendor", "line_ended", "no_change", "service_not_recurring", "contract_no_term", "contract_inactive", "invalid_type", "no_parent", "not_banked"].includes(e.code)) return t(`crm.contracts.errors.${e.code}`);
   return ticketErrorText(t, e);
 }
 
@@ -753,6 +754,18 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
     onSuccess: onChanged,
     onError: (e) => toast.error(contractError(t, e)),
   });
+  // units added or taken off from a day: a prorated line to approve (more) or a credit (fewer)
+  const [adjusting, setAdjusting] = useState<string | null>(null);
+  const adjust = useMutation({
+    mutationFn: (p: { id: string; quantity: number; effectiveOn: string }) => api.post(`${base}/services/${p.id}/adjust`, { quantity: p.quantity, effectiveOn: p.effectiveOn }),
+    onSuccess: () => {
+      toast.success(t("crm.contracts.adjust.done"));
+      setAdjusting(null);
+      onChanged();
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+    },
+    onError: (e) => toast.error(contractError(t, e)),
+  });
   // a changed price: "only this contract" or "the service and every running contract" — the server asks (and says how many others)
   const [scope, setScope] = useState<{ edit: { id: string; quantity: number; priceCents: number; addedOn: string; rebate: number }; others: number } | null>(null);
   const change = useMutation({
@@ -803,6 +816,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                   <span className="flex items-center gap-1.5 truncate font-medium">
                     {l.name}
                     {l.quantity > 1 && <span className="font-mono text-xs text-muted-foreground">× {l.quantity}</span>}
+                    {l.endedOn && <span className="rounded border border-amber-400/40 px-1 text-[9px] font-semibold uppercase text-amber-300">{t("crm.contracts.adjust.until", { date: shortDate(l.endedOn) })}</span>}
                     {l.source && <span className="rounded border border-sky-400/40 px-1 text-[9px] font-semibold uppercase text-sky-300" title={t("crm.contracts.fromVendorHint")}>{l.source === "itcloud" ? "ITCloud" : l.source}</span>}
                   </span>
                   <span className="block text-[11px] text-muted-foreground">
@@ -833,6 +847,11 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                 )}
                 {editable && (
                   <span className="flex">
+                    {!l.source && !l.endedOn && k.active && !bundled && (
+                      <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-emerald-300" onClick={() => setAdjusting(adjusting === l.id ? null : l.id)} aria-label={t("crm.contracts.adjust.button")} title={t("crm.contracts.adjust.button")}>
+                        <TrendingUp className="size-3.5" />
+                      </Button>
+                    )}
                     <Button type="button" size="icon" variant="ghost" className="size-7 text-muted-foreground hover:text-foreground" onClick={() => setEditing(editing === l.id ? null : l.id)} aria-label={t("common.edit")}>
                       <Pencil className="size-3.5" />
                     </Button>
@@ -850,6 +869,7 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
                   </span>
                 )}
               </div>
+              {adjusting === l.id && <AdjustQty l={l} term={term} busy={adjust.isPending} onSave={(p) => adjust.mutate({ id: l.id, ...p })} onCancel={() => setAdjusting(null)} />}
               {editing === l.id && <LineEditor l={l} term={term} fromVendor={Boolean(l.source)} busy={change.isPending} contractRebateBps={k.rebateBps ?? 0} onSave={(p) => change.mutate({ id: l.id, ...p })} onCancel={() => setEditing(null)} />}
             </li>
           ))}
@@ -891,6 +911,37 @@ function ServicesTab({ client, k, editable, onChanged }: { client: CrmDetail; k:
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Adds or takes off units from a day: the server splits the line so the prorata (or the credit) goes to approval */
+function AdjustQty({ l, term, busy, onSave, onCancel }: { l: Line; term: { start: string; end: string } | null; busy: boolean; onSave: (p: { quantity: number; effectiveOn: string }) => void; onCancel: () => void }) {
+  const { t } = useTranslation();
+  const [quantity, setQuantity] = useState(String(l.quantity));
+  const [day, setDay] = useState(() => {
+    const now = todayYmd();
+    return term && now < term.start ? term.start : term && now > term.end ? term.end : now;
+  });
+  const qty = Math.max(0, Math.round(Number(quantity) || 0));
+  const delta = qty - l.quantity;
+  return (
+    <div className="mt-2 space-y-2 rounded-lg border bg-background/40 p-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <Field label={t("crm.contracts.adjust.newQty")}>
+          <Input value={quantity} inputMode="numeric" onChange={(e) => setQuantity(e.target.value)} className="h-8 w-20 text-right font-mono" />
+        </Field>
+        <Field label={t("crm.contracts.adjust.from")}>
+          <Input type="date" value={day} min={term ? (l.addedOn > term.start ? l.addedOn : term.start) : undefined} max={term?.end} onChange={(e) => e.target.value && setDay(e.target.value)} className="h-8 w-40" />
+        </Field>
+        <Button type="button" size="sm" disabled={busy || delta === 0} onClick={() => onSave({ quantity: qty, effectiveOn: day })} className="bg-grad-gold font-semibold text-[#1a1204]">
+          {t("crm.contracts.adjust.save")}
+        </Button>
+        <Button type="button" size="sm" variant="ghost" onClick={onCancel}>
+          {t("common.cancel")}
+        </Button>
+      </div>
+      {delta !== 0 && <p className={cn("text-xs", delta > 0 ? "text-emerald-300" : "text-amber-300")}>{t(delta > 0 ? "crm.contracts.adjust.more" : "crm.contracts.adjust.less", { n: Math.abs(delta) })}</p>}
     </div>
   );
 }
@@ -943,7 +994,7 @@ function ChargesTab({ k, lang }: { k: Detail; lang: string }) {
   const { t } = useTranslation();
   const today = todayYmd();
   const full = useMemo(
-    () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: l.rebateBps })))),
+    () => contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: k.billingPeriod }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: k.billingPeriod ?? "monthly", bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, k.services.map((l): ChargeLine => ({ id: l.id, name: l.name, kind: l.kind, priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, endedOn: l.endedOn, rebateBps: l.rebateBps })))),
     [k],
   );
   // an hours bank that tops up only buys what the month before left unused

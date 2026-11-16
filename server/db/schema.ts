@@ -245,6 +245,8 @@ export const contractServices = pgTable(
     costCents: integer("cost_cents").notNull().default(0),
     /** YYYY-MM-DD: when the service starts on the contract */
     addedOn: text("added_on").notNull(),
+    /** YYYY-MM-DD: the last day this line is charged (units taken off from the next day); none = runs to the end of the contract */
+    endedOn: text("ended_on"),
     /** How many (price is per unit): kept from the vendor for a vendor line */
     quantity: integer("quantity").notNull().default(1),
     /** A rebate on this line's price: percent × 100 */

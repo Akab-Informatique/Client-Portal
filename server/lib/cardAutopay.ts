@@ -148,7 +148,7 @@ export async function contractTerms(k: typeof schema.clientContracts.$inferSelec
   const lines = rows.map((l) => ({ name: l.name, quantity: l.quantity, yearly: l.kind === "recurring_yearly", unitCents: netCents(l.priceCents, combineBps(l.rebateBps, k.rebateBps)) }));
   const bundle = k.bundlePriceCents != null ? { quantity: k.bundleQuantity ?? 1, unitCents: netCents(k.bundlePriceCents, k.rebateBps) } : null;
   const period: "monthly" | "yearly" = k.billingPeriod === "yearly" ? "yearly" : "monthly";
-  const services: ChargeLine[] = rows.map((l) => ({ id: l.id, name: l.name, kind: l.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, rebateBps: l.rebateBps }));
+  const services: ChargeLine[] = rows.map((l) => ({ id: l.id, name: l.name, kind: l.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: l.priceCents, quantity: l.quantity, addedOn: l.addedOn, endedOn: l.endedOn, rebateBps: l.rebateBps }));
   let ch = k.startDate && k.endDate ? contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services)) : null;
   // an hours bank that tops up only buys what the month before left unused
   const topup = (await topupHoursOf([k])).get(k.id);

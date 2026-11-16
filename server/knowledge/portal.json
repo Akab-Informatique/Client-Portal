@@ -1442,6 +1442,16 @@
      "admin.tickets"
     ]
    ]
+  },
+  {
+   "id": "contract-lines-adding-or-taking-off-units-from-a-day-latest-1",
+   "title": "Contract lines: adding or taking off units from a day (latest)",
+   "heading": "Contract lines: adding or taking off units from a day (latest)",
+   "text": "Contract window › Services, the **trend icon** on a line (hand-made lines only; an ITCloud line follows its vendor): `POST /api/crm/clients/:id/contracts/:kid/services/:sid/adjust { quantity, effectiveOn }` (`crm.billing`; migration `0189`: `contract_services.ended_on`, the last day a line is charged; errors `line_ended`, `no_change`, `service_outside_term`; audited `crm.contract_service_adjusted`; test \"contract lines: adding units mid-period…\"). `quantity` is the **new total**.\n- **More units** (2 → 3 on the 16th): a **new line** for the extra ones starts that day (`addedOn` = the day), so the existing prorata machinery makes its charge — prorated to the end of the period, then full — and `syncBillablesNow` puts it in Approbation as pending (the contract's auto-approve rule applies as for any line). The first line is untouched, so what was billed is never rewritten and the third unit is not forgotten.\n- **Fewer units** (3 → 2, or all): the old line gets `ended_on` = the day before and a line for what is kept starts that day (none when all are taken off). `contractCharges` charges an ended line only up to `endedOn` (`ChargeLine.endedOn`; an ended line leaves the per-period figure and the monthly rate). What was **already approved or invoiced** for that line's last period and is no longer owed comes out as a **credit line** in Approbation (`contract:<contract>:<line>:<date>:credit`, quantity 1, negative price, \"Crédit — … (retrait au …)\"; `contractBillables`), approved by hand like any line.\n- The contract window shows both lines (an ended one carries \"jusqu'au …\"). Only the line's own quantity: price changes keep their scope question.",
+   "requires": [
+    "crm.billing"
+   ],
+   "restrictTo": []
   }
  ]
 }

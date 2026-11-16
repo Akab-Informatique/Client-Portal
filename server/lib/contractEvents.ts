@@ -1,5 +1,5 @@
 import { combineBps, netCents } from "../../shared/rebate.ts";
-import { and, count, desc, eq, lte } from "drizzle-orm";
+import { and, count, desc, eq, isNull, lte } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 
 /**
@@ -51,7 +51,7 @@ export async function syncMonthlyRate(contractId: string): Promise<void> {
     await db().update(schema.clientContracts).set({ monthlyRateCents: k.period === "yearly" ? Math.round((netCents(k.bundle, k.rebate) * k.qty) / 12) : netCents(k.bundle, k.rebate) * k.qty, updatedAt: new Date() }).where(eq(schema.clientContracts.id, contractId));
     return;
   }
-  const rows = await db().select({ kind: schema.contractServices.kind, price: schema.contractServices.priceCents, qty: schema.contractServices.quantity, rebate: schema.contractServices.rebateBps }).from(schema.contractServices).where(eq(schema.contractServices.contractId, contractId));
+  const rows = await db().select({ kind: schema.contractServices.kind, price: schema.contractServices.priceCents, qty: schema.contractServices.quantity, rebate: schema.contractServices.rebateBps }).from(schema.contractServices).where(and(eq(schema.contractServices.contractId, contractId), isNull(schema.contractServices.endedOn)));
   const monthly = rows.filter((r) => r.kind === "recurring").reduce((n, r) => n + netCents(r.price, combineBps(r.rebate, k.rebate)) * r.qty, 0);
   const yearly = rows.filter((r) => r.kind === "recurring_yearly").reduce((n, r) => n + netCents(r.price, combineBps(r.rebate, k.rebate)) * r.qty, 0);
   await db().update(schema.clientContracts).set({ monthlyRateCents: monthly + Math.round(yearly / 12), updatedAt: new Date() }).where(eq(schema.clientContracts.id, contractId));

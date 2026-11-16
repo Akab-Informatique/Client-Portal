@@ -1,0 +1,1 @@
+ALTER TABLE "contract_services" ADD COLUMN "ended_on" text;

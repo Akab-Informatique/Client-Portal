@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, like, or } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { contractCharges, hasBundle, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { adjustmentsOf, bankRowsOf, usedByMonthOf } from "./contracts.ts";
@@ -30,6 +30,14 @@ export async function contractBillables(since: string): Promise<Billable[]> {
     .leftJoin(schema.services, eq(schema.services.id, schema.contractServices.serviceId))
     .orderBy(asc(schema.contractServices.addedOn), asc(schema.contractServices.name));
   const out: Billable[] = [];
+  // what was already approved or invoiced for a line whose units were taken off: the difference is credited (below)
+  const takenOff = new Set(rows.filter((r) => r.s.endedOn).map((r) => r.s.id));
+  const billedBefore = new Map<string, number>();
+  if (takenOff.size) {
+    const ids = contracts.flatMap(({ k }) => [...takenOff].map((sid) => `contract:${k.id}:${sid}:`));
+    const prior = await d.select({ sourceId: schema.billingItems.sourceId, amountCents: schema.billingItems.amountCents }).from(schema.billingItems).where(and(inArray(schema.billingItems.status, ["approved", "posted"]), or(...ids.map((p) => like(schema.billingItems.sourceId, `${p}%`)))));
+    for (const r of prior) if (r.sourceId) billedBefore.set(r.sourceId, r.amountCents);
+  }
   const usedBy = await usedByMonthOf(contracts.filter(({ k }) => k.billingMode === "banked").map(({ k }) => k));
   const adjusted = await adjustmentsOf(contracts.filter(({ k }) => k.billingMode === "banked").map(({ k }) => k.id));
   for (const { k, companyId } of contracts) {
@@ -38,7 +46,7 @@ export async function contractBillables(since: string): Promise<Billable[]> {
     if (!mine.length && !hasBundle(k)) continue;
     const byId = new Map(mine.map((r) => [r.s.id, r]));
     const period = k.billingPeriod === "yearly" ? "yearly" : "monthly";
-    const services: ChargeLine[] = mine.map(({ s }) => ({ id: s.id, name: s.name, kind: s.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: s.priceCents, quantity: s.quantity, addedOn: s.addedOn, rebateBps: s.rebateBps }));
+    const services: ChargeLine[] = mine.map(({ s }) => ({ id: s.id, name: s.name, kind: s.kind === "recurring_yearly" ? "recurring_yearly" : "recurring", priceCents: s.priceCents, quantity: s.quantity, addedOn: s.addedOn, endedOn: s.endedOn, rebateBps: s.rebateBps }));
     // a bundle replaces the services' own prices: one line for the package, its price and quantity
     const lines = linesForCharges({ name: k.name, startDate: k.startDate, billingPeriod: period, bundlePriceCents: k.bundlePriceCents, bundleQuantity: k.bundleQuantity, rebateBps: k.rebateBps }, services);
     const charges = contractCharges({ startDate: k.startDate, endDate: k.endDate, endedOn: k.endedOn, billingPeriod: period }, lines);
@@ -77,6 +85,23 @@ export async function contractBillables(since: string): Promise<Billable[]> {
           unitPriceCents: whole ? amountCents / qty : amountCents,
           taxable: bundled ? true : (svc!.taxable ?? true),
         });
+        // units taken off part way through a period that was already approved or invoiced: credit what is no longer owed
+        const before = !bundled ? billedBefore.get(`contract:${k.id}:${svc!.s.id}:${e.date}`) : undefined;
+        if (before !== undefined && before > amountCents) {
+          out.push({
+            id: `contract:${k.id}:${svc!.s.id}:${e.date}:credit`,
+            kind: "contract",
+            companyId: companyId!,
+            date: svc!.s.endedOn ?? e.date,
+            dateEnd: p.to,
+            description: `Crédit — ${name} (retrait au ${dmy(svc!.s.endedOn ?? e.date)}) — ${dmy(p.from)} – ${dmy(p.to)}`,
+            contractName: k.name,
+            contractSourceId: k.autotaskId,
+            quantity: 1,
+            unitPriceCents: -(before - amountCents),
+            taxable: svc!.taxable ?? true,
+          });
+        }
       }
     }
   }

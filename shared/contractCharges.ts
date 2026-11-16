@@ -10,7 +10,7 @@ import { combineBps, netCents } from "./rebate.ts";
  * here bills anything: it is the schedule, shown on the contract.
  */
 export type BillingPeriod = "monthly" | "yearly";
-export type ChargeLine = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; quantity: number; addedOn: string; /** A rebate on the price (percent × 100): what is charged is the price after it */ rebateBps?: number };
+export type ChargeLine = { id: string; name: string; kind: "recurring" | "recurring_yearly"; priceCents: number; quantity: number; addedOn: string; /** The last day charged (units taken off after it): none = to the end of the contract */ endedOn?: string | null; /** A rebate on the price (percent × 100): what is charged is the price after it */ rebateBps?: number };
 export type ChargePiece = { lineId: string; name: string; /** The rebate this piece carries (percent × 100) */ rebateBps?: number; amountCents: number; prorated: boolean; days: number; periodDays: number; from: string; to: string };
 export type ChargeEntry = {
   /** The day it is charged */
@@ -70,7 +70,8 @@ export function contractCharges(
   for (const l of lines) {
     const period: ServicePeriod = l.kind === "recurring_yearly" ? "yearly" : "monthly";
     const unit = netCents(l.priceCents, l.rebateBps);
-    const plan = prorata({ period, priceCents: unit * Math.max(1, l.quantity), addedOn: l.addedOn, start, end: endsOn });
+    const lineEnd = l.endedOn && l.endedOn < endsOn ? l.endedOn : endsOn;
+    const plan = prorata({ period, priceCents: unit * Math.max(1, l.quantity), addedOn: l.addedOn, start, end: lineEnd });
     if (typeof plan === "string") continue;
     const piece = (p: (typeof plan.periods)[number]): ChargePiece => ({ lineId: l.id, name: l.name, rebateBps: l.rebateBps ?? 0, amountCents: p.amountCents, prorated: !p.full, days: p.days, periodDays: p.periodDays, from: p.from, to: p.to });
     if (c.billingPeriod === "monthly" || period === "yearly") {
@@ -105,8 +106,10 @@ export function contractCharges(
     }
   }
   const entries = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
-  const monthly = lines.filter((l) => l.kind === "recurring").reduce((n, l) => n + netCents(l.priceCents, l.rebateBps) * Math.max(1, l.quantity), 0);
-  const yearly = lines.filter((l) => l.kind === "recurring_yearly").reduce((n, l) => n + netCents(l.priceCents, l.rebateBps) * Math.max(1, l.quantity), 0);
+  // a line whose units were taken off no longer counts in a full period
+  const running = (l: ChargeLine) => !l.endedOn || l.endedOn >= endsOn;
+  const monthly = lines.filter((l) => l.kind === "recurring" && running(l)).reduce((n, l) => n + netCents(l.priceCents, l.rebateBps) * Math.max(1, l.quantity), 0);
+  const yearly = lines.filter((l) => l.kind === "recurring_yearly" && running(l)).reduce((n, l) => n + netCents(l.priceCents, l.rebateBps) * Math.max(1, l.quantity), 0);
   return {
     endsOn,
     revenueCents: entries.reduce((n, e) => n + e.amountCents, 0),

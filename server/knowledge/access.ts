@@ -75,6 +75,7 @@ export const SECTION_ACCESS: Record<string, string[]> = {
   "A ticket turned into a project (latest)": ["tickets.edit", "projects.view"],
   "One due date, the inactivity reminder, What's new (latest)": ["tickets.view"],
   "Projects, new format: billing, files, archive import, made from a ticket or a quote (latest)": ["proj.view"],
+  "Contract lines: adding or taking off units from a day (latest)": ["crm.billing"],
   "Ma journée: time given to each item, in quarter hours (latest)": ["pipeline.view"],
   "Project tasks: contract, waiting, order; each technician's own sort (latest)": ["projects.view"],
   "Ma journée on days off, project windows in the drawer, tasks by hand (latest)": ["pipeline.view"],
