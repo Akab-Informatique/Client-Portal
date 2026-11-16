@@ -51,7 +51,7 @@ export function DayBlockDialog({ draft, date, forUser, onClose, onSaved }: { dra
   };
   const toTask = useMutation({
     mutationFn: async () => {
-      const t = await api.post<{ id: string }>("/pipeline/tasks", { title: v.title.trim(), notes: v.note.trim(), estimateMinutes: Math.max(15, mins(v.end) - mins(v.start)), checkpointDate: date, checkpointTime: v.start, assigneeId: forUser ?? me.id });
+      const t = await api.post<{ id: string }>("/pipeline/tasks", { title: v.title.trim(), notes: v.note.trim(), estimateMinutes: Math.max(15, mins(v.end) - mins(v.start)), dueDate: date, assigneeId: forUser ?? me.id });
       await place(`task:${t.id}`, `/pipeline/day/tasks/${t.id}`);
     },
     onSuccess: () => {

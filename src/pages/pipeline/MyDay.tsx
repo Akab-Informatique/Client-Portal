@@ -335,7 +335,7 @@ function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) 
                   <span className={cn("size-2 shrink-0 rounded-full", i.kind === "ticket" ? "bg-[color:var(--gold)]" : i.kind === "ptask" ? "bg-teal-400" : "bg-violet-400")} />
                   {i.ticketNumber && <span className="shrink-0 font-mono text-xs text-primary">{i.ticketNumber}</span>}
                   <span className="min-w-0 flex-1 truncate">{i.title}</span>
-                  <span className="shrink-0 text-[11px] text-orange-300">{t("pipeline.day.reevaluate.since", { date: (i.due ?? i.checkpoint ?? "").slice(0, 10) })}</span>
+                  <span className="shrink-0 text-[11px] text-orange-300">{t("pipeline.day.reevaluate.since", { date: (i.due ?? "").slice(0, 10) })}</span>
                 </button>
               </li>
             ))}
