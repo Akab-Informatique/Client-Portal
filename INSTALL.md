@@ -99,6 +99,10 @@ docker compose up -d --build
 
 Database migrations run automatically when the app starts.
 
+## Dashboard TV (lobby sign)
+
+The lobby TV sign needs no extra setting or service. Migrations run at start-up as usual; the TV PC, the bots' secret links and the checks after an upgrade are in [docs/dashboard-tv.md](docs/dashboard-tv.md).
+
 ## Firewall
 
 Port 3000 is plain HTTP: only Nginx Proxy Manager should reach it. Docker's
