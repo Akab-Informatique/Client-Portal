@@ -57,6 +57,21 @@
   function rnd(a, b) { return a + Math.random() * (b - a); }
   function T(s, x, y, c, sc, o, al) { return PX.text(g, s, x, y, c, sc, o, al); }
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  // Quebec time, whatever time zone the TV's PC is set to (a PC left on UTC showed 19:38 for 14:38)
+  var QC_FMT = null;
+  try { QC_FMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }); } catch (e) { QC_FMT = null; }
+  function qcTime(d) {
+    if (QC_FMT) {
+      var h = 0, m = 0, parts = QC_FMT.formatToParts(d || new Date());
+      for (var i = 0; i < parts.length; i++) {
+        if (parts[i].type === 'hour') h = parseInt(parts[i].value, 10) % 24;
+        else if (parts[i].type === 'minute') m = parseInt(parts[i].value, 10);
+      }
+      return { h: h, m: m };
+    }
+    d = d || new Date();
+    return { h: d.getHours(), m: d.getMinutes() };
+  }
 
   // ---------- layout ----------
   var lay = null, bg = null;
@@ -966,7 +981,8 @@
   function placeLogo() { /* header logo removed: the brand lives on the wall sign */ }
   function drawHeader(t, now) {
     if (!CLOCK) return;
-    var str = pad2(now.getHours()) + ((Math.floor(t) & 1) ? ' ' : ':') + pad2(now.getMinutes());
+    var qc = qcTime(now);
+    var str = pad2(qc.h) + ((Math.floor(t) & 1) ? ' ' : ':') + pad2(qc.m);
     if (xmas && oct.clockOff) str = '  ' + ((Math.floor(t) & 1) ? ' ' : ':') + '  ';
     T(str, 426, 21, '#F7941D', 2, null, 'center'); T(str, 426, 20, '#FFF200', 2, null, 'center');
   }
@@ -1427,7 +1443,8 @@
       } else drawOctet(oct.x, oct.y, t, o);
       if (act && ty === 'plant') plant(12, 196);
       if (act && ty === 'clock') {
-        var s = pad2(new Date().getHours()) + ':' + pad2(new Date().getMinutes());
+        var qn = qcTime(new Date());
+        var s = pad2(qn.h) + ':' + pad2(qn.m);
         T(s, oct.x, oct.y - 52, '#FFF200', 1, DARK, 'center');
       }
     } });
@@ -1511,7 +1528,7 @@
 
   // reload once a day at 04:00 (and never right after a fresh boot)
   setInterval(function () {
-    var n = new Date();
-    if (n.getHours() === 4 && n.getMinutes() === 0 && Date.now() - bootTime > 120000) location.reload();
+    var n = qcTime(new Date());
+    if (n.h === 4 && n.m === 0 && Date.now() - bootTime > 120000) location.reload();
   }, 15000);
 })();
