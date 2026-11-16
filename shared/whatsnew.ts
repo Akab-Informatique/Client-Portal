@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-15.1",
+    date: "2026-11-15",
+    sections: [
+      {
+        fr: "Tri des projets par tâche",
+        en: "Projects sorted by task",
+        items: [
+          { fr: "Un projet est classé selon l'échéance de sa tâche la plus proche (sinon son échéance). Un projet sans tâche clignote, affiche « Aucune tâche » et avertit à l'ouverture.", en: "A project is sorted by the due date of its nearest task (else its own). A project with no task flashes, says \"No task\" and warns when opened." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-13.4",
     date: "2026-11-13",
     sections: [

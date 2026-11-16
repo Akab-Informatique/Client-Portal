@@ -35,6 +35,9 @@ export type ProjectView = {
   workedHours: number;
   taskTotal: number;
   taskDone: number;
+  /** Tasks not done, and the earliest due day among them (the list sorts a project by it) */
+  taskOpen: number;
+  nextTaskDue: string | null;
   memberIds: string[];
   updatedAt: string;
   stale?: boolean;
@@ -219,7 +222,7 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
     clientIds.length ? d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, clientIds)) : Promise.resolve([]),
     namesOf(rows.map((r) => r.leadId)),
     d.select({ projectId: schema.projMembers.projectId, userId: schema.projMembers.userId }).from(schema.projMembers).where(inArray(schema.projMembers.projectId, ids)),
-    d.select({ projectId: schema.projTasks.projectId, status: schema.projTasks.status, updatedAt: schema.projTasks.updatedAt }).from(schema.projTasks).where(inArray(schema.projTasks.projectId, ids)),
+    d.select({ projectId: schema.projTasks.projectId, status: schema.projTasks.status, updatedAt: schema.projTasks.updatedAt, dueDate: schema.projTasks.dueDate }).from(schema.projTasks).where(inArray(schema.projTasks.projectId, ids)),
     d
       .select({ projectId: schema.timesheetEntries.projId, h: sql<number>`sum(${schema.timesheetEntries.hoursX100})::int` })
       .from(schema.timesheetEntries)
@@ -253,6 +256,8 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
       workedHours: hoursOf(Number(worked)),
       taskTotal: mine.length,
       taskDone: mine.filter((t) => t.status === "done").length,
+      taskOpen: mine.filter((t) => t.status !== "done").length,
+      nextTaskDue: mine.filter((t) => t.status !== "done" && t.dueDate).map((t) => t.dueDate as string).sort()[0] ?? null,
       memberIds: members.filter((m) => m.projectId === p.id).map((m) => m.userId),
       updatedAt: p.updatedAt.toISOString(),
       ...quiet.get(p.id),

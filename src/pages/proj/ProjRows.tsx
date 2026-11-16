@@ -27,7 +27,7 @@ export function filterProjectRows(
 ): ProjectRow[] {
   const words = normalizeText(o.q).split(/\s+/).filter(Boolean);
   const companyNames = o.company.map((c) => normalizeText(o.companyNames.get(c) ?? ""));
-  return rows.filter((p) => {
+  return [...rows].sort((a, b) => (projDue(a) ?? "9999").localeCompare(projDue(b) ?? "9999")).filter((p) => {
     const mine = p.lead?.id === o.meId || p.memberIds.includes(o.meId);
     if (o.view === "mine" && !mine) return false;
     if (o.view === "unassigned" && p.lead) return false;
@@ -101,8 +101,19 @@ function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** The day a project counts for in the lists: the earliest due task, else the project's own due day */
+export function projDue(p: ProjectRow): string | null {
+  return p.nextTaskDue ?? p.dueDate;
+}
+
+/** An open project with no task left to do: it flashes and says so */
+export function noTask(p: ProjectRow): boolean {
+  return (p.status === "planning" || p.status === "active") && (p.taskOpen ?? 1) === 0;
+}
+
 function isLate(p: ProjectRow) {
-  return Boolean(p.dueDate) && p.dueDate! < todayIso() && p.status !== "done" && p.status !== "cancelled";
+  const due = projDue(p);
+  return Boolean(due) && due! < todayIso() && p.status !== "done" && p.status !== "cancelled";
 }
 
 function hoursText(p: ProjectRow, t: (k: string, o?: Record<string, unknown>) => string) {
@@ -136,7 +147,7 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
           // a violet tint and a violet left bar (border + 4px less padding keeps the columns aligned with the tickets)
           "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 border-l-4 border-violet-500 bg-violet-500/[0.07] py-2.5 pl-9 pr-5 text-left transition-colors hover:bg-violet-500/[0.13] xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
           active && "bg-violet-500/[0.14]",
-          p.stale && p.status !== "done" && p.status !== "cancelled" && STALE_ROW,
+          (noTask(p) || (p.stale && p.status !== "done" && p.status !== "cancelled")) && STALE_ROW,
         )}
       >
         <span aria-hidden className="pointer-events-none absolute left-[11px] top-1/2 -translate-y-1/2 text-violet-300">
@@ -150,6 +161,7 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
           <span className="mt-0.5 flex flex-wrap gap-x-3 text-xs text-muted-foreground">
             {progress && <span>{progress}</span>}
             {hours && <span className="font-mono tabular-nums">{hours}</span>}
+            {noTask(p) && <span className="font-semibold text-amber-300">{t("projList.noTask")}</span>}
           </span>
         </span>
         <span className="flex flex-wrap items-center gap-2 xl:contents">
@@ -159,7 +171,7 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
           <span className="min-w-0 text-xs xl:[order:var(--o-company)]">
             {p.client ? <span className="block break-words leading-snug">{p.client.name}</span> : <span className="text-muted-foreground/60">—</span>}
           </span>
-          <span className={cn("min-w-0 whitespace-nowrap font-mono text-[11px] tabular-nums xl:[order:var(--o-due)]", late ? "font-semibold text-red-300" : "text-muted-foreground/70")}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>
+          <span className={cn("min-w-0 whitespace-nowrap font-mono text-[11px] tabular-nums xl:[order:var(--o-due)]", late ? "font-semibold text-red-300" : "text-muted-foreground/70")}>{projDue(p) ? shortDate(projDue(p)!) : "—"}</span>
           <span className="min-w-0 text-muted-foreground/60 xl:[order:var(--o-priority)]">—</span>
           <span className="min-w-0 xl:[order:var(--o-assignee)]">
             {p.lead ? (
@@ -192,6 +204,7 @@ export function ProjCompactRow({ p, order, gridStyle, onOpen }: { p: ProjectRow;
         <span className="truncate font-medium" title={p.name}>
           {p.name}
         </span>
+        {noTask(p) && <span className="shrink-0 text-[11px] font-semibold text-amber-300">{t("projList.noTask")}</span>}
       </span>
     ),
     company: <span className="truncate text-xs text-muted-foreground">{p.client?.name ?? "—"}</span>,
@@ -199,12 +212,13 @@ export function ProjCompactRow({ p, order, gridStyle, onOpen }: { p: ProjectRow;
     milestone: dash,
     assignee: <span className="truncate text-xs text-muted-foreground">{p.lead?.name ?? "—"}</span>,
     secondary: dash,
-    due: <span className={cn("whitespace-nowrap font-mono text-[11px] tabular-nums", late ? "font-semibold text-red-300" : "text-muted-foreground/70")}>{p.dueDate ? shortDate(p.dueDate) : "—"}</span>,
+    due: <span className={cn("whitespace-nowrap font-mono text-[11px] tabular-nums", late ? "font-semibold text-red-300" : "text-muted-foreground/70")}>{projDue(p) ? shortDate(projDue(p)!) : "—"}</span>,
     status: <span className={cn("inline-flex max-w-full items-center truncate rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_TONE[p.status])}>{t(`projList.status.${p.status}`)}</span>,
+
   };
   return (
     <li className="relative">
-      <button type="button" onClick={onOpen} aria-label={`${p.number} ${p.name}`} style={gridStyle} className="relative grid w-full items-center gap-x-3 border-l-4 border-violet-500 bg-violet-500/[0.07] py-1 pl-3 pr-4 text-left text-sm transition-colors hover:bg-violet-500/[0.13]">
+      <button type="button" onClick={onOpen} aria-label={`${p.number} ${p.name}`} style={gridStyle} className={cn("relative grid w-full items-center gap-x-3 border-l-4 border-violet-500 bg-violet-500/[0.07] py-1 pl-3 pr-4 text-left text-sm transition-colors hover:bg-violet-500/[0.13]", noTask(p) && STALE_ROW)}>
         {order.map((c) => (
           <div key={c} className="min-w-0">
             {cells[c] ?? null}
@@ -237,12 +251,12 @@ export function GroupToggle({ value, onChange }: { value: boolean; onChange: (v:
  */
 export function slotProjects(items: { id: number; dueAt: string }[], projects: ProjectRow[], lo?: string | null, hi?: string | null) {
   const sorted = [...projects]
-    .filter((p) => (lo == null || (p.dueDate ?? "9999") >= lo) && (hi == null || (p.dueDate ?? "9999") < hi))
-    .sort((a, b) => (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999"));
+    .filter((p) => (lo == null || (projDue(p) ?? "9999") >= lo) && (hi == null || (projDue(p) ?? "9999") < hi))
+    .sort((a, b) => (projDue(a) ?? "9999").localeCompare(projDue(b) ?? "9999"));
   const before = new Map<number, ProjectRow[]>();
   const tail: ProjectRow[] = [];
   for (const p of sorted) {
-    const day = p.dueDate ?? "9999";
+    const day = projDue(p) ?? "9999";
     const at = items.find((tk) => tk.dueAt.slice(0, 10) > day);
     if (!at) tail.push(p);
     else before.set(at.id, [...(before.get(at.id) ?? []), p]);

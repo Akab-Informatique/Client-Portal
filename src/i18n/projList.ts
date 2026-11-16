@@ -47,6 +47,9 @@ export const fr = {
       cancelled: "Annulé",
     },
     shownProjects: "{{count}} projet(s)",
+    noTask: "⚠ Aucune tâche",
+    noTaskTitle: "Ce projet n'a aucune tâche à faire",
+    noTaskText: "Sans tâche, le projet est classé selon sa propre échéance. Ajoutez au moins une tâche avec une échéance pour qu'il apparaisse au bon moment dans la liste.",
   },
 };
 
@@ -98,5 +101,8 @@ export const en = {
       cancelled: "Cancelled",
     },
     shownProjects: "{{count}} project(s)",
+    noTask: "⚠ No task",
+    noTaskTitle: "This project has no task to do",
+    noTaskText: "With no task, the project is sorted by its own due date. Add at least one task with a due date so it shows up at the right time in the list.",
   },
 };

@@ -25,6 +25,8 @@ export type ProjectRow = {
   workedHours: number;
   taskTotal: number;
   taskDone: number;
+  taskOpen?: number;
+  nextTaskDue?: string | null;
   memberIds: string[];
   updatedAt: string;
 };

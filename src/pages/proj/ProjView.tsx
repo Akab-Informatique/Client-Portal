@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -168,6 +169,10 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
   const [taskId, setTaskId] = useState<string | null>(null);
   const [askTask, setAskTask] = useState<ProjTask | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  // an open project with no task left to do: a warning once when it is opened (not while it is being started)
+  const [params] = useSearchParams();
+  const [warnedNoTask, setWarnedNoTask] = useState(false);
+  const noTaskAlert = Boolean(d) && !warnedNoTask && params.get("kickoff") !== "1" && (d!.status === "planning" || d!.status === "active") && d!.tasks.every((x) => x.status === "done");
 
   const canEdit = can("proj.edit");
 
@@ -195,6 +200,17 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
 
   return (
     <>
+      {noTaskAlert && (
+        <Dialog open onOpenChange={() => setWarnedNoTask(true)}>
+          <DialogContent className="max-w-md border-amber-400/50">
+            <DialogTitle className="text-amber-300">{t("projList.noTaskTitle")}</DialogTitle>
+            <DialogDescription>{t("projList.noTaskText")}</DialogDescription>
+            <div className="flex justify-end">
+              <Button onClick={() => setWarnedNoTask(true)}>OK</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
       <Dialog open onOpenChange={(o) => !o && onClose()}>
         <DialogContent
           showCloseButton={false}
