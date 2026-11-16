@@ -20,6 +20,8 @@ import { WATCH_MAX_DAYS } from "../../shared/watch.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { hourlyRateOf } from "../lib/contracts.ts";
+import { chargesOfProj } from "../lib/projCharges.ts";
+import { bpsOfPercent } from "../../shared/rebate.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import {
   activeStaff,
@@ -338,11 +340,12 @@ export const projRoutes = new Hono<AppEnv>()
       try {
         await billProj(r.project.id);
         billed = true;
-        await syncBillablesNow();
       } catch {
         billed = false;
       }
     }
+    // the equipment sold is work to bill at once; the bank's price too
+    if (billed || r.sale.charges) await syncBillablesNow().catch(() => undefined);
     return c.json({ id: r.project.id, number: r.project.number, sale: r.sale, billed }, 201);
   })
 
@@ -547,9 +550,102 @@ export const projRoutes = new Hono<AppEnv>()
   .delete("/:id", requirePermission("proj.manage"), async (c) => {
     const a = auth(c);
     const p = await loadProj(c.req.param("id"));
+    // the charges go with it (cascade); their work to bill not yet approved goes too
+    const own = await db().select({ id: schema.ticketCharges.id, externalId: schema.ticketCharges.externalId }).from(schema.ticketCharges).where(eq(schema.ticketCharges.projId, p.id));
+    if (own.length) await db().delete(schema.billingItems).where(and(inArray(schema.billingItems.sourceId, own.map((x) => x.externalId ?? `pcharge:${x.id}`)), inArray(schema.billingItems.status, ["pending", "excluded"])));
     await db().delete(schema.projProjects).where(eq(schema.projProjects.id, p.id));
     await audit(a.user.id, "proj.deleted", p.id, { number: p.number, name: p.name });
     return c.json({ ok: true });
+  })
+
+  // ── charges: the equipment sold and other fees put on the project (work to bill at once) ──
+
+  .get("/:id/charges", requirePermission("proj.view"), async (c) => {
+    const p = await loadProj(c.req.param("id"));
+    return c.json(await chargesOfProj(p.id, auth(c).permissions.includes("accounting.view")));
+  })
+
+  /** A one-time charge, or an inventory item (its name and prices are filled by the screen; no stock is taken) */
+  .post("/:id/charges", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProj(c.req.param("id"));
+    if (isClosed(p)) throw new HTTPException(409, { message: "project_closed" });
+    const o = await body(
+      c,
+      z.object({
+        name: z.string().trim().min(1).max(100),
+        description: z.string().trim().max(2000).default(""),
+        quantity: z.number().positive().max(100000),
+        unitPrice: z.number().min(0).max(10000000).nullable().default(null),
+        rebate: z.number().min(0).max(100).default(0),
+        unitCost: z.number().min(0).max(10000000).nullable().default(null),
+        billable: z.boolean().default(true),
+        date: zDay.nullable().default(null),
+        storeProductId: zUuid.nullable().default(null),
+      }),
+    );
+    if (o.billable && !p.clientId) throw new HTTPException(409, { message: "project_needs_client" });
+    let productId: string | null = null;
+    if (o.storeProductId) {
+      const [prod] = await db().select({ id: schema.storeProducts.id, active: schema.storeProducts.active }).from(schema.storeProducts).where(eq(schema.storeProducts.id, o.storeProductId));
+      if (!prod || !prod.active) throw new HTTPException(404, { message: "not_found" });
+      productId = prod.id;
+    }
+    const cents = (n: number | null) => (n == null ? null : Math.round(n * 100));
+    const [row] = await db()
+      .insert(schema.ticketCharges)
+      .values({
+        ticketId: null,
+        projectId: null,
+        projId: p.id,
+        name: o.name,
+        description: o.description,
+        quantityX100: Math.round(o.quantity * 100),
+        unitPriceCents: cents(o.unitPrice),
+        rebateBps: bpsOfPercent(o.rebate),
+        unitCostCents: cents(o.unitCost),
+        billable: o.billable,
+        productId,
+        date: o.date ?? todayQc(),
+        author: a.realUser.name,
+      })
+      .returning({ id: schema.ticketCharges.id });
+    await db().update(schema.projProjects).set({ updatedAt: new Date() }).where(eq(schema.projProjects.id, p.id));
+    await audit(a.user.id, "proj.charge_added", p.id, { chargeId: row.id, name: o.name, quantity: o.quantity, unitPrice: o.unitPrice, billable: o.billable });
+    if (o.billable) await syncBillablesNow();
+    return c.json(await chargesOfProj(p.id, a.permissions.includes("accounting.view")), 201);
+  })
+
+  /** Where the goods stand: ordered, received at the office, or none — whatever the billing state */
+  .put("/:id/charges/:chargeId/supply", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProj(c.req.param("id"));
+    const chargeId = zUuid.safeParse(c.req.param("chargeId"));
+    if (!chargeId.success) throw new HTTPException(404, { message: "not_found" });
+    const o = await body(c, z.object({ supply: z.enum(["ordered", "received"]).nullable() }));
+    const done = await db().update(schema.ticketCharges).set({ supply: o.supply }).where(and(eq(schema.ticketCharges.id, chargeId.data), eq(schema.ticketCharges.projId, p.id))).returning({ id: schema.ticketCharges.id });
+    if (!done.length) throw new HTTPException(404, { message: "not_found" });
+    await audit(a.user.id, "proj.charge_supply", p.id, { chargeId: chargeId.data, supply: o.supply });
+    return c.json(await chargesOfProj(p.id, a.permissions.includes("accounting.view")));
+  })
+
+  .delete("/:id/charges/:chargeId", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProj(c.req.param("id"));
+    const chargeId = zUuid.safeParse(c.req.param("chargeId"));
+    if (!chargeId.success) throw new HTTPException(404, { message: "not_found" });
+    const [ch] = await db().select().from(schema.ticketCharges).where(and(eq(schema.ticketCharges.id, chargeId.data), eq(schema.ticketCharges.projId, p.id)));
+    if (!ch) throw new HTTPException(404, { message: "not_found" });
+    const sourceId = ch.externalId ?? `pcharge:${ch.id}`;
+    const [line] = await db().select({ status: schema.billingItems.status }).from(schema.billingItems).where(eq(schema.billingItems.sourceId, sourceId));
+    // once approved (or on an invoice) it stays: cancel the invoice first
+    if (ch.billed || (line && line.status !== "pending" && line.status !== "excluded")) throw new HTTPException(409, { message: "charge_billed" });
+    await db().transaction(async (tx) => {
+      await tx.delete(schema.billingItems).where(and(eq(schema.billingItems.sourceId, sourceId), inArray(schema.billingItems.status, ["pending", "excluded"])));
+      await tx.delete(schema.ticketCharges).where(eq(schema.ticketCharges.id, ch.id));
+    });
+    await audit(a.user.id, "proj.charge_removed", p.id, { chargeId: chargeId.data, name: ch.name });
+    return c.json(await chargesOfProj(p.id, a.permissions.includes("accounting.view")));
   })
 
   // ── tasks ──────────────────────────────────────────────────────────────

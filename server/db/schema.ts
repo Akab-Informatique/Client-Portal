@@ -874,6 +874,8 @@ export const ticketCharges = pgTable(
     ticketId: bigint("ticket_id", { mode: "number" }).references(() => tickets.id, { onDelete: "cascade" }),
     /** A charge moved onto a project (until it is approved, it can go to another ticket or project) */
     projectId: uuid("project_id").references((): AnyPgColumn => projects.id, { onDelete: "cascade" }),
+    /** A charge put on a new-format project (proj_projects): a charge is on exactly one of ticket / archive project / proj */
+    projId: uuid("proj_id").references((): AnyPgColumn => projProjects.id, { onDelete: "cascade" }),
     /** "charge:45": an Autotask charge */
     externalId: text("external_id"),
     name: text("name").notNull(),
@@ -896,7 +898,7 @@ export const ticketCharges = pgTable(
     supply: text("supply"),
     createdAt: created(),
   },
-  (t) => [index("ticket_charges_ticket_idx").on(t.ticketId), uniqueIndex("ticket_charges_external_idx").on(t.externalId)],
+  (t) => [index("ticket_charges_ticket_idx").on(t.ticketId), index("ticket_charges_proj_idx").on(t.projId), uniqueIndex("ticket_charges_external_idx").on(t.externalId)],
 );
 
 /** Files of a portal ticket (base64, 5 MB each at most) */

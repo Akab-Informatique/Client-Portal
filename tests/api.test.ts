@@ -13226,6 +13226,82 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     expect((await admin.post(`/api/proj/from-quote/${prospect.id}`, {})).json.error).toBe("project_needs_client");
     expect((await admin.post("/api/proj/from-quote/00000000-0000-4000-8000-000000000000", {})).status).toBe(404);
   });
+
+  it("charges on a project: the equipment sold is work to bill at once; supply, delete, rights; made from a quote", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj frais inc.", autotaskId: 9_100_907, portalEnabled: true }).returning();
+    const p = (await tech.post("/api/proj", { name: "Installation", clientId: client.id })).json;
+    const noClient = (await tech.post("/api/proj", { name: "Sans client" })).json;
+    expect((await tech.get(`/api/proj/${p.id}/charges`)).json).toMatchObject({ items: [], totals: { count: 0, billable: 0 } });
+
+    // a one-time charge with a rebate: 2 x 100 $ less 10 % = 180 $
+    const added = await tech.post(`/api/proj/${p.id}/charges`, { name: "Commutateur 24 ports", quantity: 2, unitPrice: 100, rebate: 10, unitCost: 60, billable: true });
+    expect(added.status).toBe(201);
+    expect(added.json.totals).toEqual({ count: 1, billable: 180 });
+    const ch = added.json.items[0];
+    expect(ch).toMatchObject({ name: "Commutateur 24 ports", quantity: 2, unitPrice: 100, rebate: 10, total: 180, supply: null, removable: true, billing: { status: "pending", invoice: null } });
+    // work to bill at once, under the project's client, with the project number
+    const line = (await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `pcharge:${ch.id}`)))[0];
+    expect(line).toMatchObject({ kind: "charge", status: "pending", clientId: client.id, ticketNumber: p.number, amountCents: 18000 });
+    // not billable: no line
+    const free = (await tech.post(`/api/proj/${p.id}/charges`, { name: "Cable offert", quantity: 1, unitPrice: 10, billable: false })).json;
+    expect(free.totals).toEqual({ count: 2, billable: 180 });
+    expect(await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `pcharge:${free.items[1].id}`))).toHaveLength(0);
+    // a billable charge needs a client
+    expect((await tech.post(`/api/proj/${noClient.id}/charges`, { name: "X", quantity: 1, unitPrice: 1 })).json.error).toBe("project_needs_client");
+
+    // where the goods stand, any time
+    expect((await tech.put(`/api/proj/${p.id}/charges/${ch.id}/supply`, { supply: "received" })).json.items[0].supply).toBe("received");
+    expect((await tech.put(`/api/proj/${p.id}/charges/${ch.id}/supply`, { supply: null })).json.items[0].supply).toBeNull();
+
+    // approved: it stays (and the supply still changes)
+    await db().update(schema.billingItems).set({ status: "approved" }).where(eq(schema.billingItems.id, line.id));
+    expect((await tech.get(`/api/proj/${p.id}/charges`)).json.items[0]).toMatchObject({ removable: false, billing: { status: "approved" } });
+    expect((await tech.del(`/api/proj/${p.id}/charges/${ch.id}`)).json.error).toBe("charge_billed");
+    expect((await tech.put(`/api/proj/${p.id}/charges/${ch.id}/supply`, { supply: "ordered" })).status).toBe(200);
+    // a pending one goes with its line
+    const gone = await tech.del(`/api/proj/${p.id}/charges/${free.items[1].id}`);
+    expect(gone.status).toBe(200);
+    expect(gone.json.totals.count).toBe(1);
+
+    // a closed project takes no new charge
+    await admin.patch(`/api/proj/${p.id}`, { status: "cancelled" });
+    expect((await tech.post(`/api/proj/${p.id}/charges`, { name: "Tard", quantity: 1, unitPrice: 1 })).json.error).toBe("project_closed");
+
+    // rights: a user without proj.view sees and adds nothing
+    if (!(await userOf("viewer@akab.local"))) {
+      const role = (await admin.get("/api/admin/roles")).json.find((r: any) => r.slug === "viewer");
+      const made = await admin.post("/api/admin/staff", { email: "viewer@akab.local", name: "Viewer", roleId: role.id });
+      await db().update(schema.users).set({ mustChangePassword: false, passwordHash: (await userOf("admin@akab.local")).passwordHash }).where(eq(schema.users.id, made.json.user.id));
+    }
+    resetRateLimit("login:ip:unknown");
+    const viewer = await signIn("viewer@akab.local");
+    expect((await viewer.get(`/api/proj/${p.id}/charges`)).status).toBe(403);
+    expect((await viewer.post(`/api/proj/${p.id}/charges`, { name: "Non", quantity: 1, unitPrice: 1 })).status).toBe(403);
+
+    // a quote: its products become charges (the line discount = the rebate), and the price sold leaves them out
+    const q = (
+      await admin.post("/api/quotes", {
+        clientId: client.id,
+        prospectName: client.name,
+        title: "Reseau",
+        lines: [
+          { description: "Installation reseau", quantityX100: 1000, unitPriceCents: 10000, recurrence: "once", taxable: true, sku: "TEMPS-TECH" },
+          { description: "Borne Wi-Fi", quantityX100: 300, unitPriceCents: 25000, discountX100: 1000, unitCostCents: 15000, recurrence: "once", taxable: true, sku: "AP-1" },
+        ],
+      })
+    ).json;
+    const r = await admin.post(`/api/proj/from-quote/${q.id}`, {});
+    expect(r.status).toBe(201);
+    expect(r.json.sale.charges).toBe(1);
+    const made = (await admin.get(`/api/proj/${r.json.id}/charges`)).json;
+    expect(made.items).toHaveLength(1);
+    expect(made.items[0]).toMatchObject({ name: "Borne Wi-Fi", quantity: 3, unitPrice: 250, rebate: 10, unitCost: 150, total: 675, billing: { status: "pending" } });
+    expect(made.totals.billable).toBe(675);
+  });
 });
 
 describe("the no-activity reminder (tickets, tasks, projects)", () => {

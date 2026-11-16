@@ -441,12 +441,14 @@ export function localTicketSource(base: TicketSource): TicketSource {
         });
       }
       const charges = await db()
-        .select({ c: schema.ticketCharges, number: schema.tickets.number, companyId: schema.tickets.companyId, projectNumber: schema.projects.number, projectCompany: schema.clients.autotaskId })
+        .select({ c: schema.ticketCharges, number: schema.tickets.number, companyId: schema.tickets.companyId, projectNumber: sql<string | null>`coalesce(${schema.projects.number}, ${schema.projProjects.number})`, projectCompany: schema.clients.autotaskId })
         .from(schema.ticketCharges)
         .leftJoin(schema.tickets, eq(schema.tickets.id, schema.ticketCharges.ticketId))
         // a charge moved onto a project is the project's client's
         .leftJoin(schema.projects, eq(schema.projects.id, schema.ticketCharges.projectId))
-        .leftJoin(schema.clients, eq(schema.clients.id, schema.projects.clientId))
+        // … or a new-format project's
+        .leftJoin(schema.projProjects, eq(schema.projProjects.id, schema.ticketCharges.projId))
+        .leftJoin(schema.clients, eq(schema.clients.id, sql`coalesce(${schema.projects.clientId}, ${schema.projProjects.clientId})`))
         .where(and(eq(schema.ticketCharges.billable, true), eq(schema.ticketCharges.billed, false)));
       for (const row of charges) {
         const { c } = row;

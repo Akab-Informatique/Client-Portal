@@ -140,13 +140,13 @@ export function ChargesTab({ p, edit }: { p: ProjectDetail; edit: boolean }) {
   );
 }
 
-function errorText(t: (k: string) => string, e: unknown) {
+export function errorText(t: (k: string) => string, e: unknown) {
   if (e instanceof ApiError && ["project_closed", "project_needs_client", "charge_billed"].includes(e.code)) return t(`projects.charges.errors.${e.code}`);
   return t("common.error");
 }
 
 /** A charge typed on the spot, or an inventory item (its name and prices fill the form; no stock is taken). */
-function AddCharge({ p, onClose, onAdded }: { p: ProjectDetail; onClose: () => void; onAdded: (next: ProjectCharge[]) => void }) {
+export function AddCharge<R = ProjectCharge[]>({ p, base, onClose, onAdded }: { p: { id: string; number: string; name: string }; base?: string; onClose: () => void; onAdded: (next: R) => void }) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<"inventory" | "oneTime">("oneTime");
   const [product, setProduct] = useState<StoreProduct | null>(null);
@@ -161,7 +161,8 @@ function AddCharge({ p, onClose, onAdded }: { p: ProjectDetail; onClose: () => v
   const valid = f.name.trim().length > 0 && qty !== null && qty > 0 && (price === null || price >= 0);
   const save = useMutation({
     mutationFn: () =>
-      api.post<ProjectCharge[]>(`/projects/${p.id}/charges`, {
+      api.post<R>(base ?? `/projects/${p.id}/charges`, {
+        storeProductId: mode === "inventory" && product ? product.id : undefined,
         name: f.name.trim().slice(0, 100),
         description: f.description.trim(),
         quantity: qty,
@@ -267,7 +268,7 @@ function AddCharge({ p, onClose, onAdded }: { p: ProjectDetail; onClose: () => v
   );
 }
 
-function ProductSearch({ onPick }: { onPick: (p: StoreProduct) => void }) {
+export function ProductSearch({ onPick }: { onPick: (p: StoreProduct) => void }) {
   const { t } = useTranslation();
   const [text, setText] = useState("");
   const [q, setQ] = useState("");

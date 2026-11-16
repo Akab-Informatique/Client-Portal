@@ -301,7 +301,29 @@ export async function projectFromQuote(quoteId: string, actorId: string) {
   const team = [...new Set([leadId, actorId])];
   await d.insert(schema.projMembers).values(team.map((userId) => ({ projectId: row.id, userId }))).onConflictDoNothing();
   await d.update(schema.quotes).set({ projectAt: new Date() }).where(eq(schema.quotes.id, quoteId));
-  return { project: row, sale: { hours, priceCents: sale.priceCents, mode } };
+  // the products sold (equipment) become billable charges of the project: line discount = rebate, no stock taken
+  const equipment = sale.charges as Array<{ description: string; details?: string | null; quantityX100: number; unitPriceCents: number; discountX100?: number; unitCostCents?: number; productId?: string | null }>;
+  if (equipment.length) {
+    const [who] = await d.select({ name: schema.users.name }).from(schema.users).where(eq(schema.users.id, actorId));
+    await d.insert(schema.ticketCharges).values(
+      equipment.map((l) => ({
+        ticketId: null,
+        projectId: null,
+        projId: row.id,
+        name: l.description.slice(0, 100),
+        description: (l.details ?? "").slice(0, 2000),
+        quantityX100: l.quantityX100,
+        unitPriceCents: l.unitPriceCents,
+        rebateBps: l.discountX100 ?? 0,
+        unitCostCents: l.unitCostCents ?? null,
+        billable: true,
+        productId: null,
+        date: today,
+        author: who?.name ?? null,
+      })),
+    );
+  }
+  return { project: row, sale: { hours, priceCents: sale.priceCents, mode, charges: equipment.length } };
 }
 
 // ── a project made from a ticket ─────────────────────────────────────────

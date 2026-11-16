@@ -8,6 +8,20 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.1",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Projets",
+        en: "Projects",
+        items: [
+          { fr: "Dans un projet, la tuile Frais est active : on y met le matériel vendu (article de l'inventaire ou frais ponctuel), avec rabais, coût, étiquette et suivi Commandé / Reçu au bureau. Un frais facturable va tout de suite à l'approbation, pour le client du projet. Un projet fait depuis une soumission reçoit ses produits comme frais.", en: "In a project, the Charges tile now works: put the equipment sold there (an inventory item or a one-time charge), with rebate, cost, label and Ordered / Received at the office tracking. A billable charge goes straight to approval for the project's client. A project made from a quote gets its products as charges." },
+          { fr: "Les tâches faites d'un projet sont nettement plus foncées (ligne presque noire, texte gris barré) : les tâches ouvertes ressortent.", en: "A project's finished tasks are clearly darker (near-black row, grey struck-out text), so the open ones stand out." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-16.4",
     date: "2026-11-16",
     sections: [

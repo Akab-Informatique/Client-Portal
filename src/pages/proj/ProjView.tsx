@@ -3,7 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Info, Minus, Plus, Receipt, Trash2, Users, X } from "lucide-react";
+import { Info, Minus, Plus, Trash2, Users, X } from "lucide-react";
+import { ChargesTile } from "./ProjCharges";
 import { projDock } from "@/lib/projDock";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -261,13 +262,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                 <div className="flex flex-wrap items-stretch gap-3">
                   <TeamTile project={d} canEdit={canEdit} onSave={(body) => save.mutate(body)} />
                   <ProjGauge worked={d.worked.hours} sold={d.soldHours} canEdit={canEdit} onSaveSold={(hours) => save.mutate({ soldHours: hours })} />
-                  <button type="button" className={cn(tileCls, "border-white/10")} disabled aria-disabled="true" aria-label={`${t("proj.tile.charges")}: ${t("proj.tile.soon")}`} title={t("proj.tile.soon")}>
-                    <Receipt className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-                    <span className="min-w-0">
-                      <span className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("proj.tile.charges")}</span>
-                      <span className="block text-sm text-muted-foreground">{t("proj.tile.soon")}</span>
-                    </span>
-                  </button>
+                  <ChargesTile d={d} canEdit={canEdit} className={tileCls} />
                   <button type="button" className={tileCls} onClick={() => setInfoOpen(true)}>
                     <Info className="size-5 shrink-0 text-violet-300" aria-hidden />
                     <span className="min-w-0">

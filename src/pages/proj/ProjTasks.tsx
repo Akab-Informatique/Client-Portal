@@ -97,7 +97,11 @@ export function ProjTasks({ project, onOpenTask, onAskDone }: { project: ProjDet
             return (
               <li
                 key={task.id}
-                className={cn("grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2 md:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto_auto]", done && "opacity-60")}
+                className={cn(
+                  "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 rounded-xl border px-3 py-2 md:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto_auto]",
+                  // a finished task is clearly darker: near-black row, faded content, so the open ones stand out
+                  done ? "border-black bg-black/85 saturate-0 [&>*]:opacity-40" : "border-white/10 bg-white/[0.02]",
+                )}
               >
                 <input
                   type="checkbox"
@@ -113,7 +117,7 @@ export function ProjTasks({ project, onOpenTask, onAskDone }: { project: ProjDet
                       type="button"
                       onClick={() => onOpenTask(task.id)}
                       aria-label={`${t("proj.tasks.open")}: ${task.title}`}
-                      className={cn("min-w-0 truncate text-left text-sm font-medium hover:text-violet-200 hover:underline", done && "line-through")}
+                      className={cn("min-w-0 truncate text-left text-sm font-medium hover:text-violet-200 hover:underline", done && "text-muted-foreground line-through decoration-2")}
                     >
                       {task.title}
                     </button>
