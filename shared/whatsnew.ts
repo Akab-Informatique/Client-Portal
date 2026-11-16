@@ -15,6 +15,7 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         fr: "Rappel d'inactivité",
         en: "Inactivity reminder",
         items: [
+          { fr: "Ma journée et la liste des billets : un projet a maintenant le même menu qu'un billet (le trait à gauche) : ajouter à ma journée, ouvrir.", en: "Ma journée and the tickets list: a project now has the same menu as a ticket (the line on the left): add to my day, open." },
           { fr: "Admin › Billets : un bouton remet à zéro tous les rappels d'un coup, sans ouvrir chaque billet, tâche ou projet.", en: "Admin › Tickets: one button resets every reminder at once, without opening each ticket, task or project." },
         ],
       },

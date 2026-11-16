@@ -12945,6 +12945,8 @@ describe("new-format projects: billing, files, the archive brought over, made fr
   };
 
   it("billing: each mode asks for what it needs; a bank is paid when made; a package starts its entries included", async () => {
+    // other tests also log time today: start this one from an empty day (a person is capped at 24 h a day)
+    await db().delete(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.userId, (await userOf("tech@akab.local")).id), eq(schema.timesheetEntries.date, qcToday())));
     const tech = await signIn("tech@akab.local");
     const admin = await signIn("admin@akab.local");
     const [client] = await db().insert(schema.clients).values({ name: "Zz Proj billing inc.", autotaskId: 9_100_901, portalEnabled: true }).returning();
@@ -12992,6 +12994,8 @@ describe("new-format projects: billing, files, the archive brought over, made fr
   });
 
   it("project time is work to bill under Projets, at the project's rate (contract, special, hourly)", async () => {
+    // other tests also log time today: start this one from an empty day (a person is capped at 24 h a day)
+    await db().delete(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.userId, (await userOf("tech@akab.local")).id), eq(schema.timesheetEntries.date, qcToday())));
     const tech = await signIn("tech@akab.local");
     await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
     (await import("../server/lib/localTickets.ts")).resetTicketMode();
@@ -13258,5 +13262,21 @@ describe("inactivity reminder: reset all", () => {
     expect(r.status).toBe(200);
     expect(r.json.tasks).toBeGreaterThan(0);
     expect((await tech.get(`/api/pipeline/tasks/${open.id}`)).json.stale).toBe(false);
+  });
+});
+
+describe("a new-format project on my day", () => {
+  it("the left-edge menu adds a project to the day; it shows as one block and can be taken off", async () => {
+    const tech = await signIn("tech@akab.local");
+    const p = (await tech.post("/api/proj", { name: "Projet du jour", dueDate: "2030-01-10" })).json;
+    expect((await tech.get(`/api/pipeline/day/pprojects/${p.id}`)).json.added).toBe(false);
+    expect((await tech.put(`/api/pipeline/day/pprojects/${p.id}`, { time: null })).json).toMatchObject({ added: true });
+    const day = (await tech.get("/api/pipeline/day")).json;
+    expect(day.items.find((i: any) => i.key === `pproject:${p.id}`)).toMatchObject({ kind: "pproject", ticketNumber: p.number, title: "Projet du jour" });
+    expect((await tech.del(`/api/pipeline/day/pprojects/${p.id}`)).json.added).toBe(false);
+    expect((await tech.get("/api/pipeline/day")).json.items.some((i: any) => i.key === `pproject:${p.id}`)).toBe(false);
+    // a closed project cannot be added
+    await tech.patch(`/api/proj/${p.id}`, { status: "done" });
+    expect((await tech.put(`/api/pipeline/day/pprojects/${p.id}`, { time: null })).json.error).toBe("project_closed");
   });
 });

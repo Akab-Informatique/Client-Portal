@@ -12,7 +12,7 @@ import type { Person } from "@/pages/pipeline/shared";
 import { ticketErrorText } from "./shared";
 
 export type DayTicketState = { added: boolean; dueTime: string | null };
-export type DayKind = "ticket" | "task" | "ptask";
+export type DayKind = "ticket" | "task" | "ptask" | "pproject";
 
 const qs = (userId?: string) => (userId ? `?userId=${userId}` : "");
 

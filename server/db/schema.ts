@@ -1432,7 +1432,8 @@ export const ticketDayAdds = pgTable(
     projectTaskId: uuid("project_task_id").references(() => projectTasks.id, { onDelete: "cascade" }),
     /** Or a whole phase (milestone) of a project, or a whole project: one item of the day, opened as the folder */
     milestoneId: uuid("milestone_id").references(() => projectMilestones.id, { onDelete: "cascade" }),
-    projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    /** A project (archive `projects` or new format `proj_projects`: no foreign key, the day's list ignores one that is gone) */
+    projectId: uuid("project_id"),
     userId: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),

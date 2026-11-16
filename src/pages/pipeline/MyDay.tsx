@@ -134,7 +134,7 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
         : i.kind === "pmilestone"
           ? goTo(`/projects?project=${i.projectId}&tab=milestones&milestone=${i.refId}`)
           : i.kind === "pproject"
-            ? goTo(`/projects?project=${i.refId}`)
+            ? goTo(`/pipeline?section=tickets&pj=${i.refId}`)
             : onOpenTask(i.refId);
   const projectTasks = (data?.items ?? []).filter((i) => i.kind === "ptask");
 

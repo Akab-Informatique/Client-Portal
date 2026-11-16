@@ -47,7 +47,7 @@ export function RemoveFromDay({ kind, id, forUser, className }: { kind: DayKind;
   );
 }
 
-export function DayEdge({ kind, id, number, title, urgent, onOpen, onDay, className }: { kind: Kind; id: string; number?: string | null; title: string; urgent?: boolean; onOpen: () => void; onDay?: { forUser?: string }; className?: string }) {
+export function DayEdge({ kind, id, number, title, urgent, onOpen, onDay, className, violet }: { violet?: boolean; kind: Kind; id: string; number?: string | null; title: string; urgent?: boolean; onOpen: () => void; onDay?: { forUser?: string }; className?: string }) {
   const { t } = useTranslation();
   const me = useMe();
   const can = useCan();
@@ -83,7 +83,7 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, onDay, classN
   };
   const ticket = kind === "ticket";
   const canEdit = ticket && can("tickets.edit");
-  const canDay = can("pipeline.edit") && !onDay && (kind === "ticket" || kind === "task" || kind === "ptask");
+  const canDay = can("pipeline.edit") && !onDay && (kind === "ticket" || kind === "task" || kind === "ptask" || kind === "pproject");
   const removeFromDay = useRemoveFromDay(kind, id, onDay?.forUser);
   return (
     <>
@@ -101,7 +101,7 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, onDay, classN
               aria-hidden
               className={cn(
                 "block h-[70%] w-[3px] rounded-r-full transition-all duration-200 group-hover/line:h-[88%] group-hover/line:w-[6px] group-data-[state=open]/line:h-[88%] group-data-[state=open]/line:w-[6px]",
-                urgent ? "bg-red-400 shadow-[0_0_10px_2px_rgba(248,113,113,0.6)]" : "bg-[color:var(--gold)] shadow-[0_0_10px_2px_rgba(255,206,26,0.45)]",
+                urgent ? "bg-red-400 shadow-[0_0_10px_2px_rgba(248,113,113,0.6)]" : violet ? "bg-violet-400 shadow-[0_0_10px_2px_rgba(167,139,250,0.5)]" : "bg-[color:var(--gold)] shadow-[0_0_10px_2px_rgba(255,206,26,0.45)]",
               )}
             />
           </button>
@@ -158,7 +158,7 @@ export function DayEdge({ kind, id, number, title, urgent, onOpen, onDay, classN
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-      {dialog === "day" && <AddToDayDialog open onOpenChange={(o) => !o && setDialog(null)} tk={ticket ? { id: Number(id), number: number ?? undefined, title } : { id, title }} kind={kind as "ticket" | "task" | "ptask"} />}
+      {dialog === "day" && <AddToDayDialog open onOpenChange={(o) => !o && setDialog(null)} tk={ticket ? { id: Number(id), number: number ?? undefined, title } : { id, title }} kind={kind as "ticket" | "task" | "ptask" | "pproject"} />}
       {dialog === "accept" && detail && <AcceptDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} statuses={detail.options.statuses} />}
       {dialog === "merge" && detail && <MergeDialog open onOpenChange={(o) => !o && (setDialog(null), refresh())} tk={detail} onDone={refresh} />}
     </>

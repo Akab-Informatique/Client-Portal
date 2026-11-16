@@ -281,7 +281,11 @@ export async function dayItems(userId: string, date: string, viewerId: string = 
     }
   }
   if (prAdds.length) {
-    const rows = await d.select().from(schema.projects).where(inArray(schema.projects.id, prAdds));
+    // an archive project, or a project of the new format
+    const rows = [
+      ...(await d.select().from(schema.projects).where(inArray(schema.projects.id, prAdds))),
+      ...(await d.select().from(schema.projProjects).where(inArray(schema.projProjects.id, prAdds))),
+    ];
     for (const r of rows) {
       if (!["planning", "active"].includes(r.status)) continue;
       const put = adds.find((x) => x.projectId === r.id)!;

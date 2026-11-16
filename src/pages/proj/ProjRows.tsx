@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
 import { shortDate } from "@/pages/tickets/shared";
+import { DayEdge } from "@/pages/pipeline/DayEdge";
 import type { ProjectRow, ProjStatus } from "./shared";
 
 /** Which rows the Tickets list shows: both, tickets only, projects only. */
@@ -130,7 +131,9 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
   const hours = hoursText(p, t);
   const late = isLate(p);
   return (
-    <li>
+    <li className="relative">
+      {/* the same left-edge menu as a ticket: add to my day, open… */}
+      <DayEdge kind="pproject" id={p.id} number={p.number} title={p.name} violet onOpen={onOpen} className="absolute left-0 top-0 z-10 h-full" />
       <div
         role="button"
         tabIndex={0}
@@ -218,6 +221,7 @@ export function ProjCompactRow({ p, order, gridStyle, onOpen }: { p: ProjectRow;
   };
   return (
     <li className="relative">
+      <DayEdge kind="pproject" id={p.id} number={p.number} title={p.name} violet onOpen={onOpen} className="absolute left-0 top-0 z-10 h-full" />
       <button type="button" onClick={onOpen} aria-label={`${p.number} ${p.name}`} style={gridStyle} className={cn("relative grid w-full items-center gap-x-3 border-l-4 border-violet-500 bg-violet-500/[0.07] py-1 pl-3 pr-4 text-left text-sm transition-colors hover:bg-violet-500/[0.13]", noTask(p) && STALE_ROW)}>
         {order.map((c) => (
           <div key={c} className="min-w-0">
