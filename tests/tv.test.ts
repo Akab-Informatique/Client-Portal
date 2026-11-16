@@ -586,3 +586,39 @@ describe("Dashboard TV: easter egg", () => {
     expect(fs.readdirSync("public", { recursive: true }).some((f) => /easter|camille/i.test(String(f)))).toBe(false);
   });
 });
+
+describe("Dashboard TV: screen protection", () => {
+  const S = tv.DEFAULT_SCREEN;
+  it("rests outside opening hours in Québec time", () => {
+    expect(tv.shouldRest(S, new Date("2026-11-16T15:00:00Z"))).toBe(false); // Monday 10:00
+    expect(tv.shouldRest(S, new Date("2026-11-17T01:00:00Z"))).toBe(true); // Monday 20:00
+    expect(tv.shouldRest(S, new Date("2026-11-16T10:00:00Z"))).toBe(true); // Monday 05:00
+    expect(tv.shouldRest(S, new Date("2026-11-21T16:00:00Z"))).toBe(true); // Saturday 11:00
+    expect(tv.shouldRest({ ...S, restEnabled: false }, new Date("2026-11-21T16:00:00Z"))).toBe(false);
+  });
+
+  it("only managers read and change the settings, with validation", async () => {
+    const ok = { restEnabled: true, days: [1, 2, 3], start: "08:00", end: "17:30", brightness: 70 };
+    expect((await call("PUT", "/api/tv/screen", { cookie: tech, body: ok })).status).toBe(403);
+    expect((await call("GET", "/api/tv/screen", { cookie: tech })).status).toBe(403);
+    expect((await call("PUT", "/api/tv/screen", { cookie: admin, body: { ...ok, end: "07:00" } })).status).toBe(400);
+    expect((await call("PUT", "/api/tv/screen", { cookie: admin, body: { ...ok, start: "8h" } })).status).toBe(400);
+    expect((await call("PUT", "/api/tv/screen", { cookie: admin, body: { ...ok, brightness: 20 } })).status).toBe(400);
+    const saved = await call("PUT", "/api/tv/screen", { cookie: admin, body: ok });
+    expect(saved.status).toBe(200);
+    expect((await call("GET", "/api/tv/screen", { cookie: admin })).json.screen).toEqual(ok);
+    const a = await db().select().from(schema.auditLog).where(eq(schema.auditLog.action, "tv.screen.updated"));
+    expect(a.length).toBeGreaterThan(0);
+  });
+
+  it("the public feed carries only rest and brightness, and ignores ?rest=1", async () => {
+    resetLimits();
+    await call("PUT", "/api/tv/screen", { cookie: admin, body: { restEnabled: false, days: [0, 1, 2, 3, 4, 5, 6], start: "07:00", end: "18:00", brightness: 80 } });
+    const key = (await manage()).displayKey;
+    const pub = await call("GET", `/api/tv/display/state?key=${encodeURIComponent(key)}&rest=1`);
+    expect(pub.json.screen).toEqual({ rest: false, brightness: 80 });
+    expect(pub.text).not.toMatch(/restEnabled|"start"|"days"/);
+    expect((await call("GET", "/api/tv/state?rest=1", { cookie: tech })).json.screen).toEqual({ rest: true, brightness: 80 });
+    expect((await call("GET", "/api/tv/state", { cookie: tech })).json.screen.rest).toBe(false);
+  });
+});

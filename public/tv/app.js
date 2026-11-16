@@ -1108,6 +1108,74 @@
   }
   window.addEventListener('resize', resize);
 
+  // ---------- screen protection: pixel shift, brightness, rest outside opening hours ----------
+  var resting = false, restBox = null, restClock = null, restRed = null, restLogo = null, restWrap = null;
+  var REDUCED = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  var ORBIT = [[0, -1], [0.7, -0.7], [1, 0], [0.7, 0.7], [0, 1], [-0.7, 0.7], [-1, 0], [-0.7, -0.7]];
+  function applyShift() {
+    // the whole image (stage and its overlays, or the rest screen) moves along a slow orbit, one step every 2 minutes
+    var r = Math.max(2, Math.min(window.innerWidth, window.innerHeight) * 0.0075); // about 8 px on 1080p, well inside the 3% margin
+    var p = ORBIT[Math.floor(Date.now() / 120000) % ORBIT.length];
+    var tr = 'translate(' + Math.round(p[0] * r) + 'px,' + Math.round(p[1] * r) + 'px)';
+    var stg = document.getElementById('stage');
+    if (stg) stg.style.transform = tr;
+    if (restWrap) restWrap.style.transform = tr;
+  }
+  function buildRest() {
+    restWrap = document.createElement('div');
+    restWrap.style.cssText = 'position:fixed;inset:0;background:#000;z-index:5;display:none' + (REDUCED ? '' : ';transition:transform 2s ease-in-out');
+    restBox = document.createElement('div');
+    restBox.style.cssText = 'position:absolute;display:flex;align-items:center;gap:2vh;font:600 3vh/1 sans-serif;color:#333;pointer-events:none';
+    restLogo = document.createElement('img');
+    restLogo.src = 'assets/akab-logo.svg'; restLogo.alt = ''; restLogo.draggable = false;
+    restLogo.style.cssText = 'height:4vh;width:auto;opacity:.22';
+    restClock = document.createElement('span');
+    restRed = document.createElement('span');
+    restRed.style.cssText = 'color:#5a1414;display:none';
+    restBox.appendChild(restLogo); restBox.appendChild(restClock); restBox.appendChild(restRed);
+    restWrap.appendChild(restBox); document.body.appendChild(restWrap);
+  }
+  function restClockTick() {
+    if (!restClock) return;
+    var n = qcTime(new Date());
+    restClock.textContent = (n.h < 10 ? '0' : '') + n.h + ':' + (n.m < 10 ? '0' : '') + n.m;
+    if (restRed) { restRed.textContent = unassigned > 0 ? '● ' + (unassigned > 999 ? '999+' : unassigned) : ''; restRed.style.display = unassigned > 0 ? '' : 'none'; }
+  }
+  function restJump() {
+    if (!restBox) return;
+    var w = restBox.offsetWidth || 200, h = restBox.offsetHeight || 40;
+    var mx = window.innerWidth * 0.05, my = window.innerHeight * 0.06;
+    var x = mx + Math.random() * Math.max(1, window.innerWidth - 2 * mx - w);
+    var y = my + Math.random() * Math.max(1, window.innerHeight - 2 * my - h);
+    restBox.style.left = Math.round(x) + 'px'; restBox.style.top = Math.round(y) + 'px';
+  }
+  function setRest(on) {
+    if (on === resting) return;
+    resting = on;
+    if (!restWrap) buildRest();
+    var stg = document.getElementById('stage');
+    restWrap.style.display = on ? 'block' : 'none';
+    if (stg) stg.style.visibility = on ? 'hidden' : '';
+    if (hint) hint.style.display = on ? 'none' : '';
+    if (on) { restClockTick(); restJump(); applyShift(); }
+  }
+  function setBrightness(b) {
+    b = Math.min(100, Math.max(50, Math.floor(Number(b) || 100)));
+    var stg = document.getElementById('stage');
+    if (stg) stg.style.filter = b < 100 ? 'brightness(' + b + '%)' : '';
+  }
+  function setScreenState(sc) {
+    sc = sc && typeof sc === 'object' ? sc : {};
+    setBrightness(sc.brightness == null ? 100 : sc.brightness);
+    setRest(sc.rest === true);
+  }
+  var stageEl = document.getElementById('stage');
+  if (stageEl && !REDUCED) stageEl.style.transition = 'transform 2s ease-in-out';
+  setInterval(applyShift, 15000);
+  setInterval(restClockTick, 15000);
+  setInterval(function () { if (resting) restJump(); }, 60000);
+  window.addEventListener('resize', applyShift);
+
   // ---------- data ----------
   var fails = 0;
   // Feed: ?key=<displayKey> (kiosk, no cookies) or ?feed=<same-origin path> (portal session); default /api/tv/state.
@@ -1174,8 +1242,10 @@
     p.then(function (d) {
       if (!d || !Array.isArray(d.bots)) throw new Error('bad payload');
       var nu = Math.max(0, Math.floor(Number(d.unassigned) || 0));
-      if (prevUnassigned !== null && nu > prevUnassigned) chime();
+      if (prevUnassigned !== null && nu > prevUnassigned && !(d.screen && d.screen.rest === true)) chime();
       prevUnassigned = nu; unassigned = nu;
+      setScreenState(d.screen);
+      if (resting) restClockTick();
       if (d.easter === 'camille' && d.easterId != null) { try { startEgg(d.easterId); } catch (e) { /* ignore */ } }
       setXmas(d.christmas); applyData(d); st.lastOk = Date.now(); st.stale = !!d.stale; fails = 0;
       setTimeout(poll, 2000);
@@ -1481,6 +1551,7 @@
   var last = 0;
   function loop(ts) {
     requestAnimationFrame(loop);
+    if (resting) return;
     if (ts - last < 30) return;
     var dt = Math.min(0.1, (ts - last) / 1000); last = ts;
     try { update(dt); draw(ts / 1000); } catch (e) { /* never break the loop */ }
@@ -1506,6 +1577,7 @@
     return o.toDataURL('image/png');
   };
   resize();
+  applyShift();
   poll();
   requestAnimationFrame(loop);
 

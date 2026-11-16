@@ -296,8 +296,61 @@ export function resetEaster() {
   easter = null;
 }
 
+// ── Screen protection: rest outside opening hours (Québec time), brightness ──
+export type ScreenSettings = { restEnabled: boolean; days: number[]; start: string; end: string; brightness: number };
+export const DEFAULT_SCREEN: ScreenSettings = { restEnabled: true, days: [1, 2, 3, 4, 5], start: "07:00", end: "18:00", brightness: 90 };
+const HHMM = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+export const minutesOf = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+export function cleanScreen(raw: unknown): ScreenSettings {
+  const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const days = Array.isArray(r.days) ? [...new Set(r.days.filter((d): d is number => Number.isInteger(d) && d >= 0 && d <= 6))].sort() : DEFAULT_SCREEN.days;
+  const start = typeof r.start === "string" && HHMM.test(r.start) ? r.start : DEFAULT_SCREEN.start;
+  let end = typeof r.end === "string" && HHMM.test(r.end) ? r.end : DEFAULT_SCREEN.end;
+  if (minutesOf(end) <= minutesOf(start)) end = DEFAULT_SCREEN.end;
+  const b = Number(r.brightness);
+  return {
+    restEnabled: typeof r.restEnabled === "boolean" ? r.restEnabled : true,
+    days,
+    start,
+    end,
+    brightness: Number.isFinite(b) ? Math.min(100, Math.max(50, Math.round(b))) : DEFAULT_SCREEN.brightness,
+  };
+}
+
+/** Day of the week (0 = Sunday) and minutes since midnight, in Québec. */
+export function quebecClock(now: Date = new Date()): { dow: number; minutes: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get("weekday"));
+  return { dow, minutes: (Number(get("hour")) % 24) * 60 + Number(get("minute")) };
+}
+
+/** True when the screen should rest now: enabled and outside the opening days / hours. */
+export function shouldRest(s: ScreenSettings, now: Date = new Date()): boolean {
+  if (!s.restEnabled) return false;
+  const { dow, minutes } = quebecClock(now);
+  if (!s.days.includes(dow)) return true;
+  return minutes < minutesOf(s.start) || minutes >= minutesOf(s.end);
+}
+
+export async function getScreen(): Promise<ScreenSettings> {
+  await ensureTv();
+  const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, TV_PROVIDER));
+  return cleanScreen((row?.config as { screen?: unknown } | null)?.screen);
+}
+
+export async function setScreen(input: ScreenSettings): Promise<ScreenSettings> {
+  await ensureTv();
+  const clean = cleanScreen(input);
+  const [row] = await db().select({ config: schema.integrations.config }).from(schema.integrations).where(eq(schema.integrations.provider, TV_PROVIDER));
+  const config = { ...((row?.config ?? {}) as Record<string, unknown>), screen: clean };
+  await db().update(schema.integrations).set({ config, updatedAt: new Date() }).where(eq(schema.integrations.provider, TV_PROVIDER));
+  return clean;
+}
+
 /** The public body: names and approved labels only, never a key. `xmas` (staff preview only) forces a day of the Christmas scene. */
-export async function publicState(opts: { now?: Date; xmas?: number | null } = {}) {
+export async function publicState(opts: { now?: Date; xmas?: number | null; rest?: boolean } = {}) {
   const now = Date.now();
   const egg = activeEaster(now);
   const unassigned = await unassignedCount();
@@ -306,7 +359,9 @@ export async function publicState(opts: { now?: Date; xmas?: number | null } = {
     return { id: bot.id, name: bot.name, state: e.state, label: e.label, since: e.since.toISOString() };
   });
   const christmas = await christmasOf(opts.now ?? new Date(now), opts.xmas);
-  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, unassigned, christmas, easter: egg ? egg.name : null, easterId: egg ? egg.id : null, bots: list };
+  const sc = await getScreen();
+  const screen = { rest: opts.rest === true || shouldRest(sc, opts.now ?? new Date(now)), brightness: sc.brightness };
+  return { updatedAt: new Date(now).toISOString(), source: "portal" as const, stale: false, unassigned, christmas, screen, easter: egg ? egg.name : null, easterId: egg ? egg.id : null, bots: list };
 }
 
 /** For the managers: same as the public list, plus each bot's secret report key and its position. */

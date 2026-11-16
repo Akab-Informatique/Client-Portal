@@ -6,6 +6,7 @@ import { ArrowDown, ArrowUp, ChevronDown, ClipboardList, Copy, Pencil, Plus, Ref
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -43,7 +44,7 @@ function copy(text: string, ok: string, bad: string) {
   );
 }
 
-export function TvManage({ xmasDay, onXmasDay }: { xmasDay: number; onXmasDay: (d: number) => void }) {
+export function TvManage({ xmasDay, onXmasDay, restPreview, onRestPreview }: { xmasDay: number; onXmasDay: (d: number) => void; restPreview: boolean; onRestPreview: (on: boolean) => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState<Confirm | null>(null);
@@ -195,6 +196,8 @@ export function TvManage({ xmasDay, onXmasDay }: { xmasDay: number; onXmasDay: (
           </div>
         </>
       )}
+
+      <ScreenCard preview={restPreview} onPreview={onRestPreview} />
 
       <XmasCard day={xmasDay} onDay={onXmasDay} />
 
@@ -438,6 +441,77 @@ function XmasCard({ day, onDay }: { day: number; onDay: (d: number) => void }) {
       <Button size="sm" disabled={!draft || save.isPending} onClick={() => save.mutate()}>
         {t("tv.xmas.save")}
       </Button>
+    </div>
+  );
+}
+
+type Screen = { restEnabled: boolean; days: number[]; start: string; end: string; brightness: number };
+const WEEK = [1, 2, 3, 4, 5, 6, 0];
+
+/** Burn-in protection: rest outside opening hours (Québec time), brightness; the pixel shift is always on */
+function ScreenCard({ preview, onPreview }: { preview: boolean; onPreview: (on: boolean) => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["tv", "screen"], queryFn: () => api.get<{ screen: Screen }>("/tv/screen") });
+  const [draft, setDraft] = useState<Screen | null>(null);
+  const v = draft ?? q.data?.screen;
+  const save = useMutation({
+    mutationFn: (s: Screen) => api.put<{ screen: Screen }>("/tv/screen", s),
+    onSuccess: (r) => {
+      qc.setQueryData(["tv", "screen"], r);
+      setDraft(null);
+      toast.success(t("tv.screen.saved"));
+    },
+    onError: () => toast.error(t("tv.screen.invalid")),
+  });
+  const set = (patch: Partial<Screen>) => v && setDraft({ ...v, ...patch });
+  return (
+    <div className="space-y-3">
+      <div>
+        <h3 className="text-sm font-medium">{t("tv.screen.title")}</h3>
+        <p className="max-w-[65ch] text-xs text-muted-foreground">{t("tv.screen.hint")}</p>
+      </div>
+      {!v ? (
+        <Skeleton className="h-24 w-full" />
+      ) : (
+        <div className="space-y-3">
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={v.restEnabled} onCheckedChange={(on) => set({ restEnabled: on })} />
+            {t("tv.screen.rest")}
+          </label>
+          <fieldset className="flex flex-wrap gap-3 text-sm" disabled={!v.restEnabled}>
+            <legend className="sr-only">{t("tv.screen.days")}</legend>
+            {WEEK.map((d) => (
+              <label key={d} className="flex items-center gap-1">
+                <input type="checkbox" checked={v.days.includes(d)} onChange={(e) => set({ days: e.target.checked ? [...v.days, d].sort() : v.days.filter((x) => x !== d) })} />
+                {t(`tv.screen.day.${d}`)}
+              </label>
+            ))}
+          </fieldset>
+          <div className="flex flex-wrap items-center gap-3 text-sm">
+            <label className="flex items-center gap-2">
+              {t("tv.screen.start")}
+              <Input type="time" className="w-28" value={v.start} disabled={!v.restEnabled} onChange={(e) => set({ start: e.target.value })} />
+            </label>
+            <label className="flex items-center gap-2">
+              {t("tv.screen.end")}
+              <Input type="time" className="w-28" value={v.end} disabled={!v.restEnabled} onChange={(e) => set({ end: e.target.value })} />
+            </label>
+          </div>
+          <label className="flex items-center gap-3 text-sm">
+            {t("tv.screen.brightness", { value: v.brightness })}
+            <input type="range" min={50} max={100} step={5} value={v.brightness} onChange={(e) => set({ brightness: Number(e.target.value) })} />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" disabled={!draft || save.isPending} onClick={() => draft && save.mutate(draft)}>
+              {t("tv.screen.save")}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => onPreview(!preview)}>
+              {preview ? t("tv.screen.previewOff") : t("tv.screen.preview")}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

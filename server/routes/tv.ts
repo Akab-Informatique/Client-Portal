@@ -19,6 +19,9 @@ import {
   displayKeyMatches,
   getAubaines,
   getDisplayKey,
+  getScreen,
+  setScreen,
+  minutesOf,
   managedBots,
   parseState,
   publicState,
@@ -57,6 +60,17 @@ function photo(c: Context) {
   c.header("Content-Type", "image/jpeg");
   return c.body(new Uint8Array(readFileSync(PHOTO)));
 }
+
+const zTime = z.string().regex(/^([01][0-9]|2[0-3]):[0-5][0-9]$/);
+const zScreen = z
+  .object({
+    restEnabled: z.boolean(),
+    days: z.array(z.number().int().min(0).max(6)).max(7),
+    start: zTime,
+    end: zTime,
+    brightness: z.number().int().min(50).max(100),
+  })
+  .refine((v) => minutesOf(v.end) > minutesOf(v.start), { message: "end_before_start", path: ["end"] });
 
 const zAubaines =z.object({ aubaines: z.record(z.string().regex(/^[0-9]{1,2}$/), z.string().max(2000)) });
 
@@ -114,7 +128,7 @@ export const tvRoutes = new Hono<AppEnv>()
   .get("/state", requireStaff, requirePermission("tv.view"), async (c) => {
     const x = c.req.query("xmas");
     const xmas = x && /^[0-9]{1,2}$/.test(x) ? Number(x) : null; // staff preview of a day of the Christmas scene
-    return c.json(await publicState({ xmas }));
+    return c.json(await publicState({ xmas, rest: c.req.query("rest") === "1" }));
   })
 
   .get("/easter/camille.jpg", requireStaff, requirePermission("tv.view"), (c) => {
@@ -131,6 +145,14 @@ export const tvRoutes = new Hono<AppEnv>()
     const e = triggerEaster(p.name.toLowerCase());
     await audit(a.user.id, "tv.easter", undefined, { name: e.name });
     return c.json({ ok: true, easter: e.name });
+  })
+  .get("/screen", requireStaff, requirePermission("tv.manage"), async (c) => c.json({ screen: await getScreen() }))
+  .put("/screen", requireStaff, requirePermission("tv.manage"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, zScreen);
+    const screen = await setScreen({ ...p, days: [...new Set(p.days)].sort() });
+    await audit(a.user.id, "tv.screen.updated", undefined, { restEnabled: screen.restEnabled, start: screen.start, end: screen.end, brightness: screen.brightness });
+    return c.json({ screen });
   })
   .get("/aubaines", requireStaff, requirePermission("tv.manage"), async (c) => c.json({ aubaines: await getAubaines() }))
   .put("/aubaines", requireStaff, requirePermission("tv.manage"), async (c) => {

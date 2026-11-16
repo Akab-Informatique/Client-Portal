@@ -134,6 +134,24 @@ exemple un courriel lu par le portail).
   sauvegarde habituelle de la base (voir `INSTALL.md`). La clé de la télé est dans `integrations`
   (fournisseur `tv`).
 
+## Protéger l'écran (allumé 24 h/24)
+
+Une télé allumée en continu peut garder l'image (rémanence, « burn-in »). Ce que le portail fait :
+
+- **Décalage des pixels** (toujours actif) : toute l'image bouge lentement de quelques pixels (environ 1 % de l'écran, 8 positions en orbite, un pas toutes les 2 minutes), pour qu'aucun élément fixe ne reste au même endroit.
+- **Écran au repos hors des heures d'ouverture** (Dashboard TV › Gérer › Protection de l'écran ; heure du Québec ; par défaut lundi au vendredi, 7 h à 18 h) : l'écran devient presque noir avec une petite heure et le logo AKAB très pâles, qui changent de place chaque minute. S'il y a des billets non assignés, un petit chiffre rouge s'ajoute à l'heure (sans clignoter, sans son). « Prévisualiser le repos » montre le résultat dans l'aperçu.
+- **Luminosité** : un curseur de 50 à 100 % (90 % par défaut) abaisse l'image affichée.
+
+Ce qu'il faut régler sur la télé elle-même :
+
+- Utiliser la **minuterie marche/arrêt de la télé** pour les heures de fermeture, si elle en a une (le mieux : le rétroéclairage est vraiment éteint).
+- Désactiver tout mode « dynamique » ou luminosité maximale, et baisser le rétroéclairage (autour de 60 à 70 %).
+- Activer le **décalage de pixels / « screen shift »** de la télé s'il existe (courant sur les OLED).
+- Désactiver l'économiseur d'écran ou l'extinction automatique « éco » de la télé s'ils coupent le kiosque pendant les heures d'ouverture.
+- Laisser la télé ventilée.
+
+Les télés grand public sont souvent prévues pour moins d'heures par jour que les écrans commerciaux 24/7 : pour un remplacement, choisir un **écran commercial 24/7**.
+
 ## 6. Si ça ne marche pas
 
 | Symptôme | À vérifier |

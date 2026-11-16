@@ -12,7 +12,9 @@ export function TvPage() {
   const can = useCan();
   const frame = useRef<HTMLIFrameElement>(null);
   const [xmasDay, setXmasDay] = useState(0); // staff preview of a day of the Christmas scene (0 = none)
-  const feed = xmasDay ? `/api/tv/state?xmas=${xmasDay}` : "/api/tv/state";
+  const [restPreview, setRestPreview] = useState(false); // staff preview of the rest screen
+  const params = [xmasDay ? `xmas=${xmasDay}` : "", restPreview ? "rest=1" : ""].filter(Boolean).join("&");
+  const feed = params ? `/api/tv/state?${params}` : "/api/tv/state";
 
   const fullscreen = () => {
     void frame.current?.requestFullscreen?.().catch(() => undefined);
@@ -46,7 +48,7 @@ export function TvPage() {
         />
       </div>
 
-      {can("tv.manage") && <TvManage xmasDay={xmasDay} onXmasDay={setXmasDay} />}
+      {can("tv.manage") && <TvManage xmasDay={xmasDay} onXmasDay={setXmasDay} restPreview={restPreview} onRestPreview={setRestPreview} />}
     </div>
   );
 }

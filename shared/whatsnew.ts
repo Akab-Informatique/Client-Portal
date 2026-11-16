@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-16.4",
+    date: "2026-11-16",
+    sections: [
+      {
+        fr: "Dashboard TV",
+        en: "Dashboard TV",
+        items: [
+          { fr: "La télé du hall protège son écran : l'image se décale de quelques pixels toutes les 2 minutes, la luminosité est réglable et l'écran se met au repos hors des heures d'ouverture (horloge pâle qui change de place). Réglages dans Dashboard TV › Gérer › Protection de l'écran.", en: "The lobby TV protects its panel: the picture shifts a few pixels every 2 minutes, the brightness can be set and the screen rests outside opening hours (a dim clock that moves around). Settings in Dashboard TV › Manage › Screen protection." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-16.3",
     date: "2026-11-16",
     sections: [
