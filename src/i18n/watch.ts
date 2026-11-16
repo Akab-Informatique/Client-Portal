@@ -10,6 +10,14 @@ export const fr = {
     reset: "Remettre à zéro",
     resetHint: "Le rappel recommence à compter à partir de maintenant",
     resetDone: "Le délai recommence.",
+    admin: {
+      title: "Rappel d'inactivité : tout remettre à zéro",
+      hint: "Les billets, tâches, « à faire » et projets sans activité clignotent après leur délai. Ce bouton relance le compte de tous les éléments ouverts d'un coup, sans les ouvrir un par un. Les délais choisis sur chaque élément sont gardés.",
+      button: "Remettre tous les rappels à zéro",
+      confirmTitle: "Remettre à zéro tous les rappels d'inactivité ?",
+      confirmText: "Plus rien ne clignotera jusqu'à ce que le délai passe de nouveau.",
+      done: "Remis à zéro : {{tickets}} billets, {{tasks}} tâches, {{projects}} projets.",
+    },
   },
   whatsNew: {
     button: "Nouveautés",
@@ -33,6 +41,14 @@ export const en = {
     reset: "Reset",
     resetHint: "The reminder starts counting again from now",
     resetDone: "The delay starts again.",
+    admin: {
+      title: "Inactivity reminder: reset everything",
+      hint: "Tickets, tasks, to-dos and projects with no activity flash after their delay. This button starts the count again on every open item at once, without opening them one by one. Delays set on individual items are kept.",
+      button: "Reset all reminders",
+      confirmTitle: "Reset every inactivity reminder?",
+      confirmText: "Nothing will flash until the delay passes again.",
+      done: "Reset: {{tickets}} tickets, {{tasks}} tasks, {{projects}} projects.",
+    },
   },
   whatsNew: {
     button: "What's new",

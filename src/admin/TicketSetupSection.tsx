@@ -31,7 +31,36 @@ export function TicketSetupSection() {
       <SectionHeader title={t("ticketSetup.title")} subtitle={t("ticketSetup.subtitle")} />
       <SourcesCard />
       <StatusesCard />
+      <WatchResetCard />
     </div>
+  );
+}
+
+// ── Inactivity reminder: start every count again ──
+function WatchResetCard() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const run = useMutation({
+    mutationFn: () => api.post<{ tickets: number; tasks: number; projects: number }>("/admin/ticket-setup/watch/reset-all", {}),
+    onSuccess: (r) => {
+      toast.success(t("watch.admin.done", r));
+      void qc.invalidateQueries();
+    },
+    onError: fail(t),
+  });
+  return (
+    <Card title={t("watch.admin.title")} hint={t("watch.admin.hint")}>
+      <Button
+        variant="outline"
+        disabled={run.isPending}
+        onClick={async () => {
+          if (await confirm({ title: t("watch.admin.confirmTitle"), description: t("watch.admin.confirmText"), confirmLabel: t("watch.admin.button") })) run.mutate();
+        }}
+      >
+        {run.isPending ? <Loader2 className="size-4 animate-spin" /> : null} {t("watch.admin.button")}
+      </Button>
+    </Card>
   );
 }
 

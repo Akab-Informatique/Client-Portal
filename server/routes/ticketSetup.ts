@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, eq, ne } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -31,6 +31,23 @@ const baseOptions = (src: TicketSource) => (Object.getPrototypeOf(src) as Ticket
 export const ticketSetupRoutes = new Hono<AppEnv>()
   .use(requireStaff)
   .use(requirePermission("admin.tickets"))
+
+  /** Starts the "no activity" count again on every open ticket, task / to-do and project at once, so nothing flashes (their own delays are kept) */
+  .post("/watch/reset-all", async (c) => {
+    const a = auth(c);
+    const d = db();
+    const count = async (q: ReturnType<typeof sql>) => Number(((await d.execute(q)) as unknown as { rows?: { n: number }[] }).rows?.[0]?.n ?? 0);
+    await d.execute(sql`insert into watch_state (kind, item_id, reset_at) select 'ticket', id::text, now() from tickets where completed_at is null on conflict (kind, item_id) do update set reset_at = now()`);
+    await d.execute(sql`insert into watch_state (kind, item_id, reset_at) select 'task', id::text, now() from pipeline_tasks where status <> 'done' on conflict (kind, item_id) do update set reset_at = now()`);
+    await d.execute(sql`insert into watch_state (kind, item_id, reset_at) select 'proj', id::text, now() from proj_projects where status in ('planning', 'active') on conflict (kind, item_id) do update set reset_at = now()`);
+    const counts = {
+      tickets: await count(sql`select count(*)::int as n from watch_state where kind = 'ticket'`),
+      tasks: await count(sql`select count(*)::int as n from watch_state where kind = 'task'`),
+      projects: await count(sql`select count(*)::int as n from watch_state where kind = 'proj'`),
+    };
+    await audit(a.user.id, "watch.reset_all", "all", counts);
+    return c.json({ ok: true, ...counts });
+  })
 
   // ── Sources ──
   .get("/sources", async (c) => {

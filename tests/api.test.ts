@@ -13244,3 +13244,19 @@ describe("what's new", () => {
     expect((await admin.get("/api/me/whatsnew")).json.seen).toBeNull();
   });
 });
+
+describe("inactivity reminder: reset all", () => {
+  it("one button starts every open item's count again; closed ones are left; others cannot", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const old = new Date(Date.now() - 10 * 86_400_000);
+    const open = (await tech.post("/api/pipeline/tasks", { title: "Silence tous" })).json;
+    await db().update(schema.pipelineTasks).set({ updatedAt: old }).where(eq(schema.pipelineTasks.id, open.id));
+    expect((await tech.get(`/api/pipeline/tasks/${open.id}`)).json.stale).toBe(true);
+    expect((await tech.post("/api/admin/ticket-setup/watch/reset-all", {})).status).toBe(403);
+    const r = await admin.post("/api/admin/ticket-setup/watch/reset-all", {});
+    expect(r.status).toBe(200);
+    expect(r.json.tasks).toBeGreaterThan(0);
+    expect((await tech.get(`/api/pipeline/tasks/${open.id}`)).json.stale).toBe(false);
+  });
+});

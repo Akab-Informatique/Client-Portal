@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-16.1",
+    date: "2026-11-16",
+    sections: [
+      {
+        fr: "Rappel d'inactivité",
+        en: "Inactivity reminder",
+        items: [
+          { fr: "Admin › Billets : un bouton remet à zéro tous les rappels d'un coup, sans ouvrir chaque billet, tâche ou projet.", en: "Admin › Tickets: one button resets every reminder at once, without opening each ticket, task or project." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-15.1",
     date: "2026-11-15",
     sections: [
