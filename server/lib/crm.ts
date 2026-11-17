@@ -6,6 +6,7 @@ import { billingSettings } from "./billing.ts";
 import { revokeUserSessions } from "./auth.ts";
 import { forgetPasswordLinks } from "./passwordLinks.ts";
 import { ensureSoleContact } from "./contactDefaults.ts";
+import { ensureDefaultContracts } from "./defaultContracts.ts";
 
 /**
  * The CRM: the portal's own copy of the clients, their contacts and their
@@ -212,6 +213,8 @@ export async function rememberCompany(c: { id: number; name: string; phone?: str
     .insert(schema.clients)
     .values({ name: c.name, phone: c.phone ?? null, autotaskId: c.id, syncedAt: new Date() })
     .returning({ id: schema.clients.id });
+  // every new client starts with its two hourly contracts (a failure never stops the client from being made)
+  await ensureDefaultContracts(row.id).catch((e) => console.error("[contracts] default contracts failed:", e));
   return row.id;
 }
 

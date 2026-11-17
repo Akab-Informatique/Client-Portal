@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Building2, ChevronDown, ChevronRight, DoorOpen, KeyRound, Loader2, Plus, Search, ShieldCheck, UserPlus } from "lucide-react";
+import { Building2, ChevronDown, ChevronRight, DoorOpen, FileText, KeyRound, Loader2, Plus, Search, ShieldCheck, UserPlus } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -225,6 +225,30 @@ function OpenAllPortals({ closed }: { closed: number }) {
   );
 }
 
+/** Gives every active client the two default hourly contracts (Contrat de soutien 100 $/h, Application development 150 $/h). */
+function DefaultContractsButton() {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const can = useCan();
+  const { data } = useQuery({ queryKey: ["crm", "default-contracts"], queryFn: () => api.get<{ missing: number }>("/crm/default-contracts"), enabled: can("admin.clients") });
+  const run = useMutation({
+    mutationFn: () => api.post<{ clients: number; created: number; supportInactive: number }>("/crm/default-contracts", {}),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      toast.success(t("admin.clientAccess.defaultsDone", { created: r.created, clients: r.clients, inactive: r.supportInactive }));
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  if (!can("admin.clients")) return null;
+  const missing = data?.missing ?? 0;
+  return (
+    <Button type="button" variant="outline" disabled={run.isPending || missing === 0} onClick={() => void confirm({ title: t("admin.clientAccess.defaultsTitle", { count: missing }), description: t("admin.clientAccess.defaultsText"), confirmLabel: t("admin.clientAccess.defaults") }).then((ok) => ok && run.mutate())}>
+      {run.isPending ? <Loader2 className="size-4 animate-spin" /> : <FileText className="size-4" />} {t("admin.clientAccess.defaults")}
+    </Button>
+  );
+}
+
 export function ClientAccessSection() {
   const { t } = useTranslation();
   const { data: clients = [], isLoading } = useClients();
@@ -234,7 +258,7 @@ export function ClientAccessSection() {
   const client = clients.find((c) => c.id === selected) ?? null;
   return (
     <div>
-      <SectionHeader title={t("admin.clientAccess.title")} subtitle={t("admin.clientAccess.subtitle")} action={<OpenAllPortals closed={clients.filter((c) => c.active && !c.portalEnabled).length} />} />
+      <SectionHeader title={t("admin.clientAccess.title")} subtitle={t("admin.clientAccess.subtitle")} action={<div className="flex flex-wrap gap-2"><DefaultContractsButton /><OpenAllPortals closed={clients.filter((c) => c.active && !c.portalEnabled).length} /></div>} />
       <div className="grid gap-5 lg:grid-cols-[18rem_minmax(0,1fr)]">
         <aside className="space-y-2">
           <div className="relative">

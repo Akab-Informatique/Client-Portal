@@ -32,6 +32,7 @@ import { prorata, type ServicePeriod } from "../../shared/prorata.ts";
 import { chargesOn, contractCharges, linesForCharges, type ChargeLine } from "../../shared/contractCharges.ts";
 import { contractCharged, contractEventsOf, recordContractEvent, syncMonthlyRate } from "../lib/contractEvents.ts";
 import { todayQc } from "../lib/timesheets.ts";
+import { ensureDefaultContractsForAll, missingDefaultContracts } from "../lib/defaultContracts.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { stripePayReady } from "../lib/payLink.ts";
 import { invoiceMatcher } from "../../shared/invoiceSearch.ts";
@@ -657,6 +658,15 @@ export const crmRoutes = new Hono<AppEnv>()
    * account is opened (no account is made); the welcome email only goes out when `sendWelcome` is true (off by
    * default). Companies already open are left as they are.
    */
+  /** How many active clients still lack the two default hourly contracts. */
+  .get("/default-contracts", requirePermission("admin.clients"), async (c) => c.json({ missing: await missingDefaultContracts() }))
+  /** Gives every active client the two default hourly contracts (Contrat de soutien 100 $/h, Application development 150 $/h); none is made twice. */
+  .post("/default-contracts", requirePermission("admin.clients"), async (c) => {
+    const a = auth(c);
+    const r = await ensureDefaultContractsForAll({ userId: a.user.id });
+    await audit(a.user.id, "crm.default_contracts_created", null, r);
+    return c.json(r);
+  })
   .post("/portal/open-all", requirePermission("admin.clients"), async (c) => {
     const a = auth(c);
     const p = await body(c, z.object({ sendWelcome: z.boolean().default(false) }));

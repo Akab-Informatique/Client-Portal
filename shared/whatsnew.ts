@@ -8,6 +8,17 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.6",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Clients et contrats",
+        en: "Clients and contracts",
+        items: [{ fr: "Chaque nouveau client reçoit deux contrats à taux horaire, sans date de fin : « Contrat de soutien » (100 $/h, contrat de soutien par défaut) et « Application development » (150 $/h). Admin › Rôles et usagers › Clients : le bouton « Créer les contrats de base » les crée pour les clients actifs existants (le contrat de soutien est créé inactif si le client a déjà un contrat par défaut).", en: "Every new client gets two hourly contracts with no end date: \"Contrat de soutien\" (100 $/h, the default support contract) and \"Application development\" (150 $/h). Admin › Roles and users › Clients: the \"Create the base contracts\" button makes them for the existing active clients (the support contract is made inactive when the client already has a default)." }],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.5",
     date: "2026-11-17",
     sections: [

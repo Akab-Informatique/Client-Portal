@@ -8769,8 +8769,8 @@ describe("deleting a client", () => {
     // only administrators
     expect((await tech.get(`/api/crm/clients/${gone.id}/delete-check`)).status).toBe(403);
     expect((await tech.del(`/api/crm/clients/${gone.id}`)).status).toBe(403);
-    expect((await admin.get(`/api/crm/clients/${gone.id}/delete-check`)).json).toMatchObject({ invoices: 0, tickets: 0, contacts: 1, contracts: 1 });
-    expect((await admin.del(`/api/crm/clients/${gone.id}`)).json).toMatchObject({ deleted: true, removed: { contacts: 1, contracts: 1 } });
+    expect((await admin.get(`/api/crm/clients/${gone.id}/delete-check`)).json).toMatchObject({ invoices: 0, tickets: 0, contacts: 1, contracts: 3 });
+    expect((await admin.del(`/api/crm/clients/${gone.id}`)).json).toMatchObject({ deleted: true, removed: { contacts: 1, contracts: 3 } });
     expect((await admin.get(`/api/crm/clients/${gone.id}`)).status).toBe(404);
     expect(await db().select().from(schema.clientContacts).where(eq(schema.clientContacts.clientId, gone.id))).toHaveLength(0);
     expect(await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, gone.id))).toHaveLength(0);
@@ -13442,5 +13442,36 @@ describe("a new-format project on my day", () => {
     // a closed project cannot be added
     await tech.patch(`/api/proj/${p.id}`, { status: "done" });
     expect((await tech.put(`/api/pipeline/day/pprojects/${p.id}`, { time: null })).json.error).toBe("project_closed");
+  });
+});
+
+describe("default contracts of a client", () => {
+  it("a new client gets Contrat de soutien (default, 100 $/h) and Application development (150 $/h); the button fills the others without doubling", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const month = `${new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" }).slice(0, 7)}-01`;
+    const contractsOf = async (id: string) => (await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, id))).sort((a, b) => a.name.localeCompare(b.name));
+    // a new client
+    const fresh = (await admin.post("/api/crm/clients", { name: "Client contrats de base", phone: "450-555-9100" })).json;
+    const [dev, support] = await contractsOf(fresh.id);
+    expect(support).toMatchObject({ name: "Contrat de soutien", billingMode: "hourly", hourlyRateCents: 10000, active: true, supportDefault: true, endDate: null, startDate: month });
+    expect(dev).toMatchObject({ name: "Application development", billingMode: "hourly", hourlyRateCents: 15000, active: true, supportDefault: false, endDate: null, startDate: month });
+    // a client that already has its own default: the support contract is made inactive, development is active
+    const other = (await admin.post("/api/crm/clients", { name: "Client avec defaut", phone: "450-555-9101" })).json;
+    await db().delete(schema.clientContracts).where(eq(schema.clientContracts.clientId, other.id));
+    await db().insert(schema.clientContracts).values({ clientId: other.id, name: "Mon contrat", active: true, supportDefault: true, billingMode: "hourly" });
+    // the button: only admins
+    expect((await tech.post("/api/crm/default-contracts", {})).status).toBe(403);
+    const r = (await admin.post("/api/crm/default-contracts", {})).json;
+    expect(r.supportInactive).toBeGreaterThanOrEqual(1);
+    const k = await contractsOf(other.id);
+    expect(k.find((x) => x.name === "Contrat de soutien")).toMatchObject({ active: false, supportDefault: false });
+    expect(k.find((x) => x.name === "Application development")).toMatchObject({ active: true, supportDefault: false });
+    expect(k.find((x) => x.name === "Mon contrat")!.supportDefault).toBe(true);
+    // run again: nothing is doubled
+    expect((await admin.post("/api/crm/default-contracts", {})).json.created).toBe(0);
+    expect((await contractsOf(fresh.id)).length).toBe(2);
+    expect((await admin.get("/api/crm/default-contracts")).json.missing).toBe(0);
   });
 });
