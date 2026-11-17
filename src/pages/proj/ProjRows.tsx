@@ -91,6 +91,8 @@ export function KindLegend() {
 const STATUS_TONE: Record<ProjStatus, string> = {
   planning: "border-violet-400/40 text-violet-300",
   active: "border-violet-400/70 bg-violet-500/20 text-violet-100",
+  waiting_customer: "border-amber-400/50 bg-amber-500/10 text-amber-200",
+  waiting_vendor: "border-sky-400/50 bg-sky-500/10 text-sky-200",
   done: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   cancelled: "border-slate-500/40 text-slate-400",
 };
@@ -109,7 +111,7 @@ export function projDue(p: ProjectRow): string | null {
 
 /** An open project with no task left to do: it flashes and says so */
 export function noTask(p: ProjectRow): boolean {
-  return (p.status === "planning" || p.status === "active") && (p.taskOpen ?? 1) === 0;
+  return p.status !== "done" && p.status !== "cancelled" && (p.taskOpen ?? 1) === 0;
 }
 
 function isLate(p: ProjectRow) {

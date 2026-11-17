@@ -3751,7 +3751,7 @@ export const projProjects = pgTable(
     clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
     leadId: uuid("lead_id").references(() => users.id, { onDelete: "set null" }),
     contactId: uuid("contact_id").references(() => clientContacts.id, { onDelete: "set null" }),
-    status: text("status", { enum: ["planning", "active", "done", "cancelled"] }).notNull().default("planning"),
+    status: text("status", { enum: ["planning", "active", "waiting_customer", "waiting_vendor", "done", "cancelled"] }).notNull().default("planning"),
     /** YYYY-MM-DD (Québec) */
     startDate: text("start_date"),
     dueDate: text("due_date"),

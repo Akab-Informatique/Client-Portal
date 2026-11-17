@@ -211,7 +211,9 @@ export async function listBillables(kind: BillableKind | null, status: string | 
     .orderBy(asc(schema.clients.name), asc(schema.billingItems.date));
   const payerIds = [...new Set(rows.map((r) => r.b.payerClientId).filter((x): x is string => Boolean(x)))];
   const payers = new Map((payerIds.length ? await db().select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, payerIds)) : []).map((p) => [p.id, p.name]));
-  return rows.map(({ b, client, invoice }) => ({ ...b, clientName: client, payerName: b.payerClientId ? (payers.get(b.payerClientId) ?? null) : null, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
+  const projNums = [...new Set(rows.filter((r) => r.b.kind === "project" && r.b.ticketNumber).map((r) => r.b.ticketNumber as string))];
+  const projStatus = new Map((projNums.length ? await db().select({ number: schema.projProjects.number, status: schema.projProjects.status }).from(schema.projProjects) : []).map((p) => [p.number, p.status]));
+  return rows.map(({ b, client, invoice }) => ({ ...b, projectStatus: b.kind === "project" && b.ticketNumber ? (projStatus.get(b.ticketNumber) ?? null) : null, clientName: client, payerName: b.payerClientId ? (payers.get(b.payerClientId) ?? null) : null, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
 }
 
 /**

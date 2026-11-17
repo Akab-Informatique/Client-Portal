@@ -40,6 +40,15 @@ import { useConfirm } from "@/components/ConfirmDialog";
 
 export type Kind = "labour" | "charge" | "expense" | "contract" | "milestone" | "project";
 export type Status = "pending" | "approved" | "posted" | "excluded";
+const PROJ_STATUS_TONE: Record<string, string> = {
+  planning: "border-violet-400/40 text-violet-300",
+  active: "border-violet-400/70 bg-violet-500/20 text-violet-100",
+  waiting_customer: "border-amber-400/50 bg-amber-500/10 text-amber-200",
+  waiting_vendor: "border-sky-400/50 bg-sky-500/10 text-sky-200",
+  done: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  cancelled: "border-slate-500/40 text-slate-400",
+};
+
 export type Item = {
   id: string;
   clientId: string;
@@ -49,6 +58,7 @@ export type Item = {
   dateEnd: string | null;
   description: string;
   ticketNumber: string | null;
+  projectStatus?: string | null;
   contractName: string | null;
   resourceName: string | null;
   quantityX100: number;
@@ -541,6 +551,11 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
               >
                 <ChevronRight className={cn("size-4 shrink-0 text-muted-foreground transition-transform", !closed && "rotate-90")} />
                 <span className="truncate text-sm font-semibold">{g.name}</span>
+                {kind === "project" && g.items[0]?.projectStatus && (
+                  <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium", PROJ_STATUS_TONE[g.items[0].projectStatus] ?? "border-border text-muted-foreground")}>
+                    {t(`projList.status.${g.items[0].projectStatus}`, { defaultValue: g.items[0].projectStatus })}
+                  </span>
+                )}
                 <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t("approvals.items", { count: g.items.length })}</span>
               </button>
               <span className="font-mono text-sm">{m(sub)}</span>

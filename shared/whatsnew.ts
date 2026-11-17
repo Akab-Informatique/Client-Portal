@@ -8,6 +8,20 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.8",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Projets",
+        en: "Projects",
+        items: [
+          { fr: "Le statut d'un projet est maintenant : Planification, En cours, En attente du client, En attente du fournisseur ou Terminé. Il s'affiche sur chaque projet dans Comptabilité › Approbation (onglet Projets).", en: "A project's status is now: Planning, In progress, Waiting on customer, Waiting on vendor or Done. It shows on each project in Accounting › Approvals (Projects tab)." },
+          { fr: "Corrigé : la fenêtre « Quelle entrée de temps ? » débordait avec de longues notes et cachait le bouton de confirmation.", en: "Fixed: the “Which time entry?” window overflowed with long notes and hid the confirm button." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.7",
     date: "2026-11-17",
     sections: [

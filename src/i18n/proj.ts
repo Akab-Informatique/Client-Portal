@@ -11,7 +11,7 @@ export const fr = {
     nameHint: "Cliquez pour modifier le nom",
     status: "Statut",
     due: "Échéance",
-    statusValue: { planning: "Planification", active: "En cours", done: "Terminé", cancelled: "Annulé" },
+    statusValue: { planning: "Planification", active: "En cours", waiting_customer: "En attente du client", waiting_vendor: "En attente du fournisseur", done: "Terminé", cancelled: "Annulé" },
     tile: { team: "Équipe", teamCount: "{{count}} pers.", charges: "Frais", soon: "Bientôt", info: "Info du projet", infoHint: "Client, dates, description, notes de vente" },
     team: {
       title: "Équipe",
@@ -141,7 +141,7 @@ export const en = {
     nameHint: "Click to edit the name",
     status: "Status",
     due: "Due date",
-    statusValue: { planning: "Planning", active: "Active", done: "Done", cancelled: "Cancelled" },
+    statusValue: { planning: "Planning", active: "In progress", waiting_customer: "Waiting on customer", waiting_vendor: "Waiting on vendor", done: "Done", cancelled: "Cancelled" },
     tile: { team: "Team", teamCount: "{{count}} people", charges: "Charges", soon: "Soon", info: "Project info", infoHint: "Client, dates, description, sales notes" },
     team: {
       title: "Team",

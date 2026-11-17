@@ -62,7 +62,7 @@ const zDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((s) => {
 const zIds = (max: number) => z.array(zUuid).max(max);
 const zPriority = z.enum(["low", "medium", "high", "urgent"]);
 const zTaskStatus = z.enum(["todo", "doing", "done"]);
-const zStatus = z.enum(["planning", "active", "done", "cancelled"]);
+const zStatus = z.enum(["planning", "active", "waiting_customer", "waiting_vendor", "done", "cancelled"]);
 
 const zMoney = z.number().min(0).max(10_000_000);
 const zBilling = {
@@ -250,7 +250,7 @@ export const projRoutes = new Hono<AppEnv>()
     if (!q.success) throw new HTTPException(400, { message: "Validation failed" });
     const status = q.data.status ?? "open";
     const conds = [];
-    if (status === "open") conds.push(inArray(schema.projProjects.status, ["planning", "active"]));
+    if (status === "open") conds.push(inArray(schema.projProjects.status, ["planning", "active", "waiting_customer", "waiting_vendor"]));
     if (status === "done") conds.push(inArray(schema.projProjects.status, ["done", "cancelled"]));
     if (q.data.lead) conds.push(eq(schema.projProjects.leadId, q.data.lead));
     if (q.data.client) conds.push(eq(schema.projProjects.clientId, q.data.client));

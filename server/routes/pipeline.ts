@@ -300,7 +300,7 @@ async function dayAddPut(c: Context<AppEnv>, col: AddCol) {
       ? await db().select({ title: schema.projectMilestones.name, done: sql<boolean>`${schema.projectMilestones.status} = 'done'`, project: schema.projects.status }).from(schema.projectMilestones).innerJoin(schema.projects, eq(schema.projects.id, schema.projectMilestones.projectId)).where(eq(schema.projectMilestones.id, id))
       : (await db().select({ title: schema.projects.name, done: sql<boolean>`false`, project: schema.projects.status }).from(schema.projects).where(eq(schema.projects.id, id))).concat(
           // a project of the new format
-          await db().select({ title: schema.projProjects.name, done: sql<boolean>`false`, project: schema.projProjects.status }).from(schema.projProjects).where(eq(schema.projProjects.id, id)),
+          await db().select({ title: schema.projProjects.name, done: sql<boolean>`false`, project: sql<"active" | "cancelled" | "done" | "on_hold" | "planning">`${schema.projProjects.status}` }).from(schema.projProjects).where(eq(schema.projProjects.id, id)),
         );
   if (!pr) throw new HTTPException(404, { message: "not_found" });
   if (pr.done) throw new HTTPException(409, { message: "task_done" });

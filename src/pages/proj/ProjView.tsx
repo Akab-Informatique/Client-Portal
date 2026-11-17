@@ -28,7 +28,7 @@ import { ProjGauge } from "./ProjGauge";
 import { ProjTasks, projError, initials } from "./ProjTasks";
 import { useProject, type ProjDetail, type ProjStatus, type ProjTask } from "./shared";
 
-const STATUSES: ProjStatus[] = ["planning", "active", "done", "cancelled"];
+const STATUSES: ProjStatus[] = ["planning", "active", "waiting_customer", "waiting_vendor", "done"];
 const inputCls = "h-9 rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-violet-500/40 disabled:opacity-60";
 const tileCls = "glass flex min-w-[9rem] items-center gap-3 rounded-2xl border border-violet-500/25 px-3 py-2 text-left transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent";
 
@@ -178,7 +178,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
   // an open project with no task left to do: a warning once when it is opened (not while it is being started)
   const [params] = useSearchParams();
   const [warnedNoTask, setWarnedNoTask] = useState(false);
-  const noTaskAlert = Boolean(d) && !warnedNoTask && params.get("kickoff") !== "1" && (d!.status === "planning" || d!.status === "active") && d!.tasks.every((x) => x.status === "done");
+  const noTaskAlert = Boolean(d) && !warnedNoTask && params.get("kickoff") !== "1" && d!.status !== "done" && d!.status !== "cancelled" && d!.tasks.every((x) => x.status === "done");
 
   const canEdit = can("proj.edit");
   // closing with a timer going asks: enter the time, throw it away, or wait (minimize to the drawer)

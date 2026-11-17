@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
 /** Shapes of /api/proj (see the contract: they mirror server/routes/proj.ts) */
-export type ProjStatus = "planning" | "active" | "done" | "cancelled";
+export type ProjStatus = "planning" | "active" | "waiting_customer" | "waiting_vendor" | "done" | "cancelled";
 export type ProjPriority = "low" | "medium" | "high" | "urgent";
 export type ProjTaskStatus = "todo" | "doing" | "done";
 export type PersonRef = { id: string; name: string };

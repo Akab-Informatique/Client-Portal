@@ -43,6 +43,8 @@ export const fr = {
     status: {
       planning: "Planification",
       active: "En cours",
+      waiting_customer: "En attente du client",
+      waiting_vendor: "En attente du fournisseur",
       done: "Terminé",
       cancelled: "Annulé",
     },
@@ -96,7 +98,9 @@ export const en = {
     noLead: "No lead",
     status: {
       planning: "Planning",
-      active: "Active",
+      active: "In progress",
+      waiting_customer: "Waiting on customer",
+      waiting_vendor: "Waiting on vendor",
       done: "Done",
       cancelled: "Cancelled",
     },

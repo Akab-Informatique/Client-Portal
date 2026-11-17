@@ -235,7 +235,7 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
     "proj",
     rows.map((p) => {
       const lastTask = tasks.filter((t) => t.projectId === p.id).reduce<Date>((m, t) => (t.updatedAt > m ? t.updatedAt : m), p.updatedAt);
-      return { id: p.id, due: p.dueDate, activityAt: lastTask, open: p.status === "planning" || p.status === "active" };
+      return { id: p.id, due: p.dueDate, activityAt: lastTask, open: !isClosed(p) };
     }),
   );
   return rows.map((p) => {
