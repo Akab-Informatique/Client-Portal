@@ -11149,6 +11149,12 @@ describe("Datto RMM (read only)", () => {
       // a link that is not on Datto's own hosts is never shown
       expect(devs.devices[2].portalUrl).toBeNull();
       expect(devs.devices[2].remoteUrl).toBeNull();
+      // the whole fleet (Devices page): every device with its client, none while its site is not matched
+      const fleet = (await tech.get("/api/rmm/devices")).json;
+      expect(fleet.connected).toBe(true);
+      expect(fleet.devices).toHaveLength(4);
+      expect(fleet.devices.find((d: any) => d.hostname === "PC-1")).toMatchObject({ clientId: co.id, clientName: co.name });
+      expect(fleet.devices.find((d: any) => d.hostname === "PC-4")).toMatchObject({ clientId: null, clientName: null, siteName: "Site inconnu" });
       // a device Datto no longer lists is dropped at the next sync
       vi.stubGlobal("fetch", vi.fn(async (url: unknown) => {
         const u = String(url);

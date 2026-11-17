@@ -346,3 +346,19 @@ export async function clientSiteCount(clientId: string): Promise<number> {
   return r?.n ?? 0;
 }
 
+
+/** Every device of every client (the Devices page): each with the client its site is tied to, or none while the site is not matched yet */
+export type FleetDevice = ClientDevice & { clientId: string | null; clientName: string | null };
+export async function allDevices(): Promise<FleetDevice[]> {
+  const rows = await db()
+    .select({ v: schema.rmmDevices, site: schema.rmmSites.name, clientId: schema.rmmSites.clientId, clientName: schema.clients.name })
+    .from(schema.rmmDevices)
+    .innerJoin(schema.rmmSites, eq(schema.rmmSites.uid, schema.rmmDevices.siteUid))
+    .leftJoin(schema.clients, eq(schema.clients.id, schema.rmmSites.clientId))
+    .orderBy(asc(schema.rmmDevices.hostname));
+  return rows.map(({ v, site, clientId, clientName }) => ({
+    id: v.id, uid: v.uid, siteName: site, hostname: v.hostname, description: v.description, ip: v.ip, os: v.os, lastUser: v.lastUser, category: v.category, kind: v.kind,
+    online: v.online, rebootRequired: v.rebootRequired, lastSeen: v.lastSeen, lastReboot: v.lastReboot, patchStatus: v.patchStatus, patchesPending: v.patchesPending,
+    antivirus: v.antivirus, antivirusStatus: v.antivirusStatus, warrantyDate: v.warrantyDate, portalUrl: v.portalUrl, remoteUrl: v.remoteUrl, clientId, clientName,
+  }));
+}

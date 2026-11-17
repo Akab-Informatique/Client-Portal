@@ -24,6 +24,7 @@ const PipelinePage = lazy(() => pageLoaders.pipeline().then((m) => ({ default: m
 const ProjectsPage = lazy(() => pageLoaders.projects().then((m) => ({ default: m.ProjectsPage })));
 const NewsletterPage = lazy(() => pageLoaders.newsletter().then((m) => ({ default: m.NewsletterPage })));
 const ReportsPage = lazy(() => pageLoaders.reports().then((m) => ({ default: m.ReportsPage })));
+const DevicesPage = lazy(() => pageLoaders.devices().then((m) => ({ default: m.DevicesPage })));
 const ServicesPage = lazy(() => pageLoaders.services().then((m) => ({ default: m.ServicesPage })));
 const HrPage = lazy(() => pageLoaders.hr().then((m) => ({ default: m.HrPage })));
 const SopsPage = lazy(() => pageLoaders.sops().then((m) => ({ default: m.SopsPage })));
@@ -130,6 +131,7 @@ function StaffApp() {
         <Route path="security/passbolt" element={<Guard permission="passbolt.use"><PassboltPage /></Guard>} />
         <Route path="newsletter" element={<Guard permission="newsletter.view"><NewsletterPage /></Guard>} />
         <Route path="reports" element={<Guard permission="reports.view"><ReportsPage /></Guard>} />
+        <Route path="devices" element={<Guard permission="crm.view"><DevicesPage /></Guard>} />
         <Route path="services" element={<Guard permission="services.view"><ServicesPage /></Guard>} />
         <Route path="sops" element={<Guard permission="sops.view"><SopsPage /></Guard>} />
         <Route path="documentation" element={<Guard permission="sops.view" orRight="kb.view"><DocumentationPage /></Guard>} />

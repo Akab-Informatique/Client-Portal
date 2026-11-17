@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.4",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Appareils",
+        en: "Devices",
+        items: [
+          { fr: "La page Appareils du menu est active : tous les appareils de tous les clients (Datto RMM), groupés par client (on les ouvre ou on les réduit), avec le dernier utilisateur, ce qu'il faut faire en premier (correctifs, redémarrage, antivirus, fin de support, hors ligne, garantie), les sources (D = Datto, A = agent AKAB à venir) et une fiche à droite avec le contrôle à distance. Le terminal viendra avec l'agent AKAB.", en: "The Devices page of the menu is live: every device of every client (Datto RMM), grouped by client (open or fold them), with the last user, what to do first (patches, reboot, antivirus, end of support, offline, warranty), the sources (D = Datto, A = AKAB agent to come) and a side panel with remote control. The terminal will come with the AKAB agent." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.3",
     date: "2026-11-17",
     sections: [

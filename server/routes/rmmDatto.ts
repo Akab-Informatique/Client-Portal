@@ -5,7 +5,7 @@ import { auth, requirePermission, type AppEnv } from "../lib/auth.ts";
 import { audit } from "../lib/audit.ts";
 import { body, zUuid } from "../lib/validate.ts";
 import { rateLimit } from "../lib/http.ts";
-import { acceptProposals, clientSiteCount, DattoError, dattoReady, dattoSettings, devicesOfClient, forgetDattoToken, saveDattoSettings, setSiteClient, sitePlan, syncDatto, testDatto, validApiUrl, type DattoSettings } from "../lib/dattoRmm.ts";
+import { acceptProposals, allDevices, clientSiteCount, DattoError, dattoReady, dattoSettings, devicesOfClient, forgetDattoToken, saveDattoSettings, setSiteClient, sitePlan, syncDatto, testDatto, validApiUrl, type DattoSettings } from "../lib/dattoRmm.ts";
 
 /**
  * Admin › Intégrations › RMM › Datto RMM (admin.integrations): the API address and keys (the secret key is sealed and
@@ -89,7 +89,13 @@ export const dattoAdminRoutes = new Hono<AppEnv>()
     return c.json({ accepted: n });
   });
 
-export const rmmDeviceRoutes = new Hono<AppEnv>().get("/clients/:id/devices", requirePermission("crm.view"), async (c) => {
+export const rmmDeviceRoutes = new Hono<AppEnv>()
+  /** The whole fleet, every client (Devices page) */
+  .get("/devices", requirePermission("crm.view"), async (c) => {
+    const s = await dattoSettings();
+    return c.json({ connected: dattoReady(s), syncedAt: s.lastSync?.ok ? s.lastSync.at : null, devices: await allDevices() });
+  })
+  .get("/clients/:id/devices", requirePermission("crm.view"), async (c) => {
   const id = zUuid.safeParse(c.req.param("id"));
   if (!id.success) throw new HTTPException(404, { message: "not_found" });
   const s = await dattoSettings();

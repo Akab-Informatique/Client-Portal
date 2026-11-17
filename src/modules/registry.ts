@@ -69,7 +69,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "breakroom", path: "/breakroom", labelKey: "nav.breakroom", icon: Coffee, section: "team", permission: "breakroom.use" },
   { key: "tv", path: "/tv", labelKey: "nav.tv", icon: Tv, section: "team", permission: "tv.view" },
-  { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", upcoming: true },
+  { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", permission: "crm.view" },
   { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", permission: "sops.view", orRight: "kb.view" },
 ];
 
