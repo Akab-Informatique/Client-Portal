@@ -16,6 +16,7 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         en: "Projects",
         items: [
           { fr: "Le minuteur d'un projet démarre tout seul à l'ouverture et s'affiche en haut de la fenêtre, comme celui d'un billet, avec pause / lecture et un bouton « Saisir le temps ». Le même bouton est dans le tiroir des éléments minimisés, où un minuteur en marche reste visible. L'entrée de temps reprend automatiquement le temps du minuteur.", en: "A project's timer starts by itself when it is opened and shows at the top of the window, like a ticket's, with pause / play and an \"Enter time\" button. The same button is in the drawer of minimized items, where a running timer stays visible. The time entry takes the timer's time automatically." },
+          { fr: "Fermer un projet dont le minuteur tourne demande quoi faire : saisir le temps, le jeter, ou attendre (le projet est réduit dans le tiroir et le minuteur continue).", en: "Closing a project whose timer is running asks what to do: enter the time, discard it, or wait (the project is minimized to the drawer and the timer keeps going)." },
         ],
       },
     ],

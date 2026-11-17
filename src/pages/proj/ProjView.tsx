@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { Clock } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -180,6 +181,19 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
   const noTaskAlert = Boolean(d) && !warnedNoTask && params.get("kickoff") !== "1" && (d!.status === "planning" || d!.status === "active") && d!.tasks.every((x) => x.status === "done");
 
   const canEdit = can("proj.edit");
+  // closing with a timer going asks: enter the time, throw it away, or wait (minimize to the drawer)
+  const [closing, setClosing] = useState(false);
+  const [, setParams] = useSearchParams();
+  const requestClose = () => (d?.timer && canEdit ? setClosing(true) : onClose());
+  const discardTimer = useMutation({
+    mutationFn: () => api.post(`/proj/${id}/timer/discard`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["proj"] });
+      setClosing(false);
+      onClose();
+    },
+    onError: (e) => toast.error(projError(t, e)),
+  });
 
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.patch<ProjDetail>(`/proj/${id}`, body),
@@ -216,7 +230,42 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
           </DialogContent>
         </Dialog>
       )}
-      <Dialog open onOpenChange={(o) => !o && onClose()}>
+      {closing && d && (
+        <Dialog open onOpenChange={(o) => !o && setClosing(false)}>
+          <DialogContent className="max-w-md border-violet-500/50">
+            <DialogTitle className="flex items-center gap-2"><Clock className="size-4 text-violet-300" aria-hidden />{t("proj.closeTimer.title")}</DialogTitle>
+            <DialogDescription>{t("proj.closeTimer.text")}</DialogDescription>
+            <div className="flex flex-col gap-2">
+              <Button
+                onClick={() => {
+                  setClosing(false);
+                  setParams((p) => {
+                    const n = new URLSearchParams(p);
+                    n.set("time", "1");
+                    return n;
+                  }, { replace: true });
+                }}
+              >
+                {t("proj.closeTimer.enter")}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  projDock.add({ id: d.id, number: d.number, name: d.name });
+                  setClosing(false);
+                  onClose();
+                }}
+              >
+                {t("proj.closeTimer.later")}
+              </Button>
+              <Button variant="ghost" className="text-red-300 hover:text-red-200" disabled={discardTimer.isPending} onClick={() => discardTimer.mutate()}>
+                {t("proj.closeTimer.discard")}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+      <Dialog open onOpenChange={(o) => !o && requestClose()}>
         <DialogContent
           showCloseButton={false}
           className="glass flex h-[min(94vh,1100px)] w-[min(1500px,calc(100vw-1.5rem))] max-w-none flex-col gap-0 overflow-hidden rounded-2xl border border-t-4 border-violet-500/40 border-t-violet-500 p-0 sm:max-w-none"
@@ -296,7 +345,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                   >
                     <Minus className="size-4" aria-hidden />
                   </Button>
-                  <Button type="button" variant="ghost" size="icon" aria-label={t("proj.close")} title={t("proj.close")} onClick={onClose}>
+                  <Button type="button" variant="ghost" size="icon" aria-label={t("proj.close")} title={t("proj.close")} onClick={requestClose}>
                     <X className="size-4" aria-hidden />
                   </Button>
                 </div>
