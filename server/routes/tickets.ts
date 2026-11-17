@@ -1621,14 +1621,16 @@ export const ticketRoutes = new Hono<AppEnv>()
     await audit(a.user.id, "ticket.time_entry_changed", String(ticketId), { entry: e.id, hours, billable, billedHours });
     return c.json({ ok: true });
   })
-  /** "Later": a stopped timer goes back to paused; it resumes when the ticket is opened again. */
+  /** "Later": a stopped timer goes back to paused (it resumes when the ticket is opened again), or keeps counting with keepRunning (minimized in the drawer). */
   .post("/timers/:timerId/later", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
+    const keepRunning = ((await c.req.json().catch(() => ({}))) as { keepRunning?: boolean } | null)?.keepRunning === true;
     const timer = await ownTimer(c.req.param("timerId"), a.user.id);
     if (timer.state === "pending") {
+      const now = new Date();
       await db()
         .update(schema.ticketTimers)
-        .set({ state: "paused", runningSince: null, endedAt: null, updatedAt: new Date() })
+        .set(keepRunning ? { state: "running", runningSince: now, lastBeatAt: now, endedAt: null, updatedAt: now } : { state: "paused", runningSince: null, endedAt: null, updatedAt: now })
         .where(eq(schema.ticketTimers.id, timer.id));
     }
     return c.json((await myTimers(a.user.id)).map(timerView));

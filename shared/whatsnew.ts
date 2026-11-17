@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.11",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Fermer un billet avec un minuteur ouvre d'abord une petite fenêtre à 3 choix, comme pour un projet : saisir le temps maintenant (la grande fenêtre s'ouvre alors), plus tard (le billet va dans le tiroir et le minuteur continue) ou fermer sans temps. La fenêtre de saisie du temps a aussi un bouton pour la réduire dans le tiroir.", en: "Closing a ticket with a timer now first opens a small 3-choice window, like a project: enter the time now (the big window then opens), later (the ticket goes to the drawer and the timer keeps going) or close without time. The time entry window also has a button to minimize it to the drawer." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.10",
     date: "2026-11-17",
     sections: [

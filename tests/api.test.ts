@@ -2335,6 +2335,11 @@ describe("tickets: client and contact", () => {
     const back = (await tech.post(`/api/tickets/timers/${stopped.id}/later`)).json[0];
     expect(back).toMatchObject({ state: "paused", elapsedMs: stopped.elapsedMs });
     expect((await tech.post(`/api/tickets/${b.id}/timer/start`)).json[0].state).toBe("running");
+    // stop → pending; "later" with keepRunning (minimized in the drawer) keeps counting
+    await tech.post(`/api/tickets/${b.id}/timer/stop`);
+    const stopped2 = (await tech.get("/api/tickets/timers")).json[0];
+    expect(stopped2.state).toBe("pending");
+    expect((await tech.post(`/api/tickets/timers/${stopped2.id}/later`, { keepRunning: true })).json[0]).toMatchObject({ state: "running" });
 
     // stop → pending, discard → gone
     await tech.post(`/api/tickets/${b.id}/timer/stop`);

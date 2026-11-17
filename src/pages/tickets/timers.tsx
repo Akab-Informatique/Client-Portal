@@ -6,7 +6,7 @@ import { isAddress } from "@/pages/outlook/RecipientInput";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, Clock3, CornerDownLeft, Loader2, Lock, Pause, Play, Receipt, Timer as TimerIcon, XCircle } from "lucide-react";
+import { AlertTriangle, Clock3, CornerDownLeft, Loader2, Lock, Minus, Pause, Play, Receipt, Timer as TimerIcon, Trash2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AiTextarea } from "@/components/AiPolish";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -131,13 +131,14 @@ export function TimersProvider({ children }: { children: ReactNode }) {
 
   const pending = list.filter((x) => x.state === "pending");
   const current = pending[0] ?? null;
-  // Pending timers always show their dialog: nothing to bring back
-  const value = useMemo(() => ({ review: () => undefined }), []);
-  // "Later": back to paused (shown at once, confirmed by the server)
+  // a stopped timer first shows the small window (3 choices); the big time form opens once "enter the time" is chosen
+  const [entering, setEntering] = useState<string | null>(null);
+  const value = useMemo(() => ({ review: (id: string) => setEntering(id) }), []);
+  // "Later": minimized in the drawer, the timer keeps counting (shown at once, confirmed by the server)
   const later = (timer: Timer) => {
-    qc.setQueryData<Timers>(KEY, (d) => d && { ...d, list: d.list.map((x) => (x.id === timer.id ? { ...x, state: "paused" as const, endedAt: null } : x)) });
+    qc.setQueryData<Timers>(KEY, (d) => d && { ...d, list: d.list.map((x) => (x.id === timer.id ? { ...x, state: "running" as const, endedAt: null } : x)) });
     void api
-      .post<Timer[]>(`/tickets/timers/${timer.id}/later`)
+      .post<Timer[]>(`/tickets/timers/${timer.id}/later`, { keepRunning: true })
       .then((l) => qc.setQueryData<Timers>(KEY, { at: Date.now(), list: l }))
       .catch(() => qc.invalidateQueries({ queryKey: KEY }));
   };
@@ -145,7 +146,8 @@ export function TimersProvider({ children }: { children: ReactNode }) {
   return (
     <UiCtx.Provider value={value}>
       {children}
-      {current && <TimeEntryDialog key={current.id} timer={current} position={{ n: 1, total: pending.length }} onLater={() => later(current)} />}
+      {current && entering === current.id && <TimeEntryDialog key={current.id} timer={current} position={{ n: 1, total: pending.length }} onLater={() => later(current)} />}
+      {current && entering !== current.id && <TimerCloseDialog key={`ask-${current.id}`} timer={current} total={pending.length} onEnter={() => setEntering(current.id)} onLater={() => later(current)} />}
     </UiCtx.Provider>
   );
 }
@@ -248,7 +250,7 @@ export function TimerControl({ ticketId, compact }: { ticketId: number; compact?
       >
         {run ? <Pause className="size-3.5 fill-current" /> : <Play className="size-3.5 fill-current" />}
       </TimerButton>
-      <TimerButton label={t("tickets.timer.enter")} onClick={() => act.mutate({ ticketId, action: "stop" })} disabled={act.isPending}>
+      <TimerButton label={t("tickets.timer.enter")} onClick={() => act.mutate({ ticketId, action: "stop" }, { onSuccess: () => ui.review(timer.id) })} disabled={act.isPending}>
         <CornerDownLeft className="size-3.5" />
       </TimerButton>
     </div>
@@ -262,6 +264,7 @@ function CompactTimer({ ticketId }: { ticketId: number }) {
   const timer = list.find((x) => x.ticketId === ticketId);
   const now = useNow(timer?.state === "running");
   const act = useTimerAction();
+  const ui = useTimerUi();
   if (!timer || timer.state === "pending") return null;
   const run = timer.state === "running";
   const small = "flex size-5 items-center justify-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:opacity-50";
@@ -283,7 +286,7 @@ function CompactTimer({ ticketId }: { ticketId: number }) {
         type="button"
         className={small}
         disabled={act.isPending}
-        onClick={() => act.mutate({ ticketId, action: "stop" })}
+        onClick={() => act.mutate({ ticketId, action: "stop" }, { onSuccess: () => ui.review(timer.id) })}
         aria-label={t("tickets.timer.enter")}
         title={t("tickets.timer.enter")}
       >
@@ -354,6 +357,46 @@ export function DockTimer({ timer, at, compact }: { timer: Timer; at: number; co
 
 /** Asks the ticket workspace to close a ticket (detail: its id), without the time prompt. */
 export const CLOSE_TICKET_EVENT = "akab:close-ticket";
+
+/** A stopped timer's first question (same as a project's): enter the time now, later (the drawer, it keeps counting) or close without time. */
+function TimerCloseDialog({ timer, total, onEnter, onLater }: { timer: Timer; total: number; onEnter: () => void; onLater: () => void }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const minutes = Math.max(1, Math.round(timer.elapsedMs / 60_000));
+  const discard = useMutation({
+    mutationFn: () => api.del(`/tickets/timers/${timer.id}`),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      // "close with no time": the ticket closes too when it is still open
+      window.dispatchEvent(new CustomEvent(CLOSE_TICKET_EVENT, { detail: timer.ticketId }));
+    },
+    onError: (e) => toast.error(ticketErrorText(t, e)),
+  });
+  const noTime = () => (minutes <= 5 ? discard.mutate() : void confirm({ title: t("tickets.timer.discardConfirm"), destructive: true }).then((ok) => ok && discard.mutate()));
+  return (
+    <Dialog open onOpenChange={(o) => !o && onLater()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle className="flex items-center gap-2">
+          <TimerIcon className="size-4 text-primary" aria-hidden /> {t("tickets.timer.closeTitle")}
+          {total > 1 && <span className="text-xs font-normal text-muted-foreground">{t("tickets.timer.counter", { n: 1, total })}</span>}
+        </DialogTitle>
+        <DialogDescription>
+          <span className="font-mono text-primary">{timer.ticketNumber}</span> · {timer.ticketTitle} — {t("tickets.timer.closeText", { time: clock(timer.elapsedMs) })}
+        </DialogDescription>
+        <div className="flex flex-col gap-2">
+          <Button onClick={onEnter}>{t("tickets.timer.closeEnter")}</Button>
+          <Button variant="outline" onClick={onLater}>
+            {t("tickets.timer.closeLater")}
+          </Button>
+          <Button variant="ghost" className="text-red-300 hover:text-red-200" disabled={discard.isPending} onClick={noTime}>
+            <Trash2 className="size-4" /> {t("tickets.timer.closeNoTime")}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /** Validate a stopped timer: hours, summary, internal note, work type → time entry. */
 function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position: { n: number; total: number }; onLater: () => void }) {
@@ -473,6 +516,9 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
           <DialogDescription>
             <span className="font-mono text-primary">{timer.ticketNumber}</span> · {timer.ticketTitle}
           </DialogDescription>
+          <button type="button" onClick={onLater} title={t("tickets.timer.minimize")} aria-label={t("tickets.timer.minimize")} className="absolute right-12 top-4 rounded-md p-1 text-muted-foreground hover:bg-foreground/[0.06] hover:text-foreground">
+            <Minus className="size-4" />
+          </button>
         </DialogHeader>
         {auto && timer.endedAt && (
           <p className="flex items-start gap-2 rounded-lg border border-orange-500/40 bg-orange-500/10 px-3 py-2 text-xs">

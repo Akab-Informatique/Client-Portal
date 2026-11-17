@@ -5292,6 +5292,12 @@ const fr = {
     },
     editTitle: "Modifier le titre",
     timer: {
+      closeTitle: "Le minuteur est arrêté",
+      closeText: "{{time}} comptées. Que faire de ce temps ?",
+      closeEnter: "Saisir le temps maintenant",
+      closeLater: "Plus tard (réduire dans le tiroir, le minuteur continue)",
+      closeNoTime: "Fermer sans temps",
+      minimize: "Réduire dans le tiroir (le minuteur continue)",
       billedField: "Facturé",
       billedMore: "{{billed}} facturées (plus que travaillé)",
       editEntry: "Modifier ce temps",

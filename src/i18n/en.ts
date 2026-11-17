@@ -5294,6 +5294,12 @@ const en: Dict = {
     },
     editTitle: "Edit title",
     timer: {
+      closeTitle: "The timer is stopped",
+      closeText: "{{time}} counted. What should happen to this time?",
+      closeEnter: "Enter the time now",
+      closeLater: "Later (minimize to the drawer, the timer keeps going)",
+      closeNoTime: "Close without time",
+      minimize: "Minimize to the drawer (the timer keeps going)",
       billedField: "Billed",
       billedMore: "{{billed}} billed (more than worked)",
       editEntry: "Change this time",
