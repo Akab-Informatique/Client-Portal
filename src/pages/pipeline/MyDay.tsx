@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Loader2, RotateCcw, Sparkles, Undo2, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, Check, SkipForward, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Loader2, RotateCcw, Sparkles, Undo2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,6 +20,7 @@ import { usePeople } from "./TaskDialog";
 import { MyTickets } from "./DayLists";
 import { DayTasks } from "./DayTasks";
 import { DayEdge } from "./DayEdge";
+import { DayFinishDialog, type FinishAsk } from "./DayFinish";
 import { AgendaCard } from "@/pages/tickets/Planning";
 import { DayBlockDialog, type DayBlockDraft } from "./DayBlockDialog";
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
@@ -496,6 +497,13 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
   });
   // a block is dragged up or down to change its place in the day: the others follow in the order given
   const [move, setMove] = useState<{ i: number; dy: number } | null>(null);
+  // "Terminé" / "Continuer un autre jour" on a block
+  const [ask, setAsk] = useState<FinishAsk | null>(null);
+  const setContinued = useMutation({
+    mutationFn: (v: { key: string; continued: boolean }) => api.put("/pipeline/day/continue", { date: data.date, key: v.key, continued: v.continued, ...(forUser ? { userId: forUser } : {}) }),
+    onSuccess: onSaved,
+    onError: () => toast.error(t("common.error")),
+  });
   const lane = useRef<HTMLDivElement>(null);
   const justMoved = useRef(false);
   const saveStart = useMutation({
@@ -637,6 +645,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
   const nowM = data.date === todayYmd() ? now.getHours() * 60 + now.getMinutes() : null;
   return (
     <div className="space-y-3">
+      <DayFinishDialog ask={ask} forUser={forUser} onClose={() => setAsk(null)} onOpen={onOpen} />
       <div className="relative" style={{ height: hours.length * hourPx }}>
         {hours.map((h) => (
           <div key={h} className="absolute inset-x-0 flex items-start border-t border-[color:var(--glass-border)]" style={{ top: (h - startH) * hourPx, height: hourPx }}>
@@ -669,7 +678,9 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
             const live = drag && drag.i === i ? drag : null;
             const h = Math.max(((own + (live?.delta ?? 0)) / 60) * hourPx - 3, 18);
             const shift = live?.edge === "top" ? -(live.delta / 60) * hourPx : 0;
-            const stretch = canEdit && !b.done && !b.masked && isWork(b.kind);
+            const stretch = canEdit && !b.done && !b.continued && !b.masked && isWork(b.kind);
+            // greyed when finished, set aside for the day, or when its time has passed
+            const grey = Boolean(b.done || b.continued || (nowM !== null && e <= nowM));
             // an event of one's own or an Outlook one (not private-masked, not all day) can be moved too
             const movable = canEdit && b.kind === "event" && !b.masked && !b.allDay && Boolean(b.refId) && (Boolean(b.local) || Boolean(b.o365));
             if (b.kind === "break")
@@ -692,7 +703,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
                   "h-full w-full overflow-hidden rounded-lg border py-1 pr-2.5 text-left transition-all enabled:hover:brightness-110",
                   event ? "pl-2.5" : "pl-4",
                   (stretch || movable) && "cursor-grab touch-none active:cursor-grabbing",
-                  b.done && "opacity-40 saturate-50",
+                  grey && "opacity-40 saturate-50",
                   event
                     ? b.local
                       ? "border-pink-400/50 bg-pink-500/15 text-pink-100"
@@ -725,13 +736,31 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
                 <span className={cn("block truncate text-[13px] font-medium leading-tight", b.done && "line-through")}>{b.title || t("pipeline.private")}</span>
                 {b.note && h > 50 && <span className="block truncate text-[11px] text-muted-foreground">{b.note}</span>}
               </button>
-              {!event && !b.masked && !b.done && b.refId && isWork(b.kind) && (
+              {!event && !b.masked && !b.done && !b.continued && b.refId && isWork(b.kind) && (
                 <DayEdge kind={b.kind} id={b.refId} number={b.ticketNumber} title={b.title} urgent={b.priority === "urgent"} onOpen={() => onOpen(b)} onDay={{ forUser }} className="absolute left-0 top-0 z-10 h-full" />
               )}
               {movable && b.moved && b.o365 && (
                 <button type="button" title={t("pipeline.day.moveReset")} aria-label={t("pipeline.day.moveReset")} onClick={() => saveEvent.mutate({ b, startMin: toMinutes(b.start), reset: true })} className="absolute right-1.5 top-1.5 z-20 rounded-md bg-background/70 p-0.5 text-sky-200 opacity-0 transition-opacity hover:text-foreground group-hover/blk:opacity-100">
                   <Undo2 className="size-3" />
                 </button>
+              )}
+              {canEdit && !event && !b.masked && !b.done && b.refId && isWork(b.kind) && (
+                <div className="absolute right-8 top-1.5 z-20 flex gap-1 opacity-0 transition-opacity group-hover/blk:opacity-100" onPointerDown={(ev) => ev.stopPropagation()}>
+                  {b.continued ? (
+                    <button type="button" title={t("pipeline.day.resume")} aria-label={t("pipeline.day.resume")} onClick={(ev) => (ev.stopPropagation(), setContinued.mutate({ key, continued: false }))} className="flex size-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground hover:text-foreground">
+                      <Undo2 className="size-3" />
+                    </button>
+                  ) : (
+                    <>
+                      <button type="button" title={t("pipeline.day.markContinue")} aria-label={t("pipeline.day.markContinue")} onClick={(ev) => (ev.stopPropagation(), setContinued.mutate({ key, continued: true }, { onSuccess: () => setAsk({ mode: "continue", block: b }) }))} className="flex size-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground hover:bg-sky-500/20 hover:text-sky-300">
+                        <SkipForward className="size-3" />
+                      </button>
+                      <button type="button" title={t("pipeline.day.markDone")} aria-label={t("pipeline.day.markDone")} onClick={(ev) => (ev.stopPropagation(), setAsk({ mode: "done", block: b }))} className="flex size-5 items-center justify-center rounded-full bg-background/80 text-muted-foreground hover:bg-emerald-500/20 hover:text-emerald-300">
+                        <Check className="size-3" />
+                      </button>
+                    </>
+                  )}
+                </div>
               )}
               {canEdit && !event && !b.masked && b.refId && isWork(b.kind) && <RemoveFromDay kind={b.kind} id={b.refId} forUser={forUser} className="absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover/blk:opacity-100" />}
               {stretch &&

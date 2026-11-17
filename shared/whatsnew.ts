@@ -8,6 +8,20 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.7",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Ma journée",
+        en: "Ma journée",
+        items: [
+          { fr: "Ce que tu retires de ta journée disparaît du plan (au lieu d'être grisé). Un bloc est grisé seulement quand son heure est passée, qu'il est terminé ou que tu le mets de côté. Deux boutons au survol d'un bloc : ✓ Terminé (demande le temps final) et ⏭ Continuer un autre jour (grise l'élément pour la journée et propose de mettre à jour l'information ou d'entrer du temps).", en: "What you remove from your day disappears from the plan (instead of being greyed). A block is greyed only when its time has passed, it is finished, or you set it aside. Two buttons on hover: ✓ Done (asks for the final time) and ⏭ Continue another day (greys the item for the day and offers to update the information or enter time)." },
+          { fr: "Corrigé : un élément déplacé à la main dans un plan fait par l'IA apparaissait en double, ce qui empêchait aussi de chevaucher deux éléments. Ils peuvent maintenant se chevaucher côte à côte.", en: "Fixed: an item dragged by hand in an AI plan showed up twice, which also stopped two items from overlapping. They can now overlap side by side." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.6",
     date: "2026-11-17",
     sections: [

@@ -99,6 +99,8 @@ export type Block = {
   detail?: string | null;
   /** The work of this block is done (or no longer on the day's list) */
   done?: boolean;
+  /** Set aside for the rest of the day ("continue another day") */
+  continued?: boolean;
   /** First block of an item: the time given today and what it needs; partial when less is given */
   allocated?: number;
   need?: number;

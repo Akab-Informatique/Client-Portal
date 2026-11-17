@@ -23,8 +23,13 @@ export type DefaultContractsResult = { created: number; supportActive: boolean |
 export async function ensureDefaultContracts(clientId: string, by: { userId?: string | null } = {}): Promise<DefaultContractsResult> {
   const d = db();
   const types = await contractTypes();
-  const type = types.find((t) => t.kind === "hourly" && t.active && t.key === "hourly") ?? types.find((t) => t.kind === "hourly" && t.active);
-  if (!type) return { created: 0, supportActive: null };
+  // the usual "hourly" type, else any hourly one (even turned off: the two contracts must exist), else the type is made
+  let type = types.find((t) => t.kind === "hourly" && t.active && t.key === "hourly") ?? types.find((t) => t.kind === "hourly" && t.active) ?? types.find((t) => t.kind === "hourly");
+  if (!type) {
+    [type] = await d.insert(schema.contractTypes).values({ key: "hourly", name: "Taux horaire", kind: "hourly", position: types.length }).onConflictDoNothing().returning();
+    type ??= (await contractTypes()).find((t) => t.kind === "hourly");
+    if (!type) return { created: 0, supportActive: null };
+  }
   const [client] = await d.select().from(schema.clients).where(eq(schema.clients.id, clientId));
   if (!client) return { created: 0, supportActive: null };
   const own = await d.select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, clientId));

@@ -2612,6 +2612,21 @@ export const pipelineDayBlocks = pgTable(
   (t) => [index("pipeline_day_blocks_user_date").on(t.userId, t.date)],
 );
 
+/** Work set aside for the rest of the day ("continue another day"): greyed in the plan, one row per person, day and item key (ticket:12, task:uuid…) */
+export const pipelineDayContinued = pgTable(
+  "pipeline_day_continued",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    date: text("date").notNull(),
+    key: text("key").notNull(),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("pipeline_day_continued_uq").on(t.userId, t.date, t.key)],
+);
+
 /** The order a technician put items in, by hand, in a list ("custom" sort): one row per person, list and item */
 export const userSortOrders = pgTable(
   "user_sort_orders",

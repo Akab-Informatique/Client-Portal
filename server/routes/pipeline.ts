@@ -29,6 +29,7 @@ async function itemOf(taskId: string, itemId: string) {
 }
 import { body, zUuid } from "../lib/validate.ts";
 import { nextAfter, type Recurrence } from "../../shared/recurrence.ts";
+import { continuedKeys, finishedKeys } from "../lib/dayDone.ts";
 import { assignedTo, coAssignees, isAssigned, seenBy, setAssignees } from "../lib/pipelineAssign.ts";
 import { isTodoSql, listsFor, resolveList, setListAudience, teamListId, visibilityOf, type Space } from "../lib/pipelineLists.ts";
 
@@ -344,9 +345,18 @@ export const pipelineRoutes = new Hono<AppEnv>()
     // someone else's day: their private tasks and the details of their calendar are not shown
     const viewing = userId !== a.user.id;
     const hidden = new Set(view.items.filter((i) => i.masked).map((i) => i.refId));
-    // a planned block whose work is no longer on the day's list was done (or taken off): shown struck out
+    // a planned block whose work is no longer on the day's list: greyed when the work is finished, gone when it was taken off the day
     const live = new Set(view.items.map((i) => i.key));
-    const withDone = (bl: typeof stored.blocks) => bl.map((b) => ((b.kind === "task" || b.kind === "ptask" || b.kind === "pmilestone" || b.kind === "pproject" || b.kind === "ticket") && b.refId && !live.has(`${b.kind}:${b.refId}`) ? { ...b, done: true } : b));
+    const isWork = (b: (typeof stored.blocks)[number]) => (b.kind === "task" || b.kind === "ptask" || b.kind === "pmilestone" || b.kind === "pproject" || b.kind === "ticket") && Boolean(b.refId);
+    const gone = [...new Set(stored.blocks.filter((b) => isWork(b) && !live.has(`${b.kind}:${b.refId}`)).map((b) => `${b.kind}:${b.refId}`))];
+    const [finished, continued] = await Promise.all([finishedKeys(gone), continuedKeys(userId, date)]);
+    const withDone = (bl: typeof stored.blocks) =>
+      bl.flatMap((b) => {
+        if (!isWork(b)) return [b];
+        const k = `${b.kind}:${b.refId}`;
+        if (!live.has(k)) return finished.has(k) ? [{ ...b, done: true }] : [];
+        return [continued.has(k) ? { ...b, continued: true } : b];
+      });
     const plan = viewing
       ? {
           ...stored,
@@ -632,6 +642,18 @@ export const pipelineRoutes = new Hono<AppEnv>()
     if (p.minute !== null) await d.insert(schema.pipelineDayAlloc).values({ userId: who, date, key: p.key, minutes: Math.round(p.minute / 15) * 15, source: "start", position: 1 });
     const out = await buildPlan(who, date, { ai: false, reuse: true });
     return c.json({ ok: true, plan: out.plan });
+  })
+
+  // an item set aside for the rest of the day ("continue another day"): greyed in the plan; it stays on the day, `continued: false` brings it back
+  .put("/day/continue", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional(), key: z.string().regex(/^(ticket:[0-9]+|task:[0-9a-f-]{36}|ptask:[0-9a-f-]{36}|pmilestone:[0-9a-f-]{36}|pproject:[0-9a-f-]{36})$/), continued: z.boolean() }));
+    const who = await dayTarget(a, p.userId);
+    const date = p.date ?? todayQc();
+    const d = db();
+    await d.delete(schema.pipelineDayContinued).where(and(eq(schema.pipelineDayContinued.userId, who), eq(schema.pipelineDayContinued.date, date), eq(schema.pipelineDayContinued.key, p.key)));
+    if (p.continued) await d.insert(schema.pipelineDayContinued).values({ userId: who, date, key: p.key }).onConflictDoNothing();
+    return c.json({ ok: true });
   })
 
   // a whole phase / a whole project put on the day: one item (the folder opens on it)

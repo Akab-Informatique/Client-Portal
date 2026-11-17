@@ -13454,6 +13454,8 @@ describe("default contracts of a client", () => {
     const contractsOf = async (id: string) => (await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.clientId, id))).sort((a, b) => a.name.localeCompare(b.name));
     // a new client
     const fresh = (await admin.post("/api/crm/clients", { name: "Client contrats de base", phone: "450-555-9100" })).json;
+    // (a client the test source gave an id already known to the copy is not "new": the button is idempotent and fills it)
+    await admin.post("/api/crm/default-contracts", {});
     const [dev, support] = await contractsOf(fresh.id);
     expect(support).toMatchObject({ name: "Contrat de soutien", billingMode: "hourly", hourlyRateCents: 10000, active: true, supportDefault: true, endDate: null, startDate: month });
     expect(dev).toMatchObject({ name: "Application development", billingMode: "hourly", hourlyRateCents: 15000, active: true, supportDefault: false, endDate: null, startDate: month });
@@ -13473,5 +13475,70 @@ describe("default contracts of a client", () => {
     expect((await admin.post("/api/crm/default-contracts", {})).json.created).toBe(0);
     expect((await contractsOf(fresh.id)).length).toBe(2);
     expect((await admin.get("/api/crm/default-contracts")).json.missing).toBe(0);
+  });
+});
+
+describe("Ma journée: removed, finished and continued blocks", () => {
+  it("a block taken off the day is gone; a finished one stays greyed; one set aside is marked continued and can be resumed", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    await db().delete(schema.calendarBlocks);
+    await db().delete(schema.pipelineDayBlocks);
+    const day = qcToday();
+    const mk = async (title: string) => {
+      const t = (await tech.post("/api/pipeline/tasks", { title, assigneeId: me, dueDate: day, estimateMinutes: 30 })).json;
+      await tech.put(`/api/pipeline/day/tasks/${t.id}`, { time: null });
+      return t;
+    };
+    const blocks = async () => ((await tech.get(`/api/pipeline/day?date=${day}`)).json as any).plan.blocks as any[];
+    const a = await mk("Retiré de ma journée");
+    const b = await mk("Terminé dans la journée");
+    const c = await mk("Continue demain");
+    expect(new Set((await blocks()).filter((x) => [a.id, b.id, c.id].includes(x.refId)).map((x) => x.refId)).size).toBe(3);
+    // taken off: no block at all
+    await tech.del(`/api/pipeline/day/tasks/${a.id}`);
+    expect((await blocks()).some((x) => x.refId === a.id)).toBe(false);
+    // an AI plan is kept as written, so a finished item stays in it, greyed (the portal's own plan is rebuilt from what is on the day)
+    await db().update(schema.pipelineDayPlans).set({ source: "ai" }).where(and(eq(schema.pipelineDayPlans.userId, me), eq(schema.pipelineDayPlans.date, day)));
+    // finished: the block stays, marked done
+    expect((await tech.patch(`/api/pipeline/tasks/${b.id}`, { status: "done" })).status).toBe(200);
+    expect((await blocks()).find((x) => x.refId === b.id)).toMatchObject({ done: true });
+    // set aside for the day: marked continued, then resumed
+    expect((await tech.put("/api/pipeline/day/continue", { key: `task:${c.id}`, continued: true })).status).toBe(200);
+    expect((await blocks()).find((x) => x.refId === c.id)).toMatchObject({ continued: true });
+    await tech.put("/api/pipeline/day/continue", { key: `task:${c.id}`, continued: false });
+    expect((await blocks()).find((x) => x.refId === c.id)?.continued).toBeUndefined();
+  });
+});
+
+describe("Ma journée: two items dragged to the same time overlap", () => {
+  it("two items put at the same start both keep it (side by side on screen), and a third flows around them", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    await db().delete(schema.calendarBlocks);
+    await db().delete(schema.pipelineDayBlocks);
+    const day = qcToday();
+    const mk = async (title: string) => {
+      const t = (await tech.post("/api/pipeline/tasks", { title, assigneeId: me, dueDate: day, estimateMinutes: 60 })).json;
+      await tech.put(`/api/pipeline/day/tasks/${t.id}`, { time: null });
+      return t;
+    };
+    const a = await mk("Chevauchement A");
+    const b = await mk("Chevauchement B");
+    expect((await tech.put("/api/pipeline/day/start", { key: `task:${a.id}`, minute: 10 * 60 })).status).toBe(200);
+    expect((await tech.put("/api/pipeline/day/start", { key: `task:${b.id}`, minute: 10 * 60 + 15 })).status).toBe(200);
+    const blocks = ((await tech.get(`/api/pipeline/day?date=${day}`)).json as any).plan.blocks as any[];
+    const ba = blocks.find((x) => x.refId === a.id);
+    const bb = blocks.find((x) => x.refId === b.id);
+    expect(ba.start).toBe("10:00");
+    expect(bb.start).toBe("10:15");
+    // with an AI plan kept (the order, notes and summary stay), a dragged item still appears once
+    await db().update(schema.pipelineDayPlans).set({ source: "ai" }).where(and(eq(schema.pipelineDayPlans.userId, me), eq(schema.pipelineDayPlans.date, day)));
+    await tech.put("/api/pipeline/day/start", { key: `task:${b.id}`, minute: 10 * 60 });
+    const again = ((await tech.get(`/api/pipeline/day?date=${day}`)).json as any).plan.blocks as any[];
+    expect(again.filter((x) => x.refId === a.id).length).toBe(1);
+    expect(again.filter((x) => x.refId === b.id).map((x) => x.start)).toEqual(["10:00"]);
   });
 });

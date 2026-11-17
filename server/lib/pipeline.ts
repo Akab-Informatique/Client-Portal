@@ -661,7 +661,8 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
   // changing the time of one item keeps the AI's order, notes and summary
   if (keepAi) {
     const pos = (i: DayItem) => alloc.ai.get(i.key)?.position ?? 9999;
-    ordered = [...planable].sort((a, b) => pos(a) - pos(b));
+    // the items dragged to a time are laid out apart (below): leaving them here made each appear twice
+    ordered = planable.filter((i) => !fixedItems.includes(i)).sort((a, b) => pos(a) - pos(b));
     for (const i of ordered) {
       const n = alloc.ai.get(i.key)?.note;
       if (n) notes.set(i.key, n);
