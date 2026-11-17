@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.10",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Dans l'activité d'un billet, chaque jour a son propre fond légèrement différent (en alternance) : on voit tout de suite où la journée change. Les billets long terme ont leur titre en bleu et les court terme en jaune.", en: "In a ticket's activity, each day has its own slightly different background (alternating): you see right away where the day changes. Long term tickets show their title in blue, short term in yellow." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.9",
     date: "2026-11-17",
     sections: [
