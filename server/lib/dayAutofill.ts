@@ -126,9 +126,11 @@ export async function autofillDay(userId: string, by: string, date: string, opts
   await resetDay(userId, date);
   // the free time left today (events and the hours already gone are off) comes from an empty plan
   const empty = (await buildPlan(userId, date, { ai: false, fromNow: true })).plan;
-  const capacity = Math.max(0, empty.capacityMinutes);
+  const free = Math.max(0, empty.capacityMinutes);
+  // about an eighth of the free time is left for the unexpected (5 min between items, a quarter hour now and then): the buffers need room
+  const capacity = Math.floor((free * 0.88) / 15) * 15;
   const chosen = pick(await candidates(userId, date), capacity);
-  if (!chosen.length) return { added: 0, plan: empty, aiError: null as string | null, capacity };
+  if (!chosen.length) return { added: 0, plan: empty, aiError: null as string | null, capacity: free };
   const adds = chosen.map((c) => {
     const [kind, id] = c.key.split(":");
     return { userId, addedBy: by, forDate: date, ...(kind === "ticket" ? { ticketId: Number(id) } : kind === "task" ? { taskId: id } : kind === "ptask" ? { projectTaskId: id } : { projectId: id }) };
@@ -138,5 +140,5 @@ export async function autofillDay(userId: string, by: string, date: string, opts
   await d.insert(schema.pipelineDayAlloc).values(chosen.map((c, i) => ({ userId, date, key: c.key, minutes: c.minutes, source: "ai" as const, position: i })));
   const direction = [DIRECTION(opts.locale === "en"), opts.direction ?? ""].filter(Boolean).join(" ");
   const out = await buildPlan(userId, date, { ai: true, locale: opts.locale, by, fromNow: true, direction });
-  return { added: chosen.length, plan: out.plan, aiError: out.aiError, capacity };
+  return { added: chosen.length, plan: out.plan, aiError: out.aiError, capacity: free };
 }

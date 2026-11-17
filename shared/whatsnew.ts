@@ -8,6 +8,17 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.5",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Ma journée",
+        en: "Ma journée",
+        items: [{ fr: "Le plan fait par l'IA laisse 5 minutes entre les éléments et un trou de 15 minutes toutes les 2 heures pour les imprévus (seulement si la journée n'en souffre pas). « Remplir avec l'IA » garde environ 12 % du temps libre en réserve.", en: "The AI plan leaves 5 minutes between items and a 15-minute gap every 2 hours for the unexpected (only when the day does not suffer for it). \"Fill with AI\" keeps about 12% of the free time in reserve." }],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.4",
     date: "2026-11-17",
     sections: [

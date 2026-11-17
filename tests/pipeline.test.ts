@@ -16,6 +16,17 @@ describe("pipeline: the day laid out in blocks", () => {
     expect(lay.blocks.some((b) => b.kind === "break" && b.start === "12:00")).toBe(true);
   });
 
+  it("with buffers: 5 min between items and a quarter hour of room, but never at the cost of work leaving the day", () => {
+    const two = layout([item({ key: "a", minutes: 60 }), item({ key: "b", minutes: 60 })], S, [], new Map(), undefined, true);
+    expect(two.blocks.filter((b) => b.kind === "task").map((b) => [b.refId, b.start, b.end])).toEqual([["a", "08:00", "09:00"], ["b", "09:05", "10:05"]]);
+    const many = layout([item({ key: "a", minutes: 60 }), item({ key: "b", minutes: 60 }), item({ key: "c", minutes: 60 }), item({ key: "d", minutes: 60 })], S, [], new Map(), undefined, true);
+    // a quarter hour is left after two hours of work
+    expect(many.blocks.filter((b) => b.kind === "task").map((b) => b.start).slice(0, 4)).toEqual(["08:00", "09:05", "10:25", "11:30"]);
+    // a full day keeps everything it held before: no buffer is added when it would push work out
+    const full = layout([item({ key: "a", minutes: 240 }), item({ key: "b", minutes: 240 })], S, [], new Map(), undefined, true);
+    expect(full.overflowMinutes).toBe(0);
+  });
+
   it("replanning during the day lays the rest out from now on (the morning is not offered again)", () => {
     const lay = layout([item({ key: "a", minutes: 120 })], S, [], new Map(), 10 * 60 + 15);
     expect(lay.capacityMinutes).toBe(105 + 240);

@@ -433,7 +433,18 @@ export async function calendarOfDay(userId: string, date: string): Promise<{ sta
 const ceil15 = (m: number) => Math.ceil(m / 15) * 15;
 
 /** Lay the items out in the free hours of the day (in the order given), splitting a long one across the lunch hour. */
-export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: Busy[], notes: Map<string, string> = new Map(), after?: number) {
+export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: Busy[], notes: Map<string, string> = new Map(), after?: number, buffers = false) {
+  const plain = layoutRaw(items, s, busy, notes, after);
+  if (!buffers) return plain;
+  // room for the unexpected: 5 min between items and a quarter hour every 2 h of work; kept only when it pushes no more work out of the day
+  for (const buf of [{ gap: 5, holeEvery: 120 }, { gap: 5, holeEvery: 0 }]) {
+    const tried = layoutRaw(items, s, busy, notes, after, buf);
+    if (tried.overflowMinutes <= plain.overflowMinutes) return tried;
+  }
+  return plain;
+}
+
+function layoutRaw(items: DayItem[], s: Pick<PipelineSettings, "workStart" | "workEnd" | "lunchStart" | "lunchEnd">, busy: Busy[], notes: Map<string, string>, after?: number, buf?: { gap: number; holeEvery: number }) {
   const work = [
     { start: mins(s.workStart), end: mins(s.lunchStart) },
     { start: mins(s.lunchEnd), end: mins(s.workEnd) },
@@ -463,6 +474,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
   let cursor = free[0]?.start ?? 0;
   // an item that must not start before a time waits for it; the others fill the gap meanwhile
   const queue = [...list];
+  let sinceHole = 0;
   const moveTo = (minute: number) => {
     while (seg < free.length && free[seg].end <= minute) {
       seg++;
@@ -517,6 +529,13 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
     if (left > 0) {
       overflowMinutes += left;
       got.push({ start: "", end: "", title: it.title, kind: it.kind, refId: it.refId, ...(it.projectId ? { projectId: it.projectId } : {}), ticketNumber: it.ticketNumber ?? null, priority: it.priority, ...(it.pin ? { pinned: it.pin } : {}), note: notes.get(it.key) ?? it.pinNote ?? null, overflow: true, allocated: total, need: ceil15(it.need ?? total) });
+    } else if (buf && queue.length && seg < free.length) {
+      cursor += buf.gap;
+      sinceHole += total;
+      if (buf.holeEvery && sinceHole >= buf.holeEvery) {
+        cursor += 15;
+        sinceHole = 0;
+      }
     }
   }
   return { got, rejected };
@@ -662,7 +681,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
           system: `Tu es l'assistant de planification d'AKAB Informatique (services TI, Québec). Réponds en ${locale === "en" ? "anglais" : "français québécois"}, ton direct et chaleureux, tutoiement. Tu prépares la journée d'un technicien : c'est une suggestion, pas un horaire fixe.`,
           feature: "pipeline.day",
           userId,
-          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nLes priorités du jour passent en premier. Respecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Pour chaque élément, analyse le temps dont il a vraiment besoin (titre, client, priorité; l'estimation est donnée à titre indicatif et peut être fausse) et donne « minutes » : le temps à y consacrer AUJOURD'HUI, multiple de 15 (15 à 480). Le total ne doit pas dépasser les heures libres. Si tout ne tient pas, ne termine pas tout : donne à certains éléments seulement une partie du temps (on avance, puis le technicien déplacera le point de contrôle plus tard) en gardant le temps complet aux retards, aux priorités du jour et aux échéances les plus proches. Respecte le temps imposé par le technicien. Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, ce qui ne sera avancé qu'en partie, ce qu'il faudrait déplacer ou déléguer. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "minutes": 60, "note": "raison en 12 mots ou moins"}]}${directionPrompt(opts.direction ?? "")}`,
+          prompt: `Date : ${date}. Heures de travail ${settings.workStart}–${settings.workEnd} (dîner ${settings.lunchStart}–${settings.lunchEnd}), ${hours(free)} libres après les événements.${agenda.length ? ` Déjà à son agenda Outlook :\n${agenda.join("\n")}\n` : ""} Voici ce qui est à faire :\n${lines.join("\n")}\n\nLes priorités du jour passent en premier. Respecte « pas avant » et garde ce qui a une heure d'échéance avant cette heure. Choisis l'ordre de traitement (les retards et les urgences d'abord, regroupe ce qui va ensemble, garde les tâches longues pour le début de la matinée ou de l'après-midi). Pour chaque élément, analyse le temps dont il a vraiment besoin (titre, client, priorité; l'estimation est donnée à titre indicatif et peut être fausse) et donne « minutes » : le temps à y consacrer AUJOURD'HUI, multiple de 15 (15 à 480). Le total ne doit pas dépasser les heures libres, dont il faut retirer environ 1 h de marge : le portail laisse 5 minutes entre les éléments et un trou de 15 minutes toutes les 2 heures pour les imprévus, ne remplis donc pas la journée à 100 %. Si tout ne tient pas, ne termine pas tout : donne à certains éléments seulement une partie du temps (on avance, puis le technicien déplacera le point de contrôle plus tard) en gardant le temps complet aux retards, aux priorités du jour et aux échéances les plus proches. Respecte le temps imposé par le technicien. Donne un résumé de 2 à 4 phrases de la journée : ce qui compte le plus, ce qui ne sera avancé qu'en partie, ce qu'il faudrait déplacer ou déléguer. Format : {"summary": "...", "order": [{"ref": "task:... ou ticket:...", "minutes": 60, "note": "raison en 12 mots ou moins"}]}${directionPrompt(opts.direction ?? "")}`,
           maxTokens: 4000,
         });
         const byKey = new Map(planable.map((i) => [i.key, i]));
@@ -703,7 +722,8 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     ordered = ordered.map((i, n) => ({ i, n })).sort((a, b) => pos(a.i.key) - pos(b.i.key) || a.n - b.n).map((x) => x.i);
   }
   const reserved: Busy[] = fixedItems.map((i) => ({ hidden: true, start: i.startAt!, end: Math.min(24 * 60, i.startAt! + Math.max(15, ceil15(i.minutes))), title: i.title }));
-  const lay = layout(ordered, laySettings, [...busy, ...reserved], notes, after);
+  // an AI plan leaves room for the unexpected (5 min between items, a quarter hour now and then); the portal's own plan stays tight
+  const lay = layout(ordered, laySettings, [...busy, ...reserved], notes, after, source === "ai");
   for (const i of fixedItems) {
     const st = i.startAt!;
     const en = Math.min(24 * 60 - 1, st + Math.max(15, ceil15(i.minutes)));

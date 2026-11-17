@@ -840,3 +840,7 @@ The **Frais** tile of an opened project (`proj_projects`, `src/pages/proj/ProjCh
 - **Work to bill at once**: a billable charge is `pcharge:<id>` in `localTickets.billables` (the join also reads `proj_projects`: project number, client) and `syncBillablesNow` copies it to Approbation as a pending `charge` line under the project's client; the rebate is applied like a ticket charge's (price after, `rebateNote`). Contract / payer rules are not applied (the client only).
 - **Stock**: none is taken (like the archive's project charges); the window says so. Inventory items only fill name, price, cost and description.
 - **From a quote** (`projectFromQuote`, `POST /api/proj/from-quote/:id`): the quote's products (`chargeLinesOfQuote`) become billable charges (line discount = rebate), the price sold already leaves them out (`projectSaleOf`); the answer's `sale.charges` counts them. UI: add window and label button reuse the archive's (`AddCharge`, `ChargeLabelDialog`, `SupplySelect`). Test: "charges on a project…".
+
+## Ma journée: buffers in the AI plan (latest)
+
+- `layout(..., buffers)` (`server/lib/pipeline.ts`, on when the plan is AI): 5 min between items and a 15 min hole after every 2 h of work, kept only when they push no more work out of the day (else gaps only, else none); the prompt tells the AI to keep about 1 h of margin, and `autofillDay` plans only 88 % of the free time. The portal-only plan stays tight. Test: `tests/pipeline.test.ts`.
