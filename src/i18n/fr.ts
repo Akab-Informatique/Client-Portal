@@ -5470,7 +5470,7 @@ const fr = {
     metrics: {
       fresh: "Nouveaux",
       statusAttention: "Nécessite attention",
-      mine: "Mes billets",
+      mine: "Billets / Projets",
       unassigned: "Non assignés",
       attention: "Billets à surveiller",
     },

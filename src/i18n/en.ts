@@ -5472,7 +5472,7 @@ const en: Dict = {
     metrics: {
       fresh: "New",
       statusAttention: "Needs attention",
-      mine: "My tickets",
+      mine: "Tickets / Projects",
       unassigned: "Unassigned",
       attention: "To watch",
     },
