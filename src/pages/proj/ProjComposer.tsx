@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Clock, Paperclip, Pause, Play, Square, Trash2, X } from "lucide-react";
@@ -214,6 +215,24 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
     setHours(hm(quarterHours(seconds)));
     setTab("time");
   };
+  // the time tab always starts from the timer: its time is the one entered (and saving stops the timer)
+  useEffect(() => {
+    if (tab === "time" && timer && !stopping) {
+      setStopping(true);
+      setHours(hm(quarterHours(seconds)));
+    }
+    if (!timer && stopping) setStopping(false);
+  }, [tab, timer, stopping]); // eslint-disable-line react-hooks/exhaustive-deps
+  // "enter time" from the header or the drawer (?time=1)
+  const [params, setParams] = useSearchParams();
+  useEffect(() => {
+    if (params.get("time") !== "1" || !canEdit) return;
+    if (timer) stopTimer();
+    else setTab("time");
+    const next = new URLSearchParams(params);
+    next.delete("time");
+    setParams(next, { replace: true });
+  }, [params.get("time"), Boolean(timer)]); // eslint-disable-line react-hooks/exhaustive-deps
   const discard = async () => {
     const ok = await confirm({ title: t("projWork.timer.discardTitle"), description: t("projWork.timer.discardText"), confirmLabel: t("projWork.timer.discard"), destructive: true });
     if (ok) timerCall.mutate("discard");

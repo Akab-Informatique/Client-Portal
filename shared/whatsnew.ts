@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.2",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Projets",
+        en: "Projects",
+        items: [
+          { fr: "Le minuteur d'un projet démarre tout seul à l'ouverture et s'affiche en haut de la fenêtre, comme celui d'un billet, avec pause / lecture et un bouton « Saisir le temps ». Le même bouton est dans le tiroir des éléments minimisés, où un minuteur en marche reste visible. L'entrée de temps reprend automatiquement le temps du minuteur.", en: "A project's timer starts by itself when it is opened and shows at the top of the window, like a ticket's, with pause / play and an \"Enter time\" button. The same button is in the drawer of minimized items, where a running timer stays visible. The time entry takes the timer's time automatically." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.1",
     date: "2026-11-17",
     sections: [

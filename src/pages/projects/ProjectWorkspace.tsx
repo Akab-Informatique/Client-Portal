@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "motion/react";
-import { Flag, FolderKanban, ListTodo, Maximize2, Pause, Play, X } from "lucide-react";
+import { Flag, FolderKanban, ListTodo, Maximize2, Pause, Play, Square, X } from "lucide-react";
 import { dockBus, useDockBus } from "@/lib/dockBus";
 import { projDock, useProjDock } from "@/lib/projDock";
 import { api } from "@/lib/api";
@@ -105,7 +105,7 @@ export function useProjectWorkspace() {
   return ws;
 }
 
-type RunningTimer = { taskId: string; startedAt: string; title: string; projectId: string; number: string; project?: string; milestone: string; kind?: "phase"; milestoneId?: string; baseSeconds?: number; paused?: boolean };
+type RunningTimer = { taskId: string; startedAt: string; title: string; projectId: string; number: string; project?: string; milestone: string; kind?: "phase"; proj?: boolean; milestoneId?: string; baseSeconds?: number; paused?: boolean };
 
 /** The minimized project tasks, drawn into the drawer of the ticket dock (a project card: project, task, timer) */
 function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { docked: DockedTask[]; folders: DockedFolder[]; onRestoreFolder: (projectId: string) => void; onRestore: (projectId: string, taskId: string) => void; onDismiss: (taskId: string) => void }) {
@@ -120,22 +120,30 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
   const { data: timers = [] } = useQuery({ queryKey: [...KEY, "timers"], queryFn: () => api.get<RunningTimer[]>("/projects/timers"), refetchInterval: 30_000 });
   // pause / play from the card: a phase's timer (its id is the milestone's) or a task's
   const toggleTimer = useMutation({
-    mutationFn: (v: { projectId: string; timer: RunningTimer }) => api.post(`/projects/${v.projectId}/${v.timer.kind === "phase" ? "milestones" : "tasks"}/${v.timer.taskId}/timer/${v.timer.paused ? "resume" : "pause"}`, {}),
+    mutationFn: (v: { projectId: string; timer: RunningTimer }) => v.timer.proj ? api.post(`/proj/${v.projectId}/timer/${v.timer.paused ? "resume" : "pause"}`, {}) : api.post(`/projects/${v.projectId}/${v.timer.kind === "phase" ? "milestones" : "tasks"}/${v.timer.taskId}/timer/${v.timer.paused ? "resume" : "pause"}`, {}),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: [...KEY, "timers"] });
       void qc.invalidateQueries({ queryKey: KEY });
     },
   });
+  // my timers on new-format projects: the server gives the seconds counted, the clock goes on from when it answered
+  const projTimers = useQuery({ queryKey: ["proj", "timers"], queryFn: () => api.get<{ projectId: string; number: string; name: string; seconds: number; paused: boolean }[]>("/proj/timers"), refetchInterval: 30_000 });
+  const projTimerOf = (id: string): RunningTimer | undefined => {
+    const x = (projTimers.data ?? []).find((r) => r.projectId === id);
+    return x ? { taskId: `pv:${id}`, startedAt: new Date(projTimers.dataUpdatedAt || Date.now()).toISOString(), baseSeconds: x.seconds, paused: x.paused, title: "", projectId: id, number: x.number, project: x.name, milestone: "", proj: true } : undefined;
+  };
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!timers.length) return;
+    if (!timers.length && !(projTimers.data ?? []).length) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [timers.length]);
+  }, [timers.length, (projTimers.data ?? []).length]);
   const folderIds = new Set(folders.map((f) => f.projectId));
   const items = [
     // a new-format project minimized from its window
-    ...pvs.map((p) => ({ projectId: p.id, taskId: `pv:${p.id}`, number: p.number, project: p.name, title: "", milestone: "", status: "doing" as const, folder: true as boolean | undefined, pv: true as boolean | undefined, phase: false, timer: undefined as RunningTimer | undefined })),
+    ...pvs.map((p) => ({ projectId: p.id, taskId: `pv:${p.id}`, number: p.number, project: p.name, title: "", milestone: "", status: "doing" as const, folder: true as boolean | undefined, pv: true as boolean | undefined, phase: false, timer: projTimerOf(p.id) })),
+    // a running timer of a new-format project that is not minimized stays in the drawer too
+    ...(projTimers.data ?? []).filter((x) => !pvs.some((p) => p.id === x.projectId)).map((x) => ({ projectId: x.projectId, taskId: `pv:${x.projectId}`, number: x.number, project: x.name, title: "", milestone: "", status: "doing" as const, folder: true as boolean | undefined, pv: true as boolean | undefined, phase: false, timer: projTimerOf(x.projectId) })),
     // a minimized project folder: its running phase timer (the earliest) is shown on its card
     ...folders.map((f) => ({ projectId: f.projectId, taskId: `folder:${f.projectId}`, number: f.number, project: f.name, title: "", milestone: "", status: "doing" as const, folder: true as boolean | undefined, phase: false, timer: timers.filter((x) => x.projectId === f.projectId).sort((a, b) => a.startedAt.localeCompare(b.startedAt))[0] })),
     ...docked.map((d) => ({ ...d, phase: false, folder: undefined as boolean | undefined, timer: timers.find((x) => x.taskId === d.taskId) })),
@@ -186,6 +194,11 @@ function TaskDock({ docked, folders, onRestoreFolder, onRestore, onDismiss }: { 
                   className={cn("rounded-md p-1.5 transition-colors hover:bg-accent", d.timer.paused ? "text-amber-300" : "text-primary")}
                 >
                   {d.timer.paused ? <Play className="size-3.5 fill-current" /> : <Pause className="size-3.5 fill-current" />}
+                </button>
+              )}
+              {d.timer?.proj && (
+                <button type="button" onClick={() => { projDock.remove(d.projectId); navigate(`/pipeline?section=tickets&pj=${d.projectId}&time=1`); }} aria-label={t("projWork.timer.enter")} title={t("projWork.timer.enter")} className="rounded-md p-1.5 text-violet-300 transition-colors hover:bg-accent">
+                  <Square className="size-3.5" />
                 </button>
               )}
               <button type="button" onClick={() => restoreItem(d)} aria-label={t("projects.restore")} title={t("projects.restore")} className="rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground">

@@ -18,6 +18,7 @@ import { PickEntryDialog } from "./PickEntryDialog";
 import { ProjTaskDialog } from "./ProjTaskDialog";
 import { ProjInfoDialog } from "./ProjInfoDialog";
 import { ProjComposer } from "./ProjComposer";
+import { ProjTimerChip } from "./ProjTimerChip";
 import { ProjNotes } from "./ProjNotes";
 import { WatchReminder, useWatchOnOpen } from "@/components/WatchReminder";
 import { ProjCalendar } from "./ProjCalendar";
@@ -271,6 +272,8 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                     </span>
                   </button>
                 </div>
+
+                <ProjTimerChip project={d} />
 
                 <WatchReminder kind="proj" id={d.id} info={d} canEdit={canEdit} compact />
 

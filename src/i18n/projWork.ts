@@ -58,6 +58,7 @@ export const fr = {
       discardText: "Le temps du minuteur ne sera pas enregistré.",
       discarded: "Minuteur jeté.",
       started: "Minuteur démarré.",
+      enter: "Saisir le temps",
       noRight: "Vous ne pouvez pas utiliser le minuteur (droit de feuille de temps).",
     },
     notes: {
@@ -217,6 +218,7 @@ export const en = {
       discardText: "The timer's time will not be saved.",
       discarded: "Timer discarded.",
       started: "Timer started.",
+      enter: "Enter time",
       noRight: "You cannot use the timer (timesheet right).",
     },
     notes: {
