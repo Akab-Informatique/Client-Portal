@@ -19,6 +19,8 @@ export type Viewer = { userId: string; name: string };
 export type TicketSummary = {
   id: number;
   number: string;
+  /** Short term (default, gold) or long term (orange) */
+  term?: "short" | "long";
   title: string;
   company: { id: number; name: string };
   contact: string;

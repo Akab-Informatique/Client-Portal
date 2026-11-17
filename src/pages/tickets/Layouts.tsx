@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
+import { termPill } from "./Term";
 import { useCan, useMe } from "@/lib/session";
 import { STALE_ROW } from "@/components/WatchReminder";
 import { PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
@@ -83,7 +84,7 @@ export function LayoutSwitch({ value, onChange }: { value: Layout; onChange: (l:
 }
 
 // ── Compact: one short line per ticket ───────────────────────────────────────────
-export type CompactTicket = Pick<TicketSummary, "id" | "number" | "title" | "managed" | "hiddenFromDelegates" | "company" | "priorityKind" | "priorityLabel" | "stale" | "dueAt" | "statusKind" | "statusLabel">;
+export type CompactTicket = Pick<TicketSummary, "id" | "number" | "term" | "title" | "managed" | "hiddenFromDelegates" | "company" | "priorityKind" | "priorityLabel" | "stale" | "dueAt" | "statusKind" | "statusLabel">;
 
 // Its columns, like the standard view's: moved and resized from the titles, kept on this computer
 const COMPACT_COLUMNS = ["ticket", "company", "priority", "due", "status"] as const;
@@ -290,7 +291,7 @@ export function CompactList({
             const lead = mixed?.before.get(tk.id)?.map((p) => <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />);
             const title = (
               <span className="flex min-w-0 items-baseline gap-2">
-                <span className={cn("shrink-0 font-mono text-[11px]", ticketTint ? "rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-semibold text-primary" : "text-muted-foreground")}>{tk.number}</span>
+                <span className={cn("shrink-0 font-mono text-[11px]", ticketTint ? `rounded border px-1.5 font-semibold ${termPill(tk.term)}` : "text-muted-foreground")}>{tk.number}</span>
                 <span className="truncate font-medium" title={`${tk.title} · ${tk.company.name}`}>
                   {tk.title}
                 </span>

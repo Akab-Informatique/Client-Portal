@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { fileToBase64 } from "../outlook/shared";
 import { CompanyPicker, ContactPicker, useCompanies, useContracts } from "./pickers";
 import { ChecklistField, type DraftItem } from "./Checklist";
+import { TermPicker, type TicketTerm } from "./Term";
 import { PRIORITY_STYLE, useChoiceText, type TicketList, type TicketSummary, ticketErrorText } from "./shared";
 
 const inDays = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
@@ -56,6 +57,7 @@ export function NewTicketDialog({
     assigneeId: me.id as string,
     dueDate: inDays(2),
     dueTime: "17:00",
+    term: "short" as TicketTerm,
   });
   const [checklist, setChecklist] = useState<DraftItem[]>([]);
   const [f, setF] = useState(empty);
@@ -159,6 +161,10 @@ export function NewTicketDialog({
           <div className="space-y-2">
             <Label htmlFor="nt-title">{t("tickets.fields.title")}</Label>
             <Input id="nt-title" required autoFocus maxLength={250} value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} />
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Label>{t("tickets.term.label")}</Label>
+            <TermPicker value={f.term} onChange={(term) => setF({ ...f, term })} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="nt-desc">{t("tickets.description")}</Label>

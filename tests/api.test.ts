@@ -5656,6 +5656,21 @@ describe("estimated time to resolve", () => {
   });
 });
 
+describe("ticket term (short / long)", () => {
+  it("short term by default; changed any time; chosen when the ticket is made", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const t = (await tech.get("/api/tickets?view=all")).json.items[0];
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.term).toBe("short");
+    expect((await tech.put(`/api/tickets/${t.id}/term`, { term: "weird" })).status).toBe(400);
+    expect((await tech.put(`/api/tickets/${t.id}/term`, { term: "long" })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.term).toBe("long");
+    expect((await tech.get("/api/tickets?view=all")).json.items.find((x: any) => x.id === t.id).term).toBe("long");
+    expect((await tech.put(`/api/tickets/${t.id}/term`, { term: "short" })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${t.id}`)).json.term).toBe("short");
+  });
+});
+
 describe("contracts: default support contract, billing modes and rates", () => {
   it("a client has a default contract; billing modes and rates are set; a ticket and its time follow its contract", async () => {
     resetRateLimit("login:ip:unknown");

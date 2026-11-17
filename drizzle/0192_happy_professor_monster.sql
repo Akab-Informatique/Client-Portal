@@ -1,0 +1,1 @@
+ALTER TABLE "ticket_meta" ADD COLUMN "term" text DEFAULT 'short' NOT NULL;

@@ -176,6 +176,12 @@ async function allTags() {
   return new Map(rows.map((r) => [r.id, r.tags]));
 }
 
+/** The tickets marked long term (every other one is short term) */
+async function longTermIds() {
+  const rows = await db().select({ id: schema.ticketMeta.ticketId }).from(schema.ticketMeta).where(eq(schema.ticketMeta.term, "long"));
+  return new Set(rows.map((r) => r.id));
+}
+
 /** Start dates set in the portal (and the tickets restricted until then). */
 async function startDates(ids: number[]) {
   const out = new Map<number, string>() as Map<number, string> & { locked: Set<number>; times: Map<number, string>; milestones: Map<number, string>; milestoneTimes: Map<number, string> };
@@ -470,6 +476,7 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     ...summary(t, lookup(o), starts.get(id), a.user.id, starts.locked.has(id), starts.times.get(id), starts.milestones.get(id), starts.milestoneTimes.get(id)),
     description: t.description,
     tags: (await allTags()).get(id) ?? [],
+    term: (await longTermIds()).has(id) ? "long" : "short",
     source: t.source,
     hours: t.hours,
     notes: t.notes,
@@ -645,7 +652,8 @@ export const ticketRoutes = new Hono<AppEnv>()
     // the delegate and "hidden from delegates" of the same tickets (one query)
     const delegates = await delegateInfoOf(selected.map((t) => t.id));
     const quiet = await ticketWatch(selected.map((t) => ({ id: t.id, due: t.dueAt, updatedAt: t.updatedAt, open: L.statusKind(t.status) !== "complete" })));
-    const items = selected.map((t) => ({ ...quiet.get(String(t.id)), ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null, managed: managed.get(t.id), ...(delegates.has(t.id) ? { delegate: delegates.get(t.id)!.delegate, hiddenFromDelegates: delegates.get(t.id)!.hiddenFromDelegates } : {}) }));
+    const longs = await longTermIds();
+    const items = selected.map((t) => ({ term: longs.has(t.id) ? "long" : "short", ...quiet.get(String(t.id)), ...summary(t, L, starts.get(t.id), a.user.id, starts.locked.has(t.id), starts.times.get(t.id), starts.milestones.get(t.id), starts.milestoneTimes.get(t.id)), checklist: checks.get(t.id) ?? null, managed: managed.get(t.id), ...(delegates.has(t.id) ? { delegate: delegates.get(t.id)!.delegate, hiddenFromDelegates: delegates.get(t.id)!.hiddenFromDelegates } : {}) }));
     // the saved filters shown as buttons, with their counts
     const pinnedFilters = await db()
       .select({ id: schema.ticketFilters.id, name: schema.ticketFilters.name, query: schema.ticketFilters.query })
@@ -2305,11 +2313,26 @@ export const ticketRoutes = new Hono<AppEnv>()
     return c.json({ ok: true, estimate: p.minutes ? { minutes: p.minutes, source: "tech" } : null });
   })
 
+  /** Short term or long term (only the colour of the ticket's number) */
+  .put("/:id/term", requirePermission("tickets.edit"), async (c) => {
+    const a = auth(c);
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) throw new HTTPException(400, { message: "invalid_id" });
+    const p = await body(c, z.object({ term: z.enum(["short", "long"]) }));
+    await db()
+      .insert(schema.ticketMeta)
+      .values({ ticketId: id, term: p.term, updatedBy: a.user.id })
+      .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { term: p.term, updatedBy: a.user.id, updatedAt: new Date() } });
+    await audit(a.user.id, "ticket.term_set", String(id), { term: p.term });
+    return c.json({ term: p.term });
+  })
+
   .post("/", requirePermission("tickets.edit"), async (c) => {
     const a = auth(c);
     const p = await body(
       c,
       z.object({
+        term: z.enum(["short", "long"]).default("short"),
         title: z.string().trim().min(1).max(250),
         description: z.string().trim().max(8000).default(""),
         companyId: z.number().int(),
@@ -2346,11 +2369,17 @@ export const ticketRoutes = new Hono<AppEnv>()
     if (!o.priorities.some((x) => x.value === p.priority)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.queue && !o.queues.some((x) => x.value === p.queue)) throw new HTTPException(400, { message: "Validation failed" });
     if (p.contractId && !(await run(() => src.contracts(p.companyId))).some((x) => x.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
-    const { checklist: checklistItems, ...rest } = p;
+    const { checklist: checklistItems, term, ...rest } = p;
     const id = await run(() => src.create({ ...rest, contactId: p.contactId ?? null, contractId: p.contractId ?? null }, a));
     // a ticket our staff make is ours: it stays in their view even when its company is self-managed
     if (await ticketsLocal()) await db().update(schema.tickets).set({ akabTakenAt: new Date() }).where(eq(schema.tickets.id, id));
     await createItems(id, checklistItems, a.user.id);
+    if (term === "long") {
+      await db()
+        .insert(schema.ticketMeta)
+        .values({ ticketId: id, term, updatedBy: a.user.id })
+        .onConflictDoUpdate({ target: schema.ticketMeta.ticketId, set: { term, updatedBy: a.user.id, updatedAt: new Date() } });
+    }
     if (p.startDate) {
       await db()
         .insert(schema.ticketMeta)

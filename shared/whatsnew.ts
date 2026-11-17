@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.9",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Nouveau type de billet : court terme (jaune, comme avant) ou long terme (orange). Il se choisit à la création et se change en tout temps dans le billet; le numéro du billet prend la couleur du type dans les listes, la vue compacte et Ma journée.", en: "New ticket type: short term (yellow, as before) or long term (orange). Pick it when creating and change it any time in the ticket; the ticket number takes the type's colour in the lists, the compact view and My day." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.8",
     date: "2026-11-17",
     sections: [

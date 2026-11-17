@@ -14,6 +14,7 @@ import * as projWorkTexts from "./projWork";
 import * as projBillTexts from "./projBill";
 import * as watchTexts from "./watch";
 import * as devicesTexts from "./devicesPage";
+import * as termTexts from "./term";
 
 export type Locale = "fr" | "en";
 
@@ -46,7 +47,7 @@ function applyLocale(lng: string) {
   document.title = TITLE[l];
 }
 // the self-managed clients feature keeps its texts in their own files
-for (const lng of ["fr", "en"] as const) for (const m of [smStaff, smClient, smDelegate, listTexts, reportTexts, assistantTexts, projTexts, projListTexts, projWorkTexts, projBillTexts, watchTexts, devicesTexts]) i18n.addResourceBundle(lng, "translation", m[lng], true, false);
+for (const lng of ["fr", "en"] as const) for (const m of [smStaff, smClient, smDelegate, listTexts, reportTexts, assistantTexts, projTexts, projListTexts, projWorkTexts, projBillTexts, watchTexts, devicesTexts, termTexts]) i18n.addResourceBundle(lng, "translation", m[lng], true, false);
 
 applyLocale(i18n.language);
 i18n.on("languageChanged", applyLocale);

@@ -951,6 +951,8 @@ export const ticketMeta = pgTable("ticket_meta", {
   estimateMinutes: integer("estimate_minutes"),
   /** tech | ai */
   estimateSource: text("estimate_source"),
+  /** Short term (the default) or long term: only the colour of the ticket's number changes */
+  term: text("term", { enum: ["short", "long"] }).notNull().default("short"),
   updatedBy: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
   updatedAt: updated(),
 });
