@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Dialog as DialogPrimitive } from "radix-ui";
 import { AlertTriangle, BellRing, MessagesSquare, Tag, Paperclip, Bot, Building2, CalendarClock, CalendarPlus, Check, BookOpen, ChevronDown, ListOrdered, ChevronUp, Clock3, Eye, FileText, HardDrive, HelpCircle, Inbox, ListChecks, Loader2, Lock, Mail, Minus, MonitorCog, MonitorPlay, NotebookPen, Pencil, Phone, RefreshCw, Send, Sparkles, Timer, Star, UserCheck, UserRound, Users, X, type LucideIcon, MessageSquareReply, MessageSquareText, Trash2, GitMerge, Hand, Undo2, EyeOff, FolderKanban } from "lucide-react";
 import { HiddenBadge, ManagedBadge, useDelegateVisibility, useTakeOver } from "./managed";
-import { termPill, TicketTermPicker } from "./Term";
+import { TicketTermPicker } from "./Term";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -396,7 +396,7 @@ function TicketBody({
       <div className="glass relative z-10 rounded-none border-x-0 border-t-0 border-b">
         <div className="w-full px-4 pb-3 pt-3 lg:px-6">
           <div className="flex items-center gap-3">
-            <span className={cn("rounded-md border px-2 py-0.5 font-mono text-xs", termPill(tk.term))}>
+            <span className={"rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary"}>
               {tk.number}
             </span>
             <TicketTermPicker ticketId={tk.id} term={tk.term} disabled={!editable || partial} />

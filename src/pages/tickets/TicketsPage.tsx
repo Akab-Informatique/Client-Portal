@@ -74,7 +74,7 @@ import { AddToDayDialog } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
 import { STALE_ROW } from "@/components/WatchReminder";
-import { termPill, TermBadge } from "./Term";
+import { termTitle } from "./Term";
 import { FILTER_KEYS, PRIORITY_STYLE, dueGlow, dueState, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
@@ -1125,9 +1125,8 @@ function TicketRow({
         <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 -z-10 w-72 opacity-80 transition-opacity group-hover:opacity-100" style={dueGlow(tk.dueAt, tk.statusKind, 1)} />
         <span className="min-w-0 xl:[order:var(--o-ticket)]">
           <span className="flex flex-wrap items-baseline gap-x-2">
-            <span className={cn("shrink-0 rounded border px-1.5 font-mono text-[11px] font-semibold", termPill(tk.term))}>{tk.number}</span>
-            <TermBadge term={tk.term} />
-            <span className="min-w-0 break-words font-medium">{tk.title}</span>
+            <span className={"shrink-0 rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-mono text-[11px] font-semibold text-primary"}>{tk.number}</span>
+            <span className={cn("min-w-0 break-words font-medium", termTitle(tk.term))}>{tk.title}</span>
             <ManagedBadge managed={tk.managed} />
             <HiddenBadge hidden={tk.hiddenFromDelegates} />
             {tk.checklist && tk.checklist.total > 0 && (

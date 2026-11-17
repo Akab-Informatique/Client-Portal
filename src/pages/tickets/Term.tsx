@@ -57,3 +57,6 @@ export function TermBadge({ term, className }: { term?: string | null; className
   const k = term === "long" ? "long" : "short";
   return <span className={cn("shrink-0 rounded-full border px-1.5 text-[10px] font-semibold leading-4", TERM_PILL[k], className)}>{t(`tickets.term.${k}`)}</span>;
 }
+
+/** The colour of a ticket's title: short term yellow, long term blue */
+export const termTitle = (term?: string | null) => (term === "long" ? "text-sky-400" : "text-yellow-300");
