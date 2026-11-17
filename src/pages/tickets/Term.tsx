@@ -50,3 +50,10 @@ export function TicketTermPicker({ ticketId, term, disabled }: { ticketId: numbe
   });
   return <TermPicker value={term === "long" ? "long" : "short"} disabled={disabled || save.isPending} onChange={(v) => save.mutate(v)} />;
 }
+
+/** A small tag saying the type in words: "Court terme" / "Long terme" */
+export function TermBadge({ term, className }: { term?: string | null; className?: string }) {
+  const { t } = useTranslation();
+  const k = term === "long" ? "long" : "short";
+  return <span className={cn("shrink-0 rounded-full border px-1.5 text-[10px] font-semibold leading-4", TERM_PILL[k], className)}>{t(`tickets.term.${k}`)}</span>;
+}
