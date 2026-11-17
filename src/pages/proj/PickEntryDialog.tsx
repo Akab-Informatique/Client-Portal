@@ -64,24 +64,24 @@ export function PickEntryDialog({ project, task, onClose }: { project: ProjDetai
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-lg overflow-y-auto overflow-x-hidden border-border bg-background">
         <DialogHeader>
           <DialogTitle>{t("projWork.pick.title")}</DialogTitle>
           <DialogDescription>{t("projWork.pick.description")}</DialogDescription>
         </DialogHeader>
 
-        <p className="truncate text-sm font-medium">{task.title}</p>
+        <p className="break-words text-sm font-medium">{task.title}</p>
 
         {!canTime ? (
           <p className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">{t("projWork.pick.noTimeRight")}</p>
         ) : (
-          <fieldset className="space-y-2">
+          <fieldset className="min-w-0 space-y-2">
             <legend className="mb-1 text-xs font-medium text-muted-foreground">{t("projWork.pick.mine")}</legend>
             {mine.isLoading ? null : entries.length === 0 ? <p className="text-sm text-muted-foreground">{t("projWork.pick.none")}</p> : null}
             {entries.map((e) => (
               <label
                 key={e.id}
-                className={cn("flex cursor-pointer items-start gap-3 rounded-xl border px-3 py-2 text-sm transition-colors", selected === e.id ? "border-violet-400/60 bg-violet-500/10" : "border-border hover:bg-accent/40")}
+                className={cn("flex min-w-0 cursor-pointer items-start gap-3 rounded-xl border px-3 py-2 text-sm transition-colors", selected === e.id ? "border-violet-400/60 bg-violet-500/10" : "border-border hover:bg-accent/40")}
               >
                 <input type="radio" name={`pick-${task.id}`} value={e.id} checked={selected === e.id} onChange={() => setChoice(e.id)} className="mt-1 accent-violet-500" />
                 <span className="min-w-0 flex-1 space-y-0.5">
@@ -89,7 +89,7 @@ export function PickEntryDialog({ project, task, onClose }: { project: ProjDetai
                     <span className="font-medium">{formatDay(e.date, lang)}</span>
                     <span className="font-mono text-violet-200">{hm(e.hours)}</span>
                   </span>
-                  {e.note && <span className="block truncate text-xs text-muted-foreground">{e.note}</span>}
+                  {e.note && <span className="line-clamp-2 break-words text-xs text-muted-foreground">{e.note}</span>}
                 </span>
               </label>
             ))}
