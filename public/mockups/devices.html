@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="fr" class="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Maquette — Appareils</title>
+<link rel="stylesheet" href="/src/index.css?direct" />
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:"Instrument Sans",system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+h1,h2,h3,.disp{font-family:"Bricolage Grotesque Variable","Bricolage Grotesque",sans-serif;letter-spacing:-.01em}
+.mut{color:var(--muted-foreground)}
+.mono{font-family:"JetBrains Mono Variable",monospace}
+.app{display:grid;grid-template-columns:232px 1fr;min-height:100vh;background:
+ radial-gradient(900px 400px at 85% -10%,rgba(245,148,16,.10),transparent 60%),var(--background)}
+aside{border-right:1px solid var(--glass-border);background:rgba(255,255,255,.02);padding:16px 12px;display:flex;flex-direction:column;gap:2px}
+.logo{display:flex;align-items:center;gap:9px;padding:4px 8px 16px}
+.bars{display:flex;gap:3px;align-items:flex-end;height:20px}.bars i{width:5px;background:var(--grad-gold);border-radius:2px}
+.nav{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;color:var(--muted-foreground)}
+.nav.on{background:rgba(255,206,26,.10);color:var(--gold);box-shadow:inset 0 0 0 1px rgba(255,206,26,.25)}
+.sec{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);opacity:.6;padding:14px 10px 4px}
+.ic{width:16px;height:16px;border-radius:5px;border:1.5px solid currentColor;opacity:.8}
+main{padding:22px 26px 40px;min-width:0}body.open main{margin-right:520px}@media(max-width:1250px){body.open main{margin-right:0}}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+.glass{background:var(--glass-bg);border:1px solid var(--glass-border);border-radius:16px;box-shadow:var(--glass-shadow);backdrop-filter:blur(14px)}
+.btn{display:inline-flex;align-items:center;gap:7px;height:34px;padding:0 13px;border-radius:10px;border:1px solid var(--glass-border);background:var(--glass-bg);color:var(--foreground);font:inherit;cursor:pointer}
+.btn.gold{background:var(--grad-gold);color:#1a1204;border:0;font-weight:600}
+.tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.tile{padding:12px 14px;cursor:pointer;position:relative;overflow:hidden}
+.tile.on{border-color:rgba(255,206,26,.55);box-shadow:0 0 24px -12px rgba(255,206,26,.5)}
+.tile .n{font-size:26px;font-weight:600;line-height:1.1}
+.tile .l{font-size:12px;color:var(--muted-foreground)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%}
+.g{background:#34d399}.r{background:#f87171}.o{background:#fbbf24}.z{background:#6b7280}
+.bar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+.search{flex:1;min-width:200px;height:34px;border-radius:10px;border:1px solid var(--glass-border);background:var(--glass-bg);color:var(--foreground);padding:0 12px;font:inherit}
+.seg{display:inline-flex;padding:3px;border-radius:11px;border:1px solid var(--glass-border);background:var(--glass-bg)}
+.seg button{border:0;background:transparent;color:var(--muted-foreground);font:inherit;padding:5px 11px;border-radius:8px;cursor:pointer}
+.seg button.on{background:rgba(255,206,26,.14);color:var(--gold)}
+.list{display:flex;flex-direction:column;gap:8px}
+.head,.row{display:grid;grid-template-columns:minmax(210px,1.5fr) 150px minmax(130px,1fr) 170px 96px;gap:12px;align-items:center;padding:0 14px}
+.head{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted-foreground);padding-bottom:2px}
+.row{height:60px;cursor:pointer;position:relative;transition:.15s}
+.row:hover{border-color:rgba(255,206,26,.35)}
+.row.sel{border-color:rgba(255,206,26,.6);background:rgba(255,206,26,.05)}
+.row:before{content:"";position:absolute;left:0;top:10px;bottom:10px;width:3px;border-radius:3px;background:var(--bar,var(--gold))}
+.dev{display:flex;align-items:center;gap:11px;min-width:0}
+.avatar{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:rgba(255,255,255,.06);border:1px solid var(--glass-border);flex:none}
+.nm{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{font-size:12px;color:var(--muted-foreground);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--glass-border);white-space:nowrap}
+.chip.dt{color:#7dd3fc;border-color:rgba(125,211,252,.35);background:rgba(125,211,252,.08)}
+.chip.ak{color:#1a1204;background:var(--grad-gold);border:0;font-weight:600}
+.chip.gr{color:#34d399;border-color:rgba(52,211,153,.35);background:rgba(52,211,153,.08)}
+.chip.am{color:#fbbf24;border-color:rgba(251,191,36,.4);background:rgba(251,191,36,.08)}
+.chip.rd{color:#f87171;border-color:rgba(248,113,113,.4);background:rgba(248,113,113,.08)}
+.shield{display:flex;gap:6px}
+.pill{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:11px;font-weight:600;border:1px solid var(--glass-border)}
+.pill.ok{color:#34d399;background:rgba(52,211,153,.10)}.pill.wn{color:#fbbf24;background:rgba(251,191,36,.12)}.pill.bd{color:#f87171;background:rgba(248,113,113,.14)}.pill.na{color:#6b7280}
+/* drawer */
+.drawer{position:fixed;right:0;top:0;bottom:0;width:520px;max-width:96vw;background:var(--glass-bg-strong);border-left:1px solid var(--glass-border);backdrop-filter:blur(22px);box-shadow:-30px 0 60px -30px rgba(0,0,0,.8);display:flex;flex-direction:column;z-index:10}
+.dh{padding:18px 20px 12px;border-bottom:1px solid var(--glass-border)}
+.tabs{display:flex;gap:4px;padding:8px 14px;border-bottom:1px solid var(--glass-border)}
+.tabs button{border:0;background:transparent;color:var(--muted-foreground);font:inherit;padding:6px 11px;border-radius:9px;cursor:pointer}
+.tabs button.on{background:rgba(255,206,26,.12);color:var(--gold)}
+.db{padding:16px 20px;overflow:auto;flex:1;display:flex;flex-direction:column;gap:12px}
+.card{padding:13px 15px}
+.card h3{margin:0 0 9px;font-size:13px;color:var(--muted-foreground);font-weight:500;letter-spacing:.03em;text-transform:uppercase}
+.kv{display:grid;grid-template-columns:140px 1fr auto;gap:7px 10px;align-items:center}
+.kv .k{color:var(--muted-foreground)}
+.src{font-size:10.5px;padding:1px 6px;border-radius:6px;border:1px solid var(--glass-border);color:var(--muted-foreground)}
+.src.dt{color:#7dd3fc}.src.ak{color:var(--gold)}
+.gauge{height:6px;border-radius:6px;background:rgba(255,255,255,.08);overflow:hidden}.gauge i{display:block;height:100%;background:var(--grad-gold)}
+.act{display:flex;gap:8px;flex-wrap:wrap}
+.banner{padding:11px 14px;border-radius:12px;border:1px solid rgba(251,191,36,.4);background:rgba(251,191,36,.07);color:#fbbf24;display:flex;gap:10px;align-items:center;justify-content:space-between}
+@media(max-width:1250px){.head,.row{grid-template-columns:minmax(180px,1.4fr) 130px 150px 90px}.head>:nth-child(3),.row>:nth-child(3){display:none}}
+.app{transition:.2s}.demo{position:fixed;left:244px;bottom:12px;font-size:11px;color:var(--muted-foreground);background:var(--glass-bg-strong);border:1px solid var(--glass-border);padding:4px 10px;border-radius:8px;z-index:5}
+</style>
+</head>
+<body>
+<div class="app">
+<aside>
+  <div class="logo"><div class="bars"><i style="height:9px"></i><i style="height:14px"></i><i style="height:20px"></i></div><b class="disp" style="font-size:18px;letter-spacing:.04em">AKAB</b></div>
+  <div class="sec">Centre de commande</div>
+  <div class="nav"><span class="ic"></span>Opérations</div>
+  <div class="nav"><span class="ic"></span>Clients</div>
+  <div class="nav on"><span class="ic"></span>Appareils</div>
+  <div class="nav"><span class="ic"></span>Documentation</div>
+  <div class="sec">Comptabilité</div>
+  <div class="nav"><span class="ic"></span>Approbation</div>
+  <div class="nav"><span class="ic"></span>Factures</div>
+</aside>
+<main>
+  <div class="top">
+    <div>
+      <h1 style="margin:0;font-size:28px">Appareils</h1>
+      <div class="mut">Tous vos clients · Datto RMM + Agent AKAB · mis à jour il y a 2 min</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn">Synchroniser Datto</button>
+      <button class="btn gold">Installer l'agent AKAB</button>
+    </div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="bar">
+    <input class="search" placeholder="Chercher un appareil, un client, un utilisateur, un numéro de série…" />
+    <div class="seg" id="srcseg"></div>
+    <button class="btn">Client ▾</button>
+    <button class="btn">Type ▾</button>
+  </div>
+
+  <div class="head"><div>Appareil</div><div>Source</div><div>Système</div><div>Sécurité</div><div>Dernier contact</div></div>
+  <div class="list" id="list"></div>
+</main>
+</div>
+<div class="demo">Maquette · données fictives</div>
+<div id="dw"></div>
+
+<script>
+const S=(ok,t)=>({ok,t});
+const DEV=[
+ {id:0,n:"PC-COMPTA-01",c:"Pubco inc.",u:"m.tremblay",type:"Poste",os:"Windows 11 Pro 23H2",hw:"Dell OptiPlex 7010 · i5 · 16 Go",on:1,seen:"il y a 3 min",src:["dt","ak"],
+  sec:{av:["ok","Datto AV à jour"],fw:["ok","Pare-feu actif"],enc:["ok","BitLocker · clé en dépôt"],patch:["ok","0 correctif en attente"]},
+  flags:[["wn","2 comptes admin locaux dont 1 inattendu"]],
+  pc:[["Modèle","Dell OptiPlex 7010","dt"],["N° de série","7K2M9X3","ak"],["Processeur","Core i5-13500 · 14 cœurs","ak"],["Mémoire","16 Go · 2 emplacements libres","ak"],["Disque","512 Go SSD","ak"],["IP / MAC","192.168.1.42 · 3C:A0:67:…","ak"],["Garantie","Jusqu'au 2027-03-14","dt"]],disk:62,
+  sw:["Microsoft 365 Apps","Google Chrome (mise à jour dispo)","Adobe Reader (mise à jour dispo)","QuickBooks Desktop 2024","7-Zip (mise à jour dispo)"],swn:142},
+ {id:1,n:"SRV-FICHIERS",c:"Pubco inc.",u:"SYSTEM",type:"Serveur",os:"Windows Server 2022",hw:"HPE ML30 · Xeon · 32 Go",on:1,seen:"il y a 1 min",src:["dt","ak"],
+  sec:{av:["ok","Datto AV à jour"],fw:["ok","Pare-feu actif"],enc:["wn","Non chiffré"],patch:["bd","7 en attente (2 critiques)"]},
+  flags:[["bd","2 correctifs critiques en attente depuis 12 jours"]],
+  pc:[["Modèle","HPE ProLiant ML30","dt"],["N° de série","CZ2310XY","ak"],["Processeur","Xeon E-2314","ak"],["Mémoire","32 Go","ak"],["Disque","2 To RAID1","ak"],["IP / MAC","192.168.1.10","ak"],["Garantie","Expirée le 2025-11-02","dt"]],disk:71,
+  sw:["SQL Server 2019","Veeam Agent","Microsoft Defender"],swn:96},
+ {id:2,n:"LAPTOP-DIRECTION",c:"Pubco inc.",u:"j.pubco",type:"Portable",os:"Windows 11 Pro",hw:"Lenovo T14 Gen 3",on:0,seen:"il y a 9 jours",src:["dt"],
+  sec:{av:["ok","Datto AV à jour"],fw:["na","Inconnu"],enc:["na","Inconnu"],patch:["wn","4 en attente"]},
+  flags:[["wn","Agent AKAB absent : sécurité et logiciels non vérifiables"],["wn","Hors ligne depuis 9 jours"]],
+  pc:[["Modèle","Lenovo ThinkPad T14 Gen 3","dt"],["Garantie","Jusqu'au 2026-12-20","dt"]],disk:null,sw:[],swn:0},
+ {id:3,n:"PC-ATELIER-07",c:"Garage Lemay",u:"atelier",type:"Poste",os:"Windows 10 Pro 22H2",hw:"HP ProDesk 400 G7 · i3 · 8 Go",on:1,seen:"il y a 12 min",src:["ak"],
+  sec:{av:["ok","Defender à jour"],fw:["ok","Pare-feu actif"],enc:["wn","Non chiffré"],patch:["bd","Windows 10 en fin de support"]},
+  flags:[["bd","Windows 10 : fin de support"],["wn","Absent de Datto RMM"]],
+  pc:[["Modèle","HP ProDesk 400 G7","ak"],["N° de série","CZC0481F9K","ak"],["Processeur","Core i3-10100","ak"],["Mémoire","8 Go","ak"],["Disque","256 Go SSD","ak"]],disk:88,sw:["Microsoft 365 Apps","Sage 50"],swn:58}
+];
+const L={dt:"Datto RMM",ak:"Agent AKAB"};
+let filt="all",sel=null,tab="ov";
+const chip=s=>`<span class="chip ${s}">${L[s]}</span>`;
+const pill=(k,l)=>`<span class="pill ${k}" title="${l}">${({ok:"✓",wn:"!",bd:"✕",na:"–"})[k]}</span>`;
+function tiles(){
+ const T=[["all","Appareils",4,"var(--gold)"],["on","En ligne",3,"#34d399"],["risk","À risque",2,"#f87171"],["one","Une seule source",2,"#fbbf24"],["eol","Fin de support",1,"#fbbf24"]];
+ document.getElementById("tiles").innerHTML=T.map(t=>`<div class="glass tile ${filt==t[0]?"on":""}" onclick="filt='${t[0]}';draw()"><div class="n" style="color:${t[3]}">${t[2]}</div><div class="l">${t[1]}</div></div>`).join("");
+ const seg=[["all","Toutes les sources"],["dt","Datto"],["ak","Agent AKAB"],["both","Les deux"]];
+ document.getElementById("srcseg").innerHTML=seg.map(s=>`<button class="${(["dt","ak","both"].includes(filt)?filt:"all")==s[0]?"on":""}" onclick="filt='${s[0]}';draw()">${s[1]}</button>`).join("");
+}
+function vis(d){
+ if(filt=="on")return d.on;if(filt=="risk")return Object.values(d.sec).some(x=>x[0]=="bd");if(filt=="one")return d.src.length==1;if(filt=="eol")return d.os.includes("Windows 10");
+ if(filt=="dt")return d.src.includes("dt");if(filt=="ak")return d.src.includes("ak");if(filt=="both")return d.src.length==2;return 1}
+function draw(){
+ tiles();
+ document.getElementById("list").innerHTML=DEV.filter(vis).map(d=>{
+  const worst=Object.values(d.sec).some(x=>x[0]=="bd")?"#f87171":Object.values(d.sec).some(x=>x[0]=="wn")?"#fbbf24":"#34d399";
+  return `<div class="glass row ${sel==d.id?"sel":""}" style="--bar:${worst}" onclick="sel=${d.id};tab='ov';draw()">
+   <div class="dev"><div class="avatar">${d.type=="Serveur"?"▤":d.type=="Portable"?"▭":"▣"}</div><div style="min-width:0"><div class="nm">${d.n}</div><div class="sub">${d.c} · ${d.u}</div></div></div>
+   <div style="display:flex;gap:5px;flex-wrap:wrap">${d.src.map(chip).join("")}</div>
+   <div><div class="nm" style="font-weight:500">${d.os}</div><div class="sub">${d.hw}</div></div>
+   <div class="shield">${pill(d.sec.av[0],"Antivirus : "+d.sec.av[1])}${pill(d.sec.fw[0],"Pare-feu : "+d.sec.fw[1])}${pill(d.sec.enc[0],"Chiffrement : "+d.sec.enc[1])}${pill(d.sec.patch[0],"Correctifs : "+d.sec.patch[1])}</div>
+   <div class="sub"><span class="dot ${d.on?"g":"z"}"></span> ${d.seen}</div></div>`}).join("");
+ drawer();
+}
+function drawer(){
+ document.body.classList.toggle("open",sel!==null);
+ if(sel===null){document.getElementById("dw").innerHTML="";return}
+ const d=DEV[sel];
+ const kv=a=>a.map(r=>`<span class="k">${r[0]}</span><span>${r[1]}</span><span class="src ${r[2]}">${L[r[2]]}</span>`).join("");
+ const secrow=[["Antivirus",d.sec.av,d.src.includes("dt")?"dt":"ak"],["Pare-feu",d.sec.fw,"ak"],["Chiffrement",d.sec.enc,"ak"],["Correctifs",d.sec.patch,"dt"]];
+ const col={ok:"gr",wn:"am",bd:"rd",na:""};
+ let body="";
+ if(tab=="ov"){
+  body=d.flags.map(f=>`<div class="banner" style="${f[0]=="bd"?"border-color:rgba(248,113,113,.45);background:rgba(248,113,113,.07);color:#f87171":""}"><span>${f[1]}</span></div>`).join("")+
+  `<div class="glass card"><h3>Ordinateur</h3><div class="kv">${kv(d.pc)}</div>${d.disk?`<div style="margin-top:12px"><div class="mut" style="font-size:12px;margin-bottom:4px">Disque utilisé · ${d.disk} %</div><div class="gauge"><i style="width:${d.disk}%"></i></div></div>`:""}</div>`+
+  `<div class="glass card"><h3>Provenance des données</h3><div style="display:flex;gap:8px;flex-wrap:wrap">${d.src.map(chip).join("")}</div><div class="mut" style="margin-top:8px;font-size:12.5px">${d.src.length==2?"Les deux sources se recoupent (série " + (d.pc.find(r=>r[0]=="N° de série")||["","—"])[1] + "). Datto : modèle, garantie, antivirus, correctifs. Agent : matériel, chiffrement, pare-feu, logiciels.":d.src[0]=="dt"?"Vu seulement par Datto. L'agent AKAB n'est pas installé : sécurité locale et logiciels inconnus.":"Vu seulement par l'agent AKAB. Cet appareil n'est pas dans Datto RMM."}</div></div>`;
+ }
+ if(tab=="sec"){
+  body=`<div class="glass card"><h3>État de sécurité</h3><div class="kv">${secrow.map(r=>`<span class="k">${r[0]}</span><span><span class="chip ${col[r[1][0]]}">${r[1][1]}</span></span><span class="src ${r[2]}">${L[r[2]]}</span>`).join("")}</div></div>
+  <div class="glass card"><h3>À corriger</h3>${d.flags.map(f=>`<div style="display:flex;gap:8px;align-items:center;margin:5px 0"><span class="dot ${f[0]=="bd"?"r":"o"}"></span>${f[1]}</div>`).join("")||"Rien à signaler."}</div>`;
+ }
+ if(tab=="sw"){
+  body=`<div class="glass card"><h3>Logiciels · ${d.swn} installés</h3>${d.sw.length?d.sw.map(s=>`<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--glass-border)"><span>${s}</span>${s.includes("mise à jour")?'<span class="chip am">Mise à jour</span>':'<span class="mut">à jour</span>'}</div>`).join(""):'<div class="mut">Aucun inventaire : installez l\'agent AKAB.</div>'}</div>`;
+ }
+ if(tab=="rem"){
+  body=`<div class="glass card"><h3>Accès à distance</h3><div class="act">${d.src.includes("dt")?'<button class="btn gold">Contrôle à distance (Datto)</button><button class="btn">Ouvrir dans Datto ↗</button>':'<button class="btn gold">Session distante AKAB</button>'}${d.on?'<button class="btn">Verrouiller</button><button class="btn">Redémarrer…</button>':'<button class="btn" disabled style="opacity:.5">Hors ligne</button>'}</div><div class="mut" style="margin-top:10px;font-size:12.5px">Chaque action demande une confirmation et s'inscrit au journal d'activité.</div></div>
+  <div class="glass card"><h3>Billets</h3><div class="mut">3 billets ouverts liés à cet appareil · <span style="color:var(--gold)">Voir</span></div></div>`;
+ }
+ document.getElementById("dw").innerHTML=`<div class="drawer"><div class="dh"><div style="display:flex;justify-content:space-between;align-items:start"><div><h2 style="margin:0;font-size:22px">${d.n}</h2><div class="mut">${d.c} · ${d.u} · ${d.os}</div></div><div style="display:flex;gap:8px;align-items:center"><span class="chip ${d.on?"gr":""}"><span class="dot ${d.on?"g":"z"}"></span>${d.on?"En ligne":"Hors ligne"}</span><button class="btn" style="padding:0 10px" onclick="sel=null;draw()" aria-label="Fermer">✕</button></div></div><div style="display:flex;gap:6px;margin-top:10px">${d.src.map(chip).join("")}</div></div>
+ <div class="tabs">${[["ov","Aperçu"],["sec","Sécurité"],["sw","Logiciels"],["rem","Accès à distance"]].map(t=>`<button class="${tab==t[0]?"on":""}" onclick="tab='${t[0]}';drawer()">${t[1]}</button>`).join("")}</div>
+ <div class="db">${body}</div></div>`;
+}
+draw();
+</script>
+</body>
+</html>
