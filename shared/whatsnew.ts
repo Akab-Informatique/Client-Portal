@@ -15,7 +15,7 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         fr: "Billets",
         en: "Tickets",
         items: [
-          { fr: "Dans l'activité d'un billet, chaque jour a son propre fond légèrement différent (en alternance) : on voit tout de suite où la journée change. Les billets long terme ont leur titre en bleu et les court terme en jaune.", en: "In a ticket's activity, each day has its own slightly different background (alternating): you see right away where the day changes. Long term tickets show their title in blue, short term in yellow." },
+          { fr: "Dans la liste des billets et dans Ma journée, chaque échéance a son propre fond légèrement différent (en alternance) : on voit tout de suite où la date change.", en: "In the tickets list and in My day, each due day has its own slightly different background (alternating): you see right away where the date changes." },
         ],
       },
     ],
