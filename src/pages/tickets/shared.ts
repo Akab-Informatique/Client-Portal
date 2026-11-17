@@ -378,3 +378,23 @@ export function ticketErrorText(t: (k: string, o?: Record<string, unknown>) => s
 }
 
 export { hm, parseHm } from "@shared/duration";
+
+/** A light shade that alternates with each new due day (like a banded table), so the change of day shows in a list */
+export const DUE_BAND = "shadow-[inset_0_0_0_999px_rgba(255,255,255,0.055)]";
+const dayKey = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+/** ticket id -> 0 | 1, flipping each time the due day changes down the list */
+export function dueBands(items: { id: number; dueAt: string }[]): Map<number, number> {
+  const m = new Map<number, number>();
+  let last = "";
+  let n = -1;
+  for (const t of items) {
+    const d = dayKey(t.dueAt);
+    if (d !== last) {
+      n++;
+      last = d;
+    }
+    m.set(t.id, n % 2);
+  }
+  return m;
+}
+export const dueBandOf = dueBands;

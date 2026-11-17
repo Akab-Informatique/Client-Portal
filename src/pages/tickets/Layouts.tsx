@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
-import { termTitle } from "./Term";
+import { dueBands, DUE_BAND } from "./shared";
 import { useCan, useMe } from "@/lib/session";
 import { STALE_ROW } from "@/components/WatchReminder";
 import { PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
@@ -274,6 +274,7 @@ export function CompactList({
   const cols = useColumns(COMPACT_KEY, COMPACT_COLUMNS, COMPACT_WIDTHS, "ticket");
   const edit = Boolean(facets) && can("tickets.edit");
   const gridStyle: CSSProperties = { gridTemplateColumns: cols.template };
+  const bands = dueBands(items);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["tickets"] });
   const patch = useMutation({ mutationFn: ({ id, ...p }: { id: number; priority?: string; status?: string; dueAt?: string }) => api.patch(`/tickets/${id}`, p), onSuccess: refresh, onError: (e) => toast.error(ticketErrorText(t, e)) });
   const select = "h-7 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1 text-xs outline-none hover:border-border focus:border-[color:var(--gold)]/60";
@@ -287,12 +288,13 @@ export function CompactList({
             <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />
           ))}
           {items.map((tk) => {
+            const band = bands.get(tk.id) === 1;
             const mixed = !grouped && projects ? slotProjects(items, projects, range?.lo, range?.hi) : null;
             const lead = mixed?.before.get(tk.id)?.map((p) => <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />);
             const title = (
               <span className="flex min-w-0 items-baseline gap-2">
                 <span className={cn("shrink-0 font-mono text-[11px]", ticketTint ? "rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-semibold text-primary" : "text-muted-foreground")}>{tk.number}</span>
-                <span className={cn("truncate font-medium", termTitle(tk.term))} title={`${tk.title} · ${tk.company.name}`}>
+                <span className={"truncate font-medium"} title={`${tk.title} · ${tk.company.name}`}>
                   {tk.title}
                 </span>
                 <ManagedBadge managed={tk.managed} />
@@ -304,7 +306,7 @@ export function CompactList({
                 {tk.company.name}
               </span>
             );
-            const rowClass = cn(tk.stale && !activeIds.has(tk.id) && STALE_ROW, "relative grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", ticketTint && "bg-[color:var(--gold)]/[0.035]", activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
+            const rowClass = cn(tk.stale && !activeIds.has(tk.id) && STALE_ROW, "relative grid w-full items-center gap-x-3 px-4 py-1 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", ticketTint && "bg-[color:var(--gold)]/[0.035]", band && DUE_BAND, activeIds.has(tk.id) && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_60%)]");
             if (edit && facets) {
               const dueDay = new Date(tk.dueAt);
               const dueValue = `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, "0")}-${String(dueDay.getDate()).padStart(2, "0")}`;

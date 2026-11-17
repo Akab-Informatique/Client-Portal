@@ -1237,14 +1237,6 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
   // what came from a ticket merged into this one is tinted and has its own filter
   const mergedCount = notes.filter((n) => n.mergedFrom).length;
   const shown = notes.filter((n) => filter === "all" || (filter === "merged" ? Boolean(n.mergedFrom) : kindOf(n) === filter));
-  // every day has its own light shade, alternating, so the change of day is easy to see (like a banded table)
-  const dayOf = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
-  const bands = new Map<string, number>();
-  for (const n of shown) {
-    const d = dayOf(n.at);
-    if (!bands.has(d)) bands.set(d, bands.size);
-  }
-  const band = (n: Item) => ((bands.get(dayOf(n.at)) ?? 0) % 2 === 1 ? "bg-foreground/[0.06]" : "bg-transparent");
   const mergedChip = (n: Item) =>
     n.mergedFrom ? (
       <span className="flex items-center gap-1 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-emerald-300" title={t("tickets.merge.fromHint", { number: n.mergedFrom })}>
@@ -1294,7 +1286,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
       ) : shown.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("tickets.noActivity")}</p>
       ) : (
-        <ol className="-mx-2">
+        <ol className="space-y-3">
           {shown.map((n) => {
             const kind = kindOf(n);
             const client = kind === "reply" && fromClient(n);
@@ -1314,7 +1306,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
             if (kind === "internal" || kind === "time") {
               const time = kind === "time";
               return (
-                <li key={n.id} className={cn("flex justify-center rounded-lg px-2 py-1.5", band(n))}>
+                <li key={n.id} className="flex justify-center">
                   <div
                     className={cn(
                       "w-full max-w-[88%] rounded-2xl border px-4 py-2.5",
@@ -1359,7 +1351,7 @@ function Activity({ tk, partial }: { tk: TicketDetail; partial: boolean }) {
             }
             // the conversation: the client on the left, the technician on the right
             return (
-              <li key={n.id} className={cn("flex items-end gap-2 rounded-lg px-2 py-1.5", band(n), client ? "justify-start" : "flex-row-reverse justify-start")}>
+              <li key={n.id} className={cn("flex items-end gap-2", client ? "justify-start" : "flex-row-reverse justify-start")}>
                 <span
                   className={cn(
                     "mb-1 flex size-7 shrink-0 items-center justify-center rounded-full text-[10px] font-bold",

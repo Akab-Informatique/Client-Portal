@@ -74,7 +74,7 @@ import { AddToDayDialog } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
 import { STALE_ROW } from "@/components/WatchReminder";
-import { termTitle } from "./Term";
+import { dueBandOf, DUE_BAND } from "./shared";
 import { FILTER_KEYS, PRIORITY_STYLE, dueGlow, dueState, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
@@ -461,6 +461,7 @@ export function TicketsPage() {
                 key={tk.id}
                 tk={tk}
                 index={i}
+                band={dueBandOf(data.items).get(tk.id) === 1}
                 active={tk.id === ws.openId || ws.docked.some((d) => d.id === tk.id)}
                 onOpen={() => ws.open(tk.id)}
                 facets={data.facets}
@@ -960,6 +961,7 @@ const Stop = ({ children }: { children: ReactNode }) => (
 function TicketRow({
   tk,
   index,
+  band,
   active,
   onOpen,
   facets,
@@ -976,6 +978,8 @@ function TicketRow({
 }: {
   tk: TicketSummary;
   index: number;
+  /** The odd day of the list: a light shade (the due day changes) */
+  band?: boolean;
   active: boolean;
   onOpen: () => void;
   facets: TicketList["facets"];
@@ -1031,6 +1035,7 @@ function TicketRow({
           tk.stale && !active && STALE_ROW,
           // a faint amber tint: a ticket is gold, a project violet (see ProjRow)
           !picked && "bg-[color:var(--gold)]/[0.035]",
+          band && DUE_BAND,
           // Critical pops and moves, high pops (open tickets only)
           tk.statusKind !== "complete" && tk.priorityKind === "critical" && "ticket-critical",
           tk.statusKind !== "complete" && tk.priorityKind === "high" && "ticket-high",
@@ -1126,7 +1131,7 @@ function TicketRow({
         <span className="min-w-0 xl:[order:var(--o-ticket)]">
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className={"shrink-0 rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-mono text-[11px] font-semibold text-primary"}>{tk.number}</span>
-            <span className={cn("min-w-0 break-words font-medium", termTitle(tk.term))}>{tk.title}</span>
+            <span className={"min-w-0 break-words font-medium"}>{tk.title}</span>
             <ManagedBadge managed={tk.managed} />
             <HiddenBadge hidden={tk.hiddenFromDelegates} />
             {tk.checklist && tk.checklist.total > 0 && (
