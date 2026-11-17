@@ -74,7 +74,8 @@ import { AddToDayDialog } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
 import { PendingMails } from "./PendingMails";
 import { STALE_ROW } from "@/components/WatchReminder";
-import { dueBandOf, DUE_BAND } from "./shared";
+import { DUE_BAND } from "./shared";
+import { termTitle } from "./Term";
 import { FILTER_KEYS, PRIORITY_STYLE, dueGlow, dueState, useChoiceText, shortDate, shortDateTime, hm, STATUS_STYLE, useTickets, useShowSecondary, VIEWS, type Tally, type TicketList, type TicketSummary, type View, ticketErrorText } from "./shared";
 import { useTicketWorkspace } from "./workspace";
 import { GlobalSearch } from "./GlobalSearch";
@@ -85,7 +86,7 @@ import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
 import { useMyProjectCount, useProjectRows } from "@/pages/proj/shared";
 import { KickoffDialog } from "@/pages/proj/KickoffDialog";
-import { GroupToggle, KindLegend, KindSwitch, ProjRow, filterProjectRows, slotProjects, type ProjKind } from "@/pages/proj/ProjRows";
+import { dueBandsMixed, GroupToggle, KindLegend, KindSwitch, ProjRow, filterProjectRows, slotProjects, type ProjKind } from "@/pages/proj/ProjRows";
 import { ProjView } from "@/pages/proj/ProjView";
 import { NewProjDialog } from "@/pages/proj/NewProjDialog";
 import { ArchiveImportDialog } from "@/pages/proj/ArchiveImportDialog";
@@ -238,6 +239,7 @@ export function TicketsPage() {
   // projects mixed with the tickets by due date, unless the person asked to group them (group=1)
   const grouped = params.get("group") === "1";
   const pj = params.get("pj");
+  const bandSets = dueBandsMixed(data?.items ?? [], projects, grouped);
 
   // Shortcuts: "/" search, "n" new ticket (not while typing)
   useEffect(() => {
@@ -453,15 +455,15 @@ export function TicketsPage() {
         ) : (
           <ul className="divide-y divide-[color:var(--glass-border)]">
             {/* projects (violet) mixed with the tickets (amber tint) by due date, or grouped on top */}
-            {grouped && projects.map((p) => <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
+            {grouped && projects.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
             {data.items.map((tk, i) => (
               <Fragment key={tk.id}>
-              {!grouped && slotProjects(data.items, projects).before.get(tk.id)?.map((p) => <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
+              {!grouped && slotProjects(data.items, projects).before.get(tk.id)?.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
               <TicketRow
                 key={tk.id}
                 tk={tk}
                 index={i}
-                band={dueBandOf(data.items).get(tk.id) === 1}
+                band={bandSets.tickets.has(tk.id)}
                 active={tk.id === ws.openId || ws.docked.some((d) => d.id === tk.id)}
                 onOpen={() => ws.open(tk.id)}
                 facets={data.facets}
@@ -490,7 +492,7 @@ export function TicketsPage() {
               />
               </Fragment>
             ))}
-            {!grouped && slotProjects(data.items, projects).tail.map((p) => <ProjRow key={`p-${p.id}`} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
+            {!grouped && slotProjects(data.items, projects).tail.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
           </ul>
         )}
         {data && (data.items.length > 0 || projects.length > 0) && (
@@ -1131,7 +1133,7 @@ function TicketRow({
         <span className="min-w-0 xl:[order:var(--o-ticket)]">
           <span className="flex flex-wrap items-baseline gap-x-2">
             <span className={"shrink-0 rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-mono text-[11px] font-semibold text-primary"}>{tk.number}</span>
-            <span className={"min-w-0 break-words font-medium"}>{tk.title}</span>
+            <span className={cn("min-w-0 break-words font-medium", termTitle(tk.term))}>{tk.title}</span>
             <ManagedBadge managed={tk.managed} />
             <HiddenBadge hidden={tk.hiddenFromDelegates} />
             {tk.checklist && tk.checklist.total > 0 && (

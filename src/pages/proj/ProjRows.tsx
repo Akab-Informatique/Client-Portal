@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { FolderOpen } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
-import { shortDate } from "@/pages/tickets/shared";
+import { shortDate, DUE_BAND } from "@/pages/tickets/shared";
 import { DayEdge } from "@/pages/pipeline/DayEdge";
 import type { ProjectRow, ProjStatus } from "./shared";
 
@@ -126,7 +126,7 @@ function hoursText(p: ProjectRow, t: (k: string, o?: Record<string, unknown>) =>
 }
 
 /** A project as a row of the Tickets table: the same columns (`--o-*` order) as a ticket row, violet. */
-export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean; onOpen: () => void }) {
+export function ProjRow({ p, active, onOpen, band }: { p: ProjectRow; active?: boolean; onOpen: () => void; band?: boolean }) {
   const { t } = useTranslation();
   const others = p.memberIds.filter((id) => id !== p.lead?.id).length;
   const progress = p.taskTotal > 0 ? t("projList.tasks", { done: p.taskDone, total: p.taskTotal }) : null;
@@ -150,8 +150,9 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
         className={cn(
           "cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-violet-400/60",
           // a violet tint and a violet left bar (border + 4px less padding keeps the columns aligned with the tickets)
-          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 border-l-4 border-violet-500 bg-violet-500/[0.07] py-2.5 pl-9 pr-5 text-left transition-colors hover:bg-violet-500/[0.13] xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
-          active && "bg-violet-500/[0.14]",
+          "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 border-l-4 border-violet-500 bg-[color:var(--gold)]/[0.035] py-2.5 pl-9 pr-5 text-left transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)] xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
+          band && DUE_BAND,
+          active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
           (noTask(p) || (p.stale && p.status !== "done" && p.status !== "cancelled")) && STALE_ROW,
         )}
       >
@@ -198,7 +199,7 @@ export function ProjRow({ p, active, onOpen }: { p: ProjectRow; active?: boolean
 }
 
 /** A project as a line of the Compact view: the columns are the view's own (`order`, `gridStyle`). */
-export function ProjCompactRow({ p, order, gridStyle, onOpen }: { p: ProjectRow; order: readonly string[]; gridStyle: CSSProperties; onOpen: () => void }) {
+export function ProjCompactRow({ p, order, gridStyle, onOpen, band }: { p: ProjectRow; order: readonly string[]; gridStyle: CSSProperties; onOpen: () => void; band?: boolean }) {
   const { t } = useTranslation();
   const late = isLate(p);
   const dash = <span className="text-xs text-muted-foreground/60">—</span>;
@@ -224,7 +225,7 @@ export function ProjCompactRow({ p, order, gridStyle, onOpen }: { p: ProjectRow;
   return (
     <li className="relative">
       <DayEdge kind="pproject" id={p.id} number={p.number} title={p.name} violet onOpen={onOpen} className="absolute left-0 top-0 z-10 h-full" />
-      <button type="button" onClick={onOpen} aria-label={`${p.number} ${p.name}`} style={gridStyle} className={cn("relative grid w-full items-center gap-x-3 border-l-4 border-violet-500 bg-violet-500/[0.07] py-1 pl-3 pr-4 text-left text-sm transition-colors hover:bg-violet-500/[0.13]", noTask(p) && STALE_ROW)}>
+      <button type="button" onClick={onOpen} aria-label={`${p.number} ${p.name}`} style={gridStyle} className={cn("relative grid w-full items-center gap-x-3 border-l-4 border-violet-500 bg-[color:var(--gold)]/[0.035] py-1 pl-3 pr-4 text-left text-sm transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)]", band && DUE_BAND, noTask(p) && STALE_ROW)}>
         {order.map((c) => (
           <div key={c} className="min-w-0">
             {cells[c] ?? null}
@@ -268,4 +269,35 @@ export function slotProjects(items: { id: number; dueAt: string }[], projects: P
     else before.set(at.id, [...(before.get(at.id) ?? []), p]);
   }
   return { before, tail };
+}
+
+const ymdToronto = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
+/**
+ * The alternating shade of the list, tickets and projects in the order they are shown: it flips each time the due day changes.
+ * Returns the odd rows (a ticket id, a project id) so each row only asks "am I shaded?".
+ */
+export function dueBandsMixed(items: { id: number; dueAt: string }[], projects: ProjectRow[] | undefined, grouped: boolean | undefined, lo?: string | null, hi?: string | null) {
+  const tickets = new Set<number>();
+  const projs = new Set<string>();
+  const ps = projects ?? [];
+  const slot = !grouped && ps.length ? slotProjects(items, ps, lo, hi) : null;
+  let last = "";
+  let n = -1;
+  const step = (day: string) => {
+    if (day !== last) {
+      n++;
+      last = day;
+    }
+    return n % 2 === 1;
+  };
+  const doProject = (p: ProjectRow) => {
+    if (step(projDue(p) ?? "none")) projs.add(p.id);
+  };
+  if (grouped) ps.forEach(doProject);
+  for (const tk of items) {
+    slot?.before.get(tk.id)?.forEach(doProject);
+    if (step(ymdToronto(tk.dueAt))) tickets.add(tk.id);
+  }
+  slot?.tail.forEach(doProject);
+  return { tickets, projs };
 }

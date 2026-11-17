@@ -13,12 +13,13 @@ import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { api } from "@/lib/api";
 import { cn, initials } from "@/lib/utils";
-import { dueBands, DUE_BAND } from "./shared";
+import { DUE_BAND } from "./shared";
+import { termTitle } from "./Term";
 import { useCan, useMe } from "@/lib/session";
 import { STALE_ROW } from "@/components/WatchReminder";
 import { PRIORITY_STYLE, shortDate, STATUS_STYLE, ticketErrorText, useChoiceText, type TicketList, type TicketSummary } from "./shared";
 import { HiddenBadge, ManagedBadge } from "./managed";
-import { ProjCompactRow, slotProjects } from "@/pages/proj/ProjRows";
+import { dueBandsMixed, ProjCompactRow, slotProjects } from "@/pages/proj/ProjRows";
 import type { ProjectRow } from "@/pages/proj/shared";
 
 // ── The three ways to look at the list ───────────────────────────────────────────
@@ -274,7 +275,7 @@ export function CompactList({
   const cols = useColumns(COMPACT_KEY, COMPACT_COLUMNS, COMPACT_WIDTHS, "ticket");
   const edit = Boolean(facets) && can("tickets.edit");
   const gridStyle: CSSProperties = { gridTemplateColumns: cols.template };
-  const bands = dueBands(items);
+  const bands = dueBandsMixed(items, projects, grouped, range?.lo, range?.hi);
   const refresh = () => void qc.invalidateQueries({ queryKey: ["tickets"] });
   const patch = useMutation({ mutationFn: ({ id, ...p }: { id: number; priority?: string; status?: string; dueAt?: string }) => api.patch(`/tickets/${id}`, p), onSuccess: refresh, onError: (e) => toast.error(ticketErrorText(t, e)) });
   const select = "h-7 w-full min-w-0 rounded-md border border-transparent bg-transparent px-1 text-xs outline-none hover:border-border focus:border-[color:var(--gold)]/60";
@@ -285,16 +286,16 @@ export function CompactList({
         <ColumnHeader cols={cols} labels={labels} style={gridStyle} />
         <ul className="divide-y divide-[color:var(--glass-border)]">
           {(grouped ? projects : [])?.map((p) => (
-            <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />
+            <ProjCompactRow key={`p-${p.id}`} band={bands.projs.has(p.id)} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />
           ))}
           {items.map((tk) => {
-            const band = bands.get(tk.id) === 1;
+            const band = bands.tickets.has(tk.id);
             const mixed = !grouped && projects ? slotProjects(items, projects, range?.lo, range?.hi) : null;
-            const lead = mixed?.before.get(tk.id)?.map((p) => <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />);
+            const lead = mixed?.before.get(tk.id)?.map((p) => <ProjCompactRow key={`p-${p.id}`} band={bands.projs.has(p.id)} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />);
             const title = (
               <span className="flex min-w-0 items-baseline gap-2">
                 <span className={cn("shrink-0 font-mono text-[11px]", ticketTint ? "rounded border border-[color:var(--gold)]/40 bg-[color:var(--gold)]/10 px-1.5 font-semibold text-primary" : "text-muted-foreground")}>{tk.number}</span>
-                <span className={"truncate font-medium"} title={`${tk.title} · ${tk.company.name}`}>
+                <span className={cn("truncate font-medium", termTitle(tk.term))} title={`${tk.title} · ${tk.company.name}`}>
                   {tk.title}
                 </span>
                 <ManagedBadge managed={tk.managed} />
@@ -392,7 +393,7 @@ export function CompactList({
               </Fragment>
             );
           })}
-          {!grouped && projects ? slotProjects(items, projects, range?.lo, range?.hi).tail.map((p) => <ProjCompactRow key={`p-${p.id}`} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />) : null}
+          {!grouped && projects ? slotProjects(items, projects, range?.lo, range?.hi).tail.map((p) => <ProjCompactRow key={`p-${p.id}`} band={bands.projs.has(p.id)} p={p} order={cols.order} gridStyle={gridStyle} onOpen={() => onOpenProject?.(p.id)} />) : null}
         </ul>
       </div>
     </div>
