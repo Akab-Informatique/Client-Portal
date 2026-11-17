@@ -457,7 +457,7 @@ const fr = {
     tickets: "Billets",
     clients: "Clients",
     documentation: "Documentation",
-    devices: "RMM",
+    devices: "Appareils",
     meetings: "Rencontre hebdomadaire",
     hr: "RH",
   },

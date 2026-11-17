@@ -459,7 +459,7 @@ const en: Dict = {
     tickets: "Tickets",
     clients: "Clients",
     documentation: "Documentation",
-    devices: "RMM",
+    devices: "Devices",
     meetings: "Weekly meeting",
     hr: "HR",
   },
