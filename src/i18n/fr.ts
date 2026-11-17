@@ -4752,21 +4752,7 @@ const fr = {
     },
     datto: {"title":"Connexion à l'API Datto RMM","subtitle":"Lecture seule : le portail lit les sites et les appareils, il n'écrit jamais dans Datto.","platform":"Plateforme","apiKey":"Clé d'API","apiSecret":"Clé secrète","autoSync":"Synchroniser toutes les 15 minutes","help":"Datto RMM › Configuration › Paramètres globaux › Contrôle d'accès : activez l'accès API, puis générez la clé d'API et la clé secrète de votre utilisateur. La plateforme est celle de votre adresse Datto (par exemple pinotage-rmm.centrastage.net → pinotage).","test":"Tester la connexion","sync":"Synchroniser maintenant","testOk":"Connexion réussie : {{count}} site(s).","syncOk":"{{count}} appareil(s) copié(s).","lastSync":"{{devices}} appareil(s), {{online}} en ligne, {{sites}} site(s)","sites":"Sites Datto et clients du portail","sitesHint":"{{matched}} site(s) associé(s) sur {{total}}. Une association n'est faite qu'après votre acceptation.","acceptAll":"Accepter les {{count}} correspondance(s)","accepted":"{{count}} site(s) associé(s).","searchSites":"Chercher un site…","onlyUnmatched":"Seulement les sites non associés","noSites":"Aucun site.","devices":"{{count}} appareil(s)","client":"Client du portail","proposed":"Proposé : {{name}} (choisir pour accepter)","noClient":"— Non associé —","errors":{"generic":"Datto RMM a refusé ou n'a pas répondu.","rmm_unauthorized":"Clé d'API ou clé secrète refusée par Datto.","rmm_incomplete":"Indiquez la plateforme, la clé et la clé secrète.","rmm_rate_limited":"Datto limite les appels : réessayez dans un instant.","rmm_bad_url":"Adresse d'API non valide.","not_found":"Introuvable.","client_not_found":"Ce client n'existe plus."}},
     rmm: {
-      description: "Ouvrir la fiche d'un appareil et le contrôle à distance web de votre RMM directement depuis un billet.",
-      links: "Liens vers le RMM",
-      name: "Nom du RMM (affiché sur le bouton)",
-      remoteUrl: "Adresse du contrôle à distance web",
-      deviceUrl: "Adresse de la fiche de l'appareil",
-      help: "Ouvrez un appareil dans votre RMM, copiez l'adresse de la page et remplacez l'identifiant de l'appareil par un des codes ci-dessous. Le RMM garde sa propre connexion et ses droits.",
-      ph: {
-        uid: "identifiant unique RMM (UID)",
-        id: "numéro d'appareil RMM",
-        hostname: "nom d'hôte",
-        serial: "numéro de série",
-        ip: "adresse IP",
-      },
-      needUrl: "Ajoutez au moins une adresse avant d'activer.",
-      badUrl: "Adresse invalide : elle doit commencer par https:// et contenir un code comme {uid}.",
+      description: "Datto RMM : lecture seule des sites et des appareils, liens vers la fiche et le contrôle à distance dans les billets.",
     },
     ai: {
       perFeature: "Modèle par fonction",
@@ -5290,7 +5276,6 @@ const fr = {
       remote: "Contrôle à distance",
       openIn: "Ouvrir dans {{name}}",
       openRmm: "Ouvrir dans le RMM",
-      rmmNotSet: "Liens RMM non configurés (Admin › Intégrations › RMM).",
     },
     editTitle: "Modifier le titre",
     timer: {

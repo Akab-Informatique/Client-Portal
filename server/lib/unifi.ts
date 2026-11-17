@@ -133,7 +133,8 @@ export const mapHost = (h: Record<string, unknown>): UnifiHost => {
     name: first(r.name, r.hostname, rec(h.userData).name, h.id),
     model: first(rec(r.hardware).name, r.hardware, r.model, h.type),
     type: str(h.type),
-    firmware: first(r.firmwareVersion, r.firmware, r.version),
+    // checked against a real account (2026-11-17): the console's firmware is reportedState.hardware.firmwareVersion, else reportedState.version
+    firmware: first(rec(r.hardware).firmwareVersion, r.firmwareVersion, r.firmware, r.version),
     ip: first(h.ipAddress, r.ip, r.ipAddress),
     online: state === "connected" || state === "online",
     state,

@@ -4754,21 +4754,7 @@ const en: Dict = {
     },
     datto: {"title":"Datto RMM API connection","subtitle":"Read only: the portal reads the sites and the devices, it never writes to Datto.","platform":"Platform","apiKey":"API key","apiSecret":"Secret key","autoSync":"Sync every 15 minutes","help":"Datto RMM › Setup › Global settings › Access control: turn on API access, then generate your user's API key and secret key. The platform is the one in your Datto address (for example pinotage-rmm.centrastage.net → pinotage).","test":"Test the connection","sync":"Sync now","testOk":"Connected: {{count}} site(s).","syncOk":"{{count}} device(s) copied.","lastSync":"{{devices}} device(s), {{online}} online, {{sites}} site(s)","sites":"Datto sites and portal clients","sitesHint":"{{matched}} of {{total}} site(s) matched. A match is only made once you accept it.","acceptAll":"Accept the {{count}} match(es)","accepted":"{{count}} site(s) matched.","searchSites":"Search a site…","onlyUnmatched":"Only unmatched sites","noSites":"No site.","devices":"{{count}} device(s)","client":"Portal client","proposed":"Proposed: {{name}} (pick it to accept)","noClient":"— Not matched —","errors":{"generic":"Datto RMM refused or did not answer.","rmm_unauthorized":"Datto refused the API key or the secret key.","rmm_incomplete":"Enter the platform, the key and the secret key.","rmm_rate_limited":"Datto limits the calls: try again in a moment.","rmm_bad_url":"Invalid API address.","not_found":"Not found.","client_not_found":"This client no longer exists."}},
     rmm: {
-      description: "Open a device's page and your RMM's web remote control right from a ticket.",
-      links: "Links to the RMM",
-      name: "RMM name (shown on the button)",
-      remoteUrl: "Web remote control address",
-      deviceUrl: "Device page address",
-      help: "Open a device in your RMM, copy the page address and replace the device identifier with one of the codes below. The RMM keeps its own sign-in and rights.",
-      ph: {
-        uid: "RMM unique identifier (UID)",
-        id: "RMM device number",
-        hostname: "hostname",
-        serial: "serial number",
-        ip: "IP address",
-      },
-      needUrl: "Add at least one address before enabling.",
-      badUrl: "Invalid address: it must start with https:// and contain a code such as {uid}.",
+      description: "Datto RMM: read-only sites and devices, with links to the device page and remote control in tickets.",
     },
     ai: {
       perFeature: "Model per feature",
@@ -5292,7 +5278,6 @@ const en: Dict = {
       remote: "Remote control",
       openIn: "Open in {{name}}",
       openRmm: "Open in the RMM",
-      rmmNotSet: "RMM links not set up (Admin › Integrations › RMM).",
     },
     editTitle: "Edit title",
     timer: {

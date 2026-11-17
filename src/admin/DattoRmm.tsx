@@ -42,7 +42,6 @@ export function DattoPanel() {
   const err = (e: unknown) => toast.error(e instanceof ApiError ? t(`integrations.datto.errors.${e.code}`, { defaultValue: t("integrations.datto.errors.generic") }) : t("common.error"));
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: KEY });
-    void qc.invalidateQueries({ queryKey: ["admin", "integrations", "rmm"] });
   };
   const save = useMutation({
     mutationFn: () => api.put<View>("/admin/rmm-datto", { enabled: f!.enabled, apiUrl: `https://${f!.platform}-api.centrastage.net`, apiKey: f!.apiKey.trim(), ...(f!.apiSecret.trim() ? { apiSecret: f!.apiSecret.trim() } : {}), autoSync: f!.autoSync }),

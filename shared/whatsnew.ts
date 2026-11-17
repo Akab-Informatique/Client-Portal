@@ -8,6 +8,20 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.14",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Mes outils TI",
+        en: "My IT tools",
+        items: [
+          { fr: "L'ancien réglage « Liens vers le RMM » est retiré : les boutons Contrôle à distance et Ouvrir dans Datto d'un billet viennent maintenant de Datto RMM.", en: "The old “RMM links” setting is removed: a ticket's Remote control and Open in Datto buttons now come from Datto RMM." },
+          { fr: "Console UniFi : le firmware des consoles est mieux lu.", en: "UniFi console: the consoles' firmware is read better." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.13",
     date: "2026-11-17",
     sections: [

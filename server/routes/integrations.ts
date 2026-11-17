@@ -9,8 +9,6 @@ import { body, zEmail, zUuid } from "../lib/validate.ts";
 import { passboltSettings, savePassboltSettings, testPassbolt, validBaseUrl } from "../lib/passbolt.ts";
 import { saveTeamsSettings, sendTeams, teamsSettings, validTeamsUrl } from "../lib/teams.ts";
 import { rateLimit } from "../lib/http.ts";
-import { RMM_PLACEHOLDERS, rmmSettings, saveRmmSettings, validTemplate } from "../lib/rmm.ts";
-import { dattoReady, dattoSettings } from "../lib/dattoRmm.ts";
 import { O365Error, o365Settings, saveO365Settings, testO365 } from "../lib/o365.ts";
 import { normalizePhone, saveSmsSettings, sendSms, SmsError, smsSettings, testVoipms, type SmsSettings } from "../lib/voipms.ts";
 import { config } from "../config.ts";
@@ -144,22 +142,6 @@ export const integrationRoutes = new Hono<AppEnv>()
     const savedAccount = (p.username ?? s.username) === s.username && (p.password ?? s.password) === s.password;
     if (savedAccount) await saveSmsSettings(a.user.id, { lastTest: { ok: result.ok, at: new Date().toISOString(), ...(result.ok ? {} : { error: result.error }) } });
     return c.json(result);
-  })
-
-  // ── RMM (links to the device page and web remote control) ──
-  .get("/rmm", async (c) => c.json({ ...(await rmmSettings()), placeholders: RMM_PLACEHOLDERS, api: { ready: dattoReady(await dattoSettings()) } }))
-  .put("/rmm", async (c) => {
-    const a = auth(c);
-    const zTemplate = z
-      .string()
-      .trim()
-      .max(500)
-      .refine(validTemplate, { message: "rmm_template" });
-    const p = await body(c, z.object({ enabled: z.boolean(), name: z.string().trim().max(60), deviceUrl: zTemplate, remoteUrl: zTemplate }));
-    if (p.enabled && !p.deviceUrl && !p.remoteUrl) throw new HTTPException(400, { message: "rmm_incomplete" });
-    await saveRmmSettings(a.user.id, p);
-    await audit(a.user.id, "integration.rmm.updated", null, { enabled: p.enabled, name: p.name });
-    return c.json({ ...(await rmmSettings()), placeholders: RMM_PLACEHOLDERS });
   })
 
   // ── Passbolt (the vault behind Sécurité › Passbolt: the server address only) ──

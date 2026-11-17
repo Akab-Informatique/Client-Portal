@@ -177,7 +177,6 @@ function AssetDetails({ a, ticketContactId }: { a: AssetView; ticketContactId: s
     [t("tickets.asset.lastUser"), a.lastUser],
     [t("tickets.asset.serial"), a.serial],
   ];
-  const hasRmmId = Boolean(a.rmm.uid || a.rmm.id);
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-3">
@@ -244,7 +243,6 @@ function AssetDetails({ a, ticketContactId }: { a: AssetView; ticketContactId: s
           )}
         </div>
       )}
-      {!a.links.remote && !a.links.device && hasRmmId && <p className="text-[11px] text-muted-foreground">{t("tickets.asset.rmmNotSet")}</p>}
     </div>
   );
 }

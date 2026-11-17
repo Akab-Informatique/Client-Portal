@@ -9,7 +9,7 @@ import { syncBillablesNow } from "../lib/billables.ts";
 import { moveCharge } from "../lib/chargeMove.ts";
 import { moveTicketClient } from "../lib/ticketClient.ts";
 import { contractOfTicket, contractsOfCompany, setTicketContract, type ContractView } from "../lib/contracts.ts";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, type AppEnv, type AuthContext } from "../lib/auth.ts";
@@ -26,7 +26,6 @@ import { sweepTimers, timerView, elapsedMs } from "../lib/timers.ts";
 import { MAX_TICKET_ATTACHMENT_BYTES, SourceError, ticketSource, type Asset, type NTicket, type Options, type TicketSource } from "../lib/ticketSource.ts";
 import { deleteTicket, mergeTickets, ticketFile, ticketsLocal } from "../lib/localTickets.ts";
 import { hiddenFromCaller, hiddenTickets, isTicketHidden, managedOf, selfManagedClientIds, selfManagedCompanyIds, ticketScopeOf } from "../lib/selfManaged.ts";
-import { rmmLink, rmmSettings, type RmmSettings } from "../lib/rmm.ts";
 import { searchProducts, serialsOf, StoreError, takeForTicket, undoTake } from "../lib/store.ts";
 import { storeHttp } from "./store.ts";
 import { rememberCompany, rememberContact } from "../lib/crm.ts";
@@ -300,16 +299,31 @@ async function ownTimer(timerId: string, userId: string) {
   return t;
 }
 
-/** A device with its RMM links (device page, web remote control) when the RMM is set up. */
-function assetView(x: Asset, r: RmmSettings) {
-  const values = { uid: x.rmm.uid, id: x.rmm.id, hostname: x.hostname, serial: x.serial, ip: x.ip };
+type RmmLinks = Map<string, { portalUrl: string | null; remoteUrl: string | null }>;
+
+/**
+ * The Datto links (device page, web remote control) of the devices we have synced, found by the exact Datto device
+ * UID the asset carries, and only inside a site tied to a client. No match: no links.
+ */
+async function rmmLinksOf(list: Asset[]): Promise<RmmLinks> {
+  const uids = [...new Set(list.map((x) => x.rmm.uid).filter((u): u is string => Boolean(u)))];
+  if (!uids.length) return new Map();
+  const rows = await db()
+    .select({ uid: schema.rmmDevices.uid, portalUrl: schema.rmmDevices.portalUrl, remoteUrl: schema.rmmDevices.remoteUrl })
+    .from(schema.rmmDevices)
+    .innerJoin(schema.rmmSites, and(eq(schema.rmmSites.uid, schema.rmmDevices.siteUid), isNotNull(schema.rmmSites.clientId)))
+    .where(inArray(schema.rmmDevices.uid, uids));
+  return new Map(rows.map((r) => [r.uid, r]));
+}
+
+/** A device with its Datto links when it is one we have synced. */
+function assetView(x: Asset, links: RmmLinks) {
+  const d = x.rmm.uid ? links.get(x.rmm.uid) : undefined;
   return {
     ...x,
     /** "local": made in the portal; "rmm": synced from the RMM */
     origin: x.id.startsWith("local:") ? ("local" as const) : ("rmm" as const),
-    links: r.enabled
-      ? { rmm: r.name || null, device: rmmLink(r.deviceUrl, values), remote: rmmLink(r.remoteUrl, values) }
-      : { rmm: null, device: null, remote: null },
+    links: { rmm: d ? "Datto RMM" : null, device: d?.portalUrl ?? null, remote: d?.remoteUrl ?? null },
   };
 }
 
@@ -449,10 +463,11 @@ async function detailOf(src: TicketSource, id: number, a: AuthContext) {
     a.permissions.includes("tickets.ai") ? aiSettings() : Promise.resolve(null),
     // the device: from the client's (cached) list; a failure only hides it
     t.assetId
-      ? Promise.all([src.assets(t.company.id), rmmSettings()])
-          .then(([list, r]) => {
+      ? src
+          .assets(t.company.id)
+          .then(async (list) => {
             const x = list.find((d) => d.id === t.assetId);
-            return x ? assetView(x, r) : null;
+            return x ? assetView(x, await rmmLinksOf([x])) : null;
           })
           .catch(() => null)
       : Promise.resolve(null),
@@ -1337,8 +1352,9 @@ export const ticketRoutes = new Hono<AppEnv>()
     const cid = Number(c.req.param("cid"));
     if (!Number.isInteger(cid)) throw new HTTPException(400, { message: "invalid_id" });
     const src = await ticketSource(ticketScopeOf(c));
-    const [list, r] = await Promise.all([run(() => src.assets(cid)), rmmSettings()]);
-    return c.json(list.map((x) => assetView(x, r)));
+    const list = await run(() => src.assets(cid));
+    const links = await rmmLinksOf(list);
+    return c.json(list.map((x) => assetView(x, links)));
   })
 
   /** A contact's open tickets (the last five, newest first), for the ticket view; `exclude` leaves out the ticket being viewed. */
@@ -1389,8 +1405,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       .values({ ...p, companyId: cid, contactId: p.contactId ?? null, notes: p.notes || null, createdBy: auth(c).user.id })
       .returning();
     await audit(auth(c).user.id, "ticket.asset_created", row!.id, { companyId: cid, name: p.name });
-    const [list, r] = await Promise.all([localAssets(cid), rmmSettings()]);
-    return c.json(assetView(list.find((x) => x.id === "local:" + row!.id)!, r), 201);
+    const list = await localAssets(cid);
+    return c.json(assetView(list.find((x) => x.id === "local:" + row!.id)!, new Map()), 201);
   })
 
   // ── Timers (work time → time entries) ──

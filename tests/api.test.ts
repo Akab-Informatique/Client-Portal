@@ -1613,7 +1613,7 @@ describe("tickets: client and contact", () => {
     expect((await tech.get("/api/tickets/search?q=a")).json.items).toEqual([]);
   });
 
-  it("devices: listed per client, linked to the ticket, with RMM links", async () => {
+  it("devices: listed per client, linked to the ticket, with Datto links only for synced devices", async () => {
     const tech = await session("tech@akab.local");
     const admin = await session("admin@akab.local");
     const tk = (await tech.get("/api/tickets?view=all")).json.items.find((x: any) => x.company.id === 300);
@@ -1623,28 +1623,30 @@ describe("tickets: client and contact", () => {
     const laptop = assets.find((x: any) => x.id === "a-300-0");
     expect(laptop.contactId).toBe("c-300-0");
 
-    // RMM: admin only, https templates with known placeholders
-    expect((await tech.get("/api/admin/integrations/rmm")).status).toBe(403);
-    expect((await admin.put("/api/admin/integrations/rmm", { enabled: true, name: "Datto RMM", deviceUrl: "http://rmm.example/{uid}", remoteUrl: "" })).status).toBe(400);
-    expect((await admin.put("/api/admin/integrations/rmm", { enabled: true, name: "Datto RMM", deviceUrl: "https://rmm.example/x/{nope}", remoteUrl: "" })).status).toBe(400);
-    const saved = await admin.put("/api/admin/integrations/rmm", {
-      enabled: true,
-      name: "Datto RMM",
-      deviceUrl: "https://rmm.example/device/{uid}",
-      remoteUrl: "https://rmm.example/remote/{uid}?host={hostname}",
-    });
-    expect(saved.status).toBe(200);
+    // the old link templates are gone
+    expect((await admin.put("/api/admin/integrations/rmm", { enabled: true })).status).toBe(404);
 
-    const r = await tech.patch(`/api/tickets/${tk.id}`, { assetId: "a-300-0" });
-    expect(r.json.asset).toMatchObject({
-      id: "a-300-0",
-      contactId: "c-300-0",
-      links: { rmm: "Datto RMM", device: `https://rmm.example/device/${laptop.rmm.uid}`, remote: `https://rmm.example/remote/${laptop.rmm.uid}?host=${laptop.hostname}` },
-    });
+    // no synced Datto device: no links (also when the asset has an RMM uid)
+    const noLinks = await tech.patch(`/api/tickets/${tk.id}`, { assetId: "a-300-0" });
+    expect(noLinks.json.asset.links).toEqual({ rmm: null, device: null, remote: null });
+
+    // a synced Datto device with the same UID, in a site tied to a client: its links
+    const [cl] = await db().select({ id: schema.clients.id }).from(schema.clients).limit(1);
+    await db().insert(schema.rmmSites).values({ uid: "link-site", name: "Link site", clientId: cl!.id });
+    await db().insert(schema.rmmDevices).values({ uid: laptop.rmm.uid, siteUid: "link-site", hostname: "X", portalUrl: "https://pinotage.centrastage.net/device/1", remoteUrl: "https://pinotage.centrastage.net/remote/1" });
+    try {
+      const r = await tech.patch(`/api/tickets/${tk.id}`, { assetId: "a-300-0" });
+      expect(r.json.asset).toMatchObject({ id: "a-300-0", contactId: "c-300-0", links: { rmm: "Datto RMM", device: "https://pinotage.centrastage.net/device/1", remote: "https://pinotage.centrastage.net/remote/1" } });
+      // a site not tied to a client gives nothing
+      await db().update(schema.rmmSites).set({ clientId: null }).where(eq(schema.rmmSites.uid, "link-site"));
+      expect((await tech.patch(`/api/tickets/${tk.id}`, { assetId: "a-300-0" })).json.asset.links.device).toBeNull();
+    } finally {
+      await db().delete(schema.rmmDevices).where(eq(schema.rmmDevices.uid, laptop.rmm.uid));
+      await db().delete(schema.rmmSites).where(eq(schema.rmmSites.uid, "link-site"));
+    }
     // a device of another client is refused; null removes it
     expect((await tech.patch(`/api/tickets/${tk.id}`, { assetId: "a-301-0" })).json.error).toBe("invalid_value");
     expect((await tech.patch(`/api/tickets/${tk.id}`, { assetId: null })).json.asset).toBeNull();
-    await admin.put("/api/admin/integrations/rmm", { enabled: false, name: "", deviceUrl: "", remoteUrl: "" });
   });
 
   it("charges: listed per ticket, added by technicians with tickets.edit", async () => {
