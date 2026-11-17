@@ -93,7 +93,22 @@ export function UnifiPage() {
           <Button type="submit" disabled={!key.trim() || save.isPending}>
             {t("unifi.admin.save")}
           </Button>
-          <Button type="button" variant="outline" disabled={!s.hasKey || test.isPending} onClick={() => test.mutate()}>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={(!s.hasKey && !key.trim()) || test.isPending || save.isPending}
+            // Test checks the saved key: a key typed and not saved yet is saved first
+            onClick={async () => {
+              if (key.trim()) {
+                try {
+                  await save.mutateAsync({ enabled: s.enabled, apiKey: key.trim() });
+                } catch {
+                  return;
+                }
+              }
+              test.mutate();
+            }}
+          >
             {test.isPending && <Loader2 className="mr-1 size-4 animate-spin" />}
             {t("unifi.admin.test")}
           </Button>

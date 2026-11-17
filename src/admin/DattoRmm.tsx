@@ -127,7 +127,22 @@ export function DattoPanel() {
             <Button type="submit" disabled={save.isPending || !f.apiKey.trim() || (!s.hasSecret && !f.apiSecret.trim())} className="bg-grad-gold font-semibold text-[#1a1204] hover:brightness-105">
               {save.isPending && <Loader2 className="size-4 animate-spin" />} {t("common.save")}
             </Button>
-            <Button type="button" variant="outline" disabled={!s.apiKey || !s.hasSecret || test.isPending} onClick={() => test.mutate()}>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={test.isPending || save.isPending || !(f.apiKey.trim() || s.apiKey) || !(s.hasSecret || f.apiSecret.trim())}
+              // Test checks what is saved: what was typed and not saved yet is saved first
+              onClick={async () => {
+                if (form) {
+                  try {
+                    await save.mutateAsync();
+                  } catch {
+                    return;
+                  }
+                }
+                test.mutate();
+              }}
+            >
               {test.isPending && <Loader2 className="size-4 animate-spin" />} {t("integrations.datto.test")}
             </Button>
             <Button type="button" variant="outline" disabled={!s.ready || sync.isPending} onClick={() => sync.mutate()}>

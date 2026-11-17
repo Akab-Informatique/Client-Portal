@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.15",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Intégrations",
+        en: "Integrations",
+        items: [
+          { fr: "Datto RMM et UniFi : le bouton Tester enregistre d'abord la clé tapée, puis la teste (avant, il testait l'ancienne clé enregistrée).", en: "Datto RMM and UniFi: the Test button first saves the key typed, then tests it (it used to test the key saved before)." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.14",
     date: "2026-11-17",
     sections: [
