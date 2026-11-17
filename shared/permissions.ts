@@ -209,6 +209,14 @@ export const MODULES = [
     ],
   },
   {
+    key: "unifi",
+    audience: "staff",
+    label: { fr: "Console UniFi", en: "UniFi console" },
+    permissions: [
+      { key: "unifi.view", label: { fr: "Voir la console UniFi", en: "See the UniFi console" }, description: { fr: "Lire les consoles, sites et appareils UniFi (Ubiquiti), en lecture seule", en: "Read the UniFi (Ubiquiti) consoles, sites and devices, read only" } },
+    ],
+  },
+  {
     key: "newsletter",
     audience: "staff",
     label: { fr: "Infolettre", en: "Newsletter" },
@@ -724,9 +732,11 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom", "tv"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb", "assistant"] },
+  { key: "ittools", audience: "staff", label: { fr: "Mes outils TI", en: "My IT tools" }, modules: ["unifi"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "proj", "sms", "passbolt"] },
-  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "newsletter", "reports", "hr"] },
+  { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "reports", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
+  { key: "marketing", audience: "staff", label: { fr: "Marketing", en: "Marketing" }, modules: ["newsletter"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
   { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },
@@ -797,6 +807,7 @@ export const SYSTEM_ROLES: Array<{
     permissions: [
       "dashboard.view",
       "tv.view",
+      "unifi.view",
       "tickets.view",
       "tickets.edit",
       "tickets.selfManaged",

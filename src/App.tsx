@@ -33,6 +33,7 @@ const ChatPage = lazy(() => pageLoaders.chat().then((m) => ({ default: m.ChatPag
 const PassboltPage = lazy(() => pageLoaders.passbolt().then((m) => ({ default: m.PassboltPage })));
 const StorePage = lazy(() => pageLoaders.store().then((m) => ({ default: m.StorePage })));
 const OutlookPage = lazy(() => pageLoaders.outlook().then((m) => ({ default: m.OutlookPage })));
+const UnifiPage = lazy(() => pageLoaders.unifi().then((m) => ({ default: m.UnifiPage })));
 const TvPage = lazy(() => pageLoaders.tv().then((m) => ({ default: m.TvPage })));
 const MeetingsPage = lazy(() => pageLoaders.meetings().then((m) => ({ default: m.MeetingsPage })));
 const BreakroomPage = lazy(() => pageLoaders.breakroom().then((m) => ({ default: m.BreakroomPage })));
@@ -139,6 +140,7 @@ function StaffApp() {
         <Route path="hr" element={<Guard permission="hr.manage"><HrPage /></Guard>} />
         <Route path="outlook" element={<Guard permission="outlook.view"><OutlookPage /></Guard>} />
         <Route path="meetings" element={<Guard permission="meetings.view"><MeetingsPage /></Guard>} />
+        <Route path="it/unifi" element={<Guard permission="unifi.view"><UnifiPage /></Guard>} />
         <Route path="tv" element={<Guard permission="tv.view"><TvPage /></Guard>} />
         <Route path="breakroom" element={<Guard permission="breakroom.use"><BreakroomPage /></Guard>} />
         <Route path="crm" element={<Guard permission="crm.view"><ClientsPage /></Guard>} />

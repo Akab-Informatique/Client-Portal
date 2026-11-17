@@ -8,6 +8,34 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.13",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Mes outils TI",
+        en: "My IT tools",
+        items: [
+          { fr: "La page Appareils (le parc Datto RMM de tous les clients) est maintenant dans Mes outils TI, à côté de la Console UniFi.", en: "The Devices page (every client's Datto RMM fleet) is now under My IT tools, next to the UniFi console." },
+          { fr: "Nouvelle section « Mes outils TI » dans le menu avec la Console UniFi : consoles, sites et appareils UniFi (Ubiquiti) en lecture seule, ce qui est hors ligne ou à mettre à jour en premier.", en: "New \"My IT tools\" section in the menu with the UniFi console: UniFi (Ubiquiti) consoles, sites and devices, read only, with what is offline or needs an update first." },
+          { fr: "Un administrateur branche la clé d'API dans Admin › Intégrations › UniFi.", en: "An administrator connects the API key in Admin › Integrations › UniFi." },
+        ],
+      },
+    ],
+  },
+  {
+    id: "2026-11-17.12",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Menu",
+        en: "Menu",
+        items: [
+          { fr: "Nouvelle section Marketing dans le menu de gauche : l'Infolettre y est maintenant (elle n'est plus dans Gestion). L'entrée « Marketing » qui attendait dans Vente est retirée.", en: "New Marketing section in the left menu: the Newsletter is there now (no longer under Management). The placeholder Marketing entry under Sales is gone." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.11",
     date: "2026-11-17",
     sections: [

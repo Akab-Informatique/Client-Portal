@@ -1,4 +1,4 @@
-import { Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, Archive, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Newspaper, CalendarClock, Receipt, KeyRound, Store, Target, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
+import { Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, Archive, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Network, Newspaper, CalendarClock, Receipt, KeyRound, Store, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -10,9 +10,11 @@ import type { PermissionKey } from "@shared/permissions";
 export const NAV_SECTIONS = [
   { key: "team", labelKey: "nav.team" },
   { key: "tools", labelKey: "nav.myTools" },
+  { key: "ittools", labelKey: "nav.myItTools" },
   { key: "command", labelKey: "nav.commandCenter" },
   { key: "management", labelKey: "nav.management" },
   { key: "sales", labelKey: "nav.sales" },
+  { key: "marketing", labelKey: "nav.marketing" },
   { key: "accounting", labelKey: "nav.accounting" },
 ] as const;
 export type NavSection = (typeof NAV_SECTIONS)[number]["key"];
@@ -57,19 +59,19 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "approvals", path: "/accounting/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, section: "accounting", permission: "accounting.view" },
   { key: "sales", path: "/sales", labelKey: "nav.salesDashboard", icon: TrendingUp, section: "sales", permission: "opportunities.view" },
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotesLatest", icon: History, section: "sales", permission: "quotes.view" },
-  { key: "marketing", path: "/marketing", labelKey: "nav.marketing", icon: Target, section: "sales", upcoming: true },
   { key: "quotesNew", path: "/accounting/quotes/new", labelKey: "nav.quotesNew", icon: FilePlus2, section: "sales", permission: "quotes.manage" },
   { key: "store", path: "/store", labelKey: "nav.store", icon: Store, section: "management", permission: "store.view" },
   { key: "hr", path: "/hr", labelKey: "nav.hr", icon: HeartHandshake, section: "accounting", permission: "hr.manage" },
-  { key: "newsletter", path: "/newsletter", labelKey: "nav.newsletter", icon: Newspaper, section: "management", permission: "newsletter.view" },
+  { key: "newsletter", path: "/newsletter", labelKey: "nav.newsletter", icon: Newspaper, section: "marketing", permission: "newsletter.view" },
   { key: "services", path: "/services", labelKey: "nav.services", icon: Wrench, section: "management", permission: "services.view" },
   { key: "projects", path: "/projects", labelKey: "nav.projectsArchive", icon: Archive, section: "command", permission: "projects.view", hideInNav: true },
   { key: "passbolt", path: "/security/passbolt", labelKey: "nav.passbolt", icon: KeyRound, section: "command", group: "security", permission: "passbolt.use", rule: "passbolt" },
   { key: "reports", path: "/reports", labelKey: "nav.reports", icon: BarChart3, section: "management", permission: "reports.view" },
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "breakroom", path: "/breakroom", labelKey: "nav.breakroom", icon: Coffee, section: "team", permission: "breakroom.use" },
+  { key: "unifi", path: "/it/unifi", labelKey: "nav.unifi", icon: Network, section: "ittools", permission: "unifi.view" },
   { key: "tv", path: "/tv", labelKey: "nav.tv", icon: Tv, section: "team", permission: "tv.view" },
-  { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "command", permission: "crm.view" },
+  { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "ittools", permission: "crm.view" },
   { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", permission: "sops.view", orRight: "kb.view" },
 ];
 

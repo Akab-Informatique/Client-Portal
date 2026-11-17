@@ -13562,3 +13562,61 @@ describe("Ma journée: two items dragged to the same time overlap", () => {
     expect(again.filter((x) => x.refId === b.id).map((x) => x.start)).toEqual(["10:00"]);
   });
 });
+
+describe("UniFi console (read only)", () => {
+  it("seals the key, shows hosts, sites and devices to technicians, refuses roles without unifi.view, and only does GETs on api.ui.com", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const { hashPassword } = await import("../server/lib/crypto.ts");
+    const [viewerRole] = await db().select().from(schema.roles).where(eq(schema.roles.slug, "viewer"));
+    await db().insert(schema.users).values({ email: "viewer@unifi.example", name: "Lecteur", kind: "staff", roleId: viewerRole.id, passwordHash: await hashPassword(PASSWORD), mustChangePassword: false });
+    const viewer = await signIn("viewer@unifi.example");
+    const calls: { url: string; method: string; key: string | null }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown, init: RequestInit = {}) => {
+        const u = String(url);
+        calls.push({ url: u, method: init.method ?? "GET", key: (init.headers as Record<string, string> | undefined)?.["x-api-key"] ?? null });
+        if (u.includes("/v1/hosts")) return new Response(JSON.stringify({ data: [{ id: "h1", type: "console", ipAddress: "203.0.113.5", reportedState: { name: "Bureau", state: "connected", hardware: { name: "UDM Pro" }, firmwareVersion: "4.0.6" } }], nextToken: null }), { status: 200 });
+        if (u.includes("/v1/sites")) return new Response(JSON.stringify({ data: [{ siteId: "s1", hostId: "h1", meta: { name: "Default" }, statistics: { counts: { totalDevice: 2, offlineDevice: 1, pendingUpdateDevice: 1 } } }] }), { status: 200 });
+        if (u.includes("/v1/devices")) return new Response(JSON.stringify({ data: [{ hostId: "h1", hostName: "Bureau", devices: [{ id: "d1", mac: "AA:BB", name: "Switch", model: "USW-24", ip: "10.0.0.2", status: "online", version: "7.0", updateAvailable: "7.1", productLine: "network" }, { id: "d2", mac: "CC:DD", model: "U6 Pro", status: "offline" }] }] }), { status: 200 });
+        return new Response("{}", { status: 404 });
+      }),
+    );
+    try {
+      // only the administrators set it up; nobody else
+      expect((await tech.get("/api/admin/unifi")).status).toBe(403);
+      expect((await tech.put("/api/admin/unifi", { enabled: true, apiKey: "SECRET-UNIFI-KEY" })).status).toBe(403);
+      // not configured: 409 for a technician
+      expect((await tech.get("/api/unifi/overview")).json.error).toBe("unifi_not_configured");
+      expect((await tech.get("/api/unifi/overview")).status).toBe(409);
+      const saved = await admin.put("/api/admin/unifi", { enabled: true, apiKey: "SECRET-UNIFI-KEY" });
+      expect(saved.json).toMatchObject({ enabled: true, hasKey: true, ready: true });
+      expect(JSON.stringify(saved.json)).not.toContain("SECRET-UNIFI-KEY");
+      const [row] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "unifi"));
+      expect(row.secret).toBeTruthy();
+      expect(row.secret).not.toContain("SECRET-UNIFI-KEY");
+      expect(JSON.stringify(row.config)).not.toContain("SECRET-UNIFI-KEY");
+      expect((await admin.post("/api/admin/unifi/test")).json).toMatchObject({ ok: true, hosts: 1 });
+      // a technician (default role) reads it; a role without unifi.view does not
+      expect((await viewer.get("/api/unifi/overview")).status).toBe(403);
+      expect((await viewer.get("/api/unifi/status")).status).toBe(403);
+      const r = await tech.get("/api/unifi/overview");
+      expect(r.status).toBe(200);
+      expect(r.json.hosts[0]).toMatchObject({ id: "h1", name: "Bureau", model: "UDM Pro", online: true, ip: "203.0.113.5", firmware: "4.0.6" });
+      expect(r.json.sites[0]).toMatchObject({ id: "s1", hostId: "h1", name: "Default", devices: 2, offline: 1, pendingUpdates: 1 });
+      expect(r.json.devices).toHaveLength(2);
+      expect(r.json.devices[0]).toMatchObject({ name: "Switch", model: "USW-24", ip: "10.0.0.2", online: true, updateAvailable: "7.1", siteId: "s1", hostId: "h1" });
+      expect(r.json.devices[1]).toMatchObject({ name: "U6 Pro", online: false, ip: "", firmware: "" });
+      expect(JSON.stringify(r.json)).not.toContain("SECRET-UNIFI-KEY");
+      // only GET calls, only api.ui.com, always with the key
+      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.every((x) => x.method === "GET" && x.url.startsWith("https://api.ui.com/v1/") && x.key === "SECRET-UNIFI-KEY")).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      (await import("../server/lib/unifi.ts")).forgetUnifiCache();
+      await db().delete(schema.integrations).where(eq(schema.integrations.provider, "unifi"));
+      await db().delete(schema.users).where(eq(schema.users.email, "viewer@unifi.example"));
+    }
+  });
+});

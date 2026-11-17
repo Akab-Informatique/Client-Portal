@@ -3,7 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Users, Cloud, ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, CreditCard, KeyRound, Loader2, MonitorPlay, RefreshCw, Sparkles, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
+import { Users, Cloud, ArrowLeft, CalendarDays, CheckCircle2, ChevronRight, CreditCard, KeyRound, Loader2, MonitorPlay, Network, RefreshCw, Sparkles, XCircle, type LucideIcon, MessageSquareText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,7 @@ import { StripePage, StripeStatus, useStripeState } from "./StripeIntegration";
 import { QuickBooksPage, QuickBooksStatus, useQuickBooksState } from "./QuickBooksIntegration";
 import { ITCloudPage, ITCloudStatus, useITCloudState } from "./ITCloudIntegration";
 import { DattoPanel } from "./DattoRmm";
+import { UnifiPage, UnifiStatus, useUnifiState } from "./UnifiIntegration";
 import { AI_USAGE_KEY, AiUsagePanel } from "./AiUsage";
 import { shortModel } from "@/components/AiModelPicker";
 
@@ -42,6 +43,7 @@ const INTEGRATIONS: Integration[] = [
   { key: "itcloud", useState: useITCloudState, name: "ITCloud", icon: Cloud, Status: ITCloudStatus, Page: ITCloudPage },
   { key: "passbolt", useState: usePassboltState, name: "Passbolt", icon: KeyRound, Status: PassboltStatus, Page: PassboltAdminPage },
   { key: "teams", useState: useTeamsState, name: "Microsoft Teams", icon: Users, Status: TeamsStatus, Page: TeamsPage },
+  { key: "unifi", useState: useUnifiState, name: "UniFi (Ubiquiti)", icon: Network, Status: UnifiStatus, Page: UnifiPage },
   { key: "rmm", useState: useRmmState, name: "RMM", icon: MonitorPlay, Status: RmmStatus, Page: RmmPage },
 ];
 

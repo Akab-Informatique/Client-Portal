@@ -432,6 +432,8 @@ const fr = {
     quotes: "Soumissions",
     salesDashboard: "Ventes",
     marketing: "Marketing",
+    myItTools: "Mes outils TI",
+    unifi: "Console UniFi",
     quotesLatest: "Dernières soumissions",
     quotesNew: "Nouvelle soumission",
     outlook: "Outlook",

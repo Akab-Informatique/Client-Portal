@@ -50,6 +50,7 @@ import { sopRoutes } from "./routes/sops.ts";
 import { kbRoutes } from "./routes/kb.ts";
 import { searchRoutes } from "./routes/search.ts";
 import { dattoAdminRoutes, rmmDeviceRoutes } from "./routes/rmmDatto.ts";
+import { unifiAdminRoutes, unifiRoutes } from "./routes/unifi.ts";
 import { projectsRoutes } from "./routes/projects.ts";
 import { projRoutes } from "./routes/proj.ts";
 import { myNotesRoutes } from "./routes/myNotes.ts";
@@ -149,6 +150,8 @@ export function createApp() {
   api.route("/admin/itcloud", itcloudRoutes);
   api.route("/admin/rmm-datto", dattoAdminRoutes);
   api.route("/rmm", rmmDeviceRoutes);
+  api.route("/admin/unifi", unifiAdminRoutes);
+  api.route("/unifi", unifiRoutes);
   api.route("/admin/client-classes", classRoutes);
   api.route("/admin/ticket-setup", ticketSetupRoutes);
   api.route("/admin/mail-intake", mailIntakeAdminRoutes);
