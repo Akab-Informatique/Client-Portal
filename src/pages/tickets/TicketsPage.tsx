@@ -82,7 +82,7 @@ import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
-import { useProjectRows } from "@/pages/proj/shared";
+import { useMyProjectCount, useProjectRows } from "@/pages/proj/shared";
 import { KickoffDialog } from "@/pages/proj/KickoffDialog";
 import { GroupToggle, KindLegend, KindSwitch, ProjRow, filterProjectRows, slotProjects, type ProjKind } from "@/pages/proj/ProjRows";
 import { ProjView } from "@/pages/proj/ProjView";
@@ -613,6 +613,7 @@ function TileDetails({ title, hint, rows, note }: { title: string; hint: string;
 
 function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void; onSms: () => void }) {
   const [withSecondary, setWithSecondary] = useShowSecondary();
+  const myProjects = useMyProjectCount();
   const { t } = useTranslation();
   const qc = useQueryClient();
   const current = useMemo(() => {
@@ -653,7 +654,8 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
     <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-thin">
       {TILES.map((tile, i) => {
         const active = canonical(tile.query) === current || (tile.key === "mine" && current === "");
-        const value = data?.metrics[tile.key];
+        const raw = data?.metrics[tile.key];
+        const value = tile.key === "mine" && raw !== undefined ? raw + myProjects : raw;
         const d = details(tile.key);
         return (
           <Fragment key={tile.key}>

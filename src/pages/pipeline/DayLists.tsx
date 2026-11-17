@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { GroupToggle, KindSwitch, filterProjectRows, type ProjKind } from "@/pages/proj/ProjRows";
-import { useProjectRows } from "@/pages/proj/shared";
+import { useMyProjectCount, useProjectRows } from "@/pages/proj/shared";
 import { Pager } from "@/components/Pager";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, Columns3, Eye, Rows3, Search, Siren, Sparkles, Star, Ticket as TicketIcon, UserRound, UserX, X, type LucideIcon } from "lucide-react";
@@ -100,8 +100,9 @@ export function MyTickets({ userId, mine, onOpen }: { userId: string; mine: bool
     placeholderData: keepPreviousData,
   });
   const m = data?.metrics;
+  const myProjects = useMyProjectCount();
   const chips: { key: string; icon: LucideIcon; tone: string; label: string; count: number | undefined; query: string }[] = [
-    { key: "mine", icon: UserRound, tone: "text-primary", label: t("tickets.metrics.mine"), count: m?.mine, query: "view=mine" },
+    { key: "mine", icon: UserRound, tone: "text-primary", label: t("tickets.metrics.mine"), count: m?.mine === undefined ? undefined : m.mine + myProjects, query: "view=mine" },
     { key: "fresh", icon: Sparkles, tone: "text-emerald-400", label: t("tickets.metrics.fresh"), count: m?.fresh, query: "view=unassigned&statusKind=new" },
     { key: "unassigned", icon: UserX, tone: "text-sky-400", label: t("tickets.metrics.unassigned"), count: m?.unassigned, query: "view=unassigned" },
     { key: "statusAttention", icon: BellRing, tone: "text-amber-300", label: t("tickets.metrics.statusAttention"), count: m?.statusAttention, query: "view=all&statusKind=needsAttention" },

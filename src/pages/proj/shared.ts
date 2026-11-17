@@ -1,3 +1,4 @@
+import { useCan, useMe } from "@/lib/session";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
@@ -85,6 +86,14 @@ export type ProjTimeEntry = { id: string; userId: string; name: string; date: st
 /** Open projects (planning + active) for the tickets list; the page filters them further on screen */
 export function useProjectRows(enabled: boolean, status: "open" | "done" | "all" = "open") {
   return useQuery({ queryKey: ["proj", "list", status], queryFn: () => api.get<ProjectRow[]>(`/proj?status=${status}`), enabled, refetchInterval: 60_000 });
+}
+
+/** How many open projects I lead or work on: added to the tickets count of the "Tickets / Projects" button */
+export function useMyProjectCount(): number {
+  const can = useCan();
+  const me = useMe();
+  const rows = useProjectRows(can("proj.view"));
+  return (rows.data ?? []).filter((p) => p.lead?.id === me.id || p.memberIds.includes(me.id)).length;
 }
 
 export function useProject(id: string | null) {
