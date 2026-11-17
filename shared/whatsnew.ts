@@ -8,6 +8,21 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-17.3",
+    date: "2026-11-17",
+    sections: [
+      {
+        fr: "Ma journée",
+        en: "My day",
+        items: [
+          { fr: "Plan de la journée : un bouton « Remplir avec l'IA » analyse tous vos billets, puis vos tâches de projet, vos projets et vos tâches internes (dans cet ordre) et remplit la journée de 8 h à 17 h autour de vos événements Outlook, avec des sprints : un long travail n'avance que d'une partie aujourd'hui, pour que tout progresse et que rien ne reste pour la dernière minute. Vous pouvez ensuite tout ajuster.", en: "Daily plan: a \"Fill with AI\" button looks at all your tickets, then your project tasks, projects and internal tasks (in that order) and fills the day from 8 to 5 around your Outlook events, in sprints: a long job only advances by a part today, so everything moves and nothing is left for the last minute. You can then adjust everything." },
+          { fr: "Un bouton « Vider la journée » retire tout ce qui est planifié (les événements Outlook et les plages bloquées restent).", en: "A \"Clear the day\" button removes everything planned (Outlook events and blocked slots stay)." },
+          { fr: "La grille montre de 6 h à 19 h. Le travail est planifié entre 8 h et 17 h, mais un bloc glissé à la main reste là où vous le déposez, même avant 8 h, après 17 h ou sur un événement. Les blocs qui se chevauchent sont affichés côte à côte.", en: "The grid shows 6 am to 7 pm. Work is planned between 8 and 5, but a block you drag stays where you drop it, even before 8, after 5 or over an event. Overlapping blocks are shown side by side." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.2",
     date: "2026-11-17",
     sections: [

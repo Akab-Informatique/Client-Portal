@@ -14,6 +14,7 @@ import { aiSettings } from "../lib/ai.ts";
 import { rateLimit } from "../lib/http.ts";
 import { notify, usersWith } from "../lib/notify.ts";
 import { startAtNow, calendarOfDay, buildPipelineView, maskPhone, morningRun, phoneOf, PipelineError, pipelineSettings, planOf, buildPlan, savePipelineSettings, sendTestSms, type PipelineSettings, resetDailyTasks, resetDayAdds, allocOf, dayItems } from "../lib/pipeline.ts";
+import { autofillDay, resetDay } from "../lib/dayAutofill.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { hiddenFromCaller, ticketScopeOf, type TicketScope } from "../lib/selfManaged.ts";
 import { editable, labourType, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
@@ -499,6 +500,28 @@ export const pipelineRoutes = new Hono<AppEnv>()
     return c.json(out);
   })
 
+  /** Empties the day (what was added, the times given, the plan): Outlook events and the slots blocked by hand stay. */
+  .post("/day/reset", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    const p = await body(c, z.object({ date: zDate.optional(), userId: zUuid.optional() }));
+    const who = await dayTarget(a, p.userId);
+    const plan = await resetDay(who, p.date ?? todayQc());
+    await audit(a.user.id, "pipeline.day_reset", who, {});
+    return c.json({ ok: true, plan });
+  })
+
+  /** Fills today with the AI: tickets, project tasks, projects, then internal tasks, as sprints that fit the free time. */
+  .post("/day/autofill", requirePermission("pipeline.edit"), async (c) => {
+    const a = auth(c);
+    aiLimit(a.user.id);
+    const p = await body(c, z.object({ userId: zUuid.optional(), direction: z.string().max(2000).optional() }));
+    const who = await dayTarget(a, p.userId);
+    const [u] = await db().select({ locale: schema.users.locale }).from(schema.users).where(eq(schema.users.id, who));
+    const out = await autofillDay(who, a.user.id, todayQc(), { locale: u?.locale === "en" ? "en" : "fr", direction: cleanDirection(p.direction) });
+    await audit(a.user.id, "pipeline.day_autofilled", who, { added: out.added, aiError: out.aiError });
+    return c.json(out);
+  })
+
   /**
    * The time to give an item today, in quarter hours (null = back to automatic). The day is laid out again at once;
    * an AI plan keeps its order, notes and summary. Less than the item needs is fine: some time goes in, the checkpoint moves later.
@@ -606,7 +629,7 @@ export const pipelineRoutes = new Hono<AppEnv>()
     if (!view.items.some((i) => i.key === p.key && !i.masked)) throw new HTTPException(404, { message: "not_found" });
     const d = db();
     await d.delete(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, who), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.key, p.key), eq(schema.pipelineDayAlloc.source, "start")));
-    if (p.minute !== null) await d.insert(schema.pipelineDayAlloc).values({ userId: who, date, key: p.key, minutes: Math.round(p.minute / 15) * 15, source: "start" });
+    if (p.minute !== null) await d.insert(schema.pipelineDayAlloc).values({ userId: who, date, key: p.key, minutes: Math.round(p.minute / 15) * 15, source: "start", position: 1 });
     const out = await buildPlan(who, date, { ai: false, reuse: true });
     return c.json({ ok: true, plan: out.plan });
   })

@@ -7185,6 +7185,34 @@ describe("pipeline: shared to-dos and the day", () => {
     expect((await tech.put("/api/pipeline/day/start", { key: "task:00000000-0000-4000-8000-000000000000", minute: 600 })).status).toBe(404);
   });
 
+  it("the daily plan: a dragged item stays where it is dropped, the day can be cleared and filled by the AI", async () => {
+    resetRateLimit("login:ip:unknown");
+    const tech = await signIn("tech@akab.local");
+    const me = (await tech.get("/api/me")).json.id as string;
+    await db().delete(schema.calendarBlocks);
+    await db().delete(schema.pipelineDayBlocks);
+    await db().delete(schema.ticketDayAdds);
+    await db().delete(schema.pipelineDayAlloc);
+    const t = (await tech.post("/api/pipeline/tasks", { title: "Tôt le matin", assigneeId: me, estimateMinutes: 30 })).json;
+    await tech.put(`/api/pipeline/day/tasks/${t.id}`, { time: null });
+    const at = async () => (await tech.get("/api/pipeline/day")).json.plan.blocks.find((b: any) => b.refId === t.id)?.start as string | undefined;
+    // dragged before the work hours and after them: it stays there
+    await tech.put("/api/pipeline/day/start", { key: `task:${t.id}`, minute: 6 * 60 + 30 });
+    expect(await at()).toBe("06:30");
+    await tech.put("/api/pipeline/day/start", { key: `task:${t.id}`, minute: 18 * 60 });
+    expect(await at()).toBe("18:00");
+    // cleared: nothing left on the plan
+    const cleared = await tech.post("/api/pipeline/day/reset", {});
+    expect(cleared.status).toBe(200);
+    const day = (await tech.get("/api/pipeline/day")).json;
+    expect(day.items.length).toBe(0);
+    // filled: tasks are put on the day (the AI is off in tests: the portal's rules lay them out)
+    const filled = await tech.post("/api/pipeline/day/autofill", {});
+    expect(filled.status).toBe(200);
+    expect(filled.json.added).toBeGreaterThanOrEqual(1);
+    expect(((await tech.get("/api/pipeline/day")).json.items as any[]).length).toBe(filled.json.added);
+  });
+
   it("a whole phase or project is one item of the day, and any item can be taken off it", async () => {
     resetRateLimit("login:ip:unknown");
     const tech = await signIn("tech@akab.local");

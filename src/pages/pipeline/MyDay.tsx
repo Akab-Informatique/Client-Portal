@@ -3,12 +3,13 @@ import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Undo2, Workflow } from "lucide-react";
+import { AlertTriangle, ArrowDownUp, GripVertical, CalendarClock, CalendarDays, Star, CalendarOff, CheckCircle2, EyeOff, ChevronLeft, ChevronRight, Coffee, Lock, Loader2, RotateCcw, Sparkles, Undo2, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { api } from "@/lib/api";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { RemoveFromDay } from "./DayEdge";
@@ -116,6 +117,38 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
     refetchInterval: 60_000,
   });
   const refresh = () => void qc.invalidateQueries({ queryKey: ["pipeline"] });
+  const confirm = useConfirm();
+  const forUserQ = userId === me.id ? {} : { userId };
+  // empties the day (what was added, the times, the plan); Outlook events and blocked slots stay
+  const reset = useMutation({
+    mutationFn: () => api.post("/pipeline/day/reset", { date, ...forUserQ }),
+    onSuccess: () => {
+      toast.success(t("pipeline.day.reset.done"));
+      refresh();
+    },
+    onError: () => toast.error(t("common.error")),
+  });
+  // the AI looks at tickets, project tasks, projects, then tasks, and fits sprints of them in the free time
+  const autofill = useMutation({
+    mutationFn: () => api.post<{ added: number; aiError: string | null }>("/pipeline/day/autofill", { ...forUserQ }),
+    onSuccess: (r) => {
+      toast.success(r.added ? t("pipeline.day.autofill.done", { count: r.added }) : t("pipeline.day.autofill.none"));
+      if (r.aiError) toast.message(t("pipeline.day.autofill.rules"));
+      refresh();
+    },
+    onError: () => toast.error(t("pipeline.day.autofill.failed")),
+  });
+  const askReset = async () => {
+    const ok = await confirm({ title: t("pipeline.day.reset.title"), description: t("pipeline.day.reset.text"), confirmLabel: t("pipeline.day.reset.button"), destructive: true });
+    if (ok) reset.mutate();
+  };
+  const askAutofill = async () => {
+    if (data && data.items.length > 0) {
+      const ok = await confirm({ title: t("pipeline.day.autofill.title"), description: t("pipeline.day.autofill.text"), confirmLabel: t("pipeline.day.autofill.button") });
+      if (!ok) return;
+    }
+    autofill.mutate();
+  };
   // a slot of time blocked by hand (new, or an existing one being edited)
   const [blockDraft, setBlockDraft] = useState<DayBlockDraft | null>(null)
   const first = me.name.split(/\s+/)[0];
@@ -233,6 +266,26 @@ export function MyDay({ onOpenTask }: { onOpenTask: (id: string) => void }) {
                 <CalendarClock className="size-5" /> {t("pipeline.day.timeline")}
               </h3>
               <div className="absolute right-0 flex items-center gap-1">
+              {isToday && can("pipeline.edit") && (userId === me.id || can("pipeline.manage")) && (
+                <>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button type="button" variant="ghost" size="sm" className="h-7 gap-1 px-2 text-xs text-primary hover:bg-[color:var(--gold)]/15" disabled={autofill.isPending} onClick={() => void askAutofill()} aria-label={t("pipeline.day.autofill.button")}>
+                        {autofill.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />} {t("pipeline.day.autofill.short")}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-64">{t("pipeline.day.autofill.hint")}</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button type="button" variant="ghost" size="icon" className="size-7 text-muted-foreground hover:bg-red-500/15 hover:text-red-300" disabled={reset.isPending} onClick={() => void askReset()} aria-label={t("pipeline.day.reset.button")}>
+                        <RotateCcw className="size-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{t("pipeline.day.reset.button")}</TooltipContent>
+                  </Tooltip>
+                </>
+              )}
               {can("pipeline.edit") && (userId === me.id || can("pipeline.manage")) && (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -546,12 +599,40 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
   const shown = data.plan.blocks.filter((b) => b.start && b.end && !b.overflow && !b.allDay);
   const lo = Math.min(toMinutes(data.workHours.start), ...shown.map((b) => toMinutes(b.start)));
   const hi = Math.max(toMinutes(data.workHours.end), ...shown.map((b) => toMinutes(b.end)));
-  const startH = Math.max(0, Math.floor(lo / 60) - 1);
-  const endH = Math.min(24, Math.ceil(hi / 60) + 1);
+  // the day shows 6:00 to 19:00 (work is planned 8 to 5; a block dragged outside, or an event, widens it)
+  const startH = Math.max(0, Math.floor(Math.min(lo, 6 * 60) / 60));
+  const endH = Math.min(24, Math.ceil(Math.max(hi, 19 * 60) / 60));
   const hours = Array.from({ length: endH - startH }, (_, i) => startH + i);
   const placed = data.plan.blocks.filter((b) => !b.overflow && !b.allDay && b.start);
   const overflow = data.plan.blocks.filter((b) => b.overflow);
   const top = (m: number) => ((m - startH * 60) / 60) * hourPx;
+  // blocks that overlap in time are split side by side (the width shared by the ones that meet)
+  const laneOf = (() => {
+    const out = new Map<number, { col: number; cols: number }>();
+    const idx = placed.map((b, i) => ({ b, i })).filter((x) => x.b.kind !== "break").sort((x, y) => toMinutes(x.b.start) - toMinutes(y.b.start) || toMinutes(y.b.end) - toMinutes(x.b.end));
+    let group: { i: number; end: number; col: number }[] = [];
+    const flush = () => {
+      const cols = Math.max(1, ...group.map((g) => g.col + 1));
+      for (const g of group) out.set(g.i, { col: g.col, cols });
+      group = [];
+    };
+    let groupEnd = -1;
+    for (const x of idx) {
+      const s0 = toMinutes(x.b.start);
+      if (group.length && s0 >= groupEnd) {
+        flush();
+        groupEnd = -1;
+      }
+      const taken = new Set(group.filter((g) => g.end > s0).map((g) => g.col));
+      let col = 0;
+      while (taken.has(col)) col++;
+      const e0 = toMinutes(x.b.end);
+      group.push({ i: x.i, end: e0, col });
+      groupEnd = Math.max(groupEnd, e0);
+    }
+    flush();
+    return out;
+  })();
   const now = new Date();
   const nowM = data.date === todayYmd() ? now.getHours() * 60 + now.getMinutes() : null;
   return (
@@ -601,7 +682,7 @@ function Timeline({ data, onOpen, onBlock, hourPx, canEdit, forUser, onSaved }: 
             const ptask = b.kind === "ptask" || b.kind === "pmilestone" || b.kind === "pproject";
             const event = b.kind === "event";
             return (
-              <div key={`${b.refId}${i}`} className={cn("group/blk absolute inset-x-0", (live || move?.i === i) && "z-20")} style={{ top: top(s) + 1 + shift, height: h, ...(move?.i === i ? { transform: `translateY(${move.dy}px)`, opacity: 0.85, pointerEvents: "none" as const } : {}) }}>
+              <div key={`${b.refId}${i}`} className={cn("group/blk absolute", (live || move?.i === i) && "z-20")} style={{ top: top(s) + 1 + shift, height: h, left: `${((laneOf.get(i)?.col ?? 0) / (laneOf.get(i)?.cols ?? 1)) * 100}%`, width: `calc(${100 / (laneOf.get(i)?.cols ?? 1)}% - ${(laneOf.get(i)?.cols ?? 1) > 1 ? 2 : 0}px)`, ...(move?.i === i ? { transform: `translateY(${move.dy}px)`, opacity: 0.85, pointerEvents: "none" as const } : {}) }}>
               <button
                 type="button"
                 disabled={event && !b.local && !movable}

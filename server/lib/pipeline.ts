@@ -124,7 +124,7 @@ export type DayItem = {
   statusLabel?: string | null;
   companyName?: string;
 };
-type Busy = { moved?: boolean; start: number; end: number; title: string; o365?: boolean; allDay?: boolean; id?: string; local?: boolean; detail?: string | null };
+type Busy = { hidden?: boolean; moved?: boolean; start: number; end: number; title: string; o365?: boolean; allDay?: boolean; id?: string; local?: boolean; detail?: string | null };
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 const ticketPriority = (kind: string): DayItem["priority"] => (kind === "critical" ? "urgent" : kind === "high" ? "high" : kind === "low" ? "low" : "normal");
 
@@ -539,7 +539,7 @@ export function layout(items: DayItem[], s: Pick<PipelineSettings, "workStart" |
   const second = run(rest, left, false);
   blocks.push(...second.got);
   planned = blocks.reduce((n, k) => (k.start && !k.overflow ? n + (mins(k.end) - mins(k.start)) : n), 0);
-  for (const b of busy) {
+  for (const b of busy.filter((x) => !x.hidden)) {
     if (b.allDay) blocks.push({ start: "", end: "", title: b.title, kind: "event", refId: null, allDay: true, o365: Boolean(b.o365) });
     else if (b.end > b.start) blocks.push({ start: hhmm(b.start), end: hhmm(b.end), title: b.title, kind: "event", refId: b.id ?? null, o365: Boolean(b.o365), ...(b.moved ? { moved: true } : {}), ...(b.local ? { local: true, detail: b.detail ?? null } : {}) });
   }
@@ -575,6 +575,8 @@ export async function allocOf(userId: string, date: string) {
     ai: new Map(rows.filter((r) => r.source === "ai").map((r) => [r.key, r])),
     /** where the person put the item in the day (key → start, minutes of the day): dragged there, or the moment it was added */
     start: new Map(rows.filter((r) => r.source === "start").map((r) => [r.key, r.minutes])),
+    /** the items the person dragged to a time: they stay exactly there, even outside the work hours or over an event (position 1) */
+    fixed: new Set(rows.filter((r) => r.source === "start" && r.position === 1).map((r) => r.key)),
   };
 }
 
@@ -631,7 +633,9 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     return { ...i, need, minutes: given ?? need, ...(at !== undefined ? { startAt: at } : {}) };
   };
   const planable = absent ? [] : items.filter((i) => !i.blocked && !i.stale).sort(byUrgency).map(withTime);
-  let ordered = planable;
+  // an item dragged to a time stays exactly there (before the work hours, after them, over an event); the others are laid out around it
+  const fixedItems = planable.filter((i) => alloc.fixed.has(i.key) && i.startAt !== undefined);
+  let ordered = planable.filter((i) => !fixedItems.includes(i));
   let notes = new Map<string, string>();
   let summary = "";
   let source: "ai" | "rules" = "rules";
@@ -680,7 +684,7 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
         await db().delete(schema.pipelineDayAlloc).where(and(eq(schema.pipelineDayAlloc.userId, userId), eq(schema.pipelineDayAlloc.date, date), eq(schema.pipelineDayAlloc.source, "ai")));
         if (rows.length) await db().insert(schema.pipelineDayAlloc).values(rows.map((r) => ({ userId, date, key: r.key, minutes: r.minutes, source: "ai" as const, position: r.position, note: r.note })));
         // whatever the AI left out follows, by urgency
-        ordered = [...picked, ...planable.filter((i) => !seen.has(i.key))];
+        ordered = [...picked, ...planable.filter((i) => !seen.has(i.key))].filter((i) => !fixedItems.some((f) => f.key === i.key));
         if (typeof out.summary === "string" && out.summary.trim()) summary = out.summary.trim().slice(0, 900);
         source = "ai";
       } catch (e) {
@@ -698,7 +702,15 @@ export async function buildPlan(userId: string, date: string, opts: { ai: boolea
     const pos = (k: string) => alloc.order.get(k) ?? 1e6;
     ordered = ordered.map((i, n) => ({ i, n })).sort((a, b) => pos(a.i.key) - pos(b.i.key) || a.n - b.n).map((x) => x.i);
   }
-  const lay = layout(ordered, laySettings, busy, notes, after);
+  const reserved: Busy[] = fixedItems.map((i) => ({ hidden: true, start: i.startAt!, end: Math.min(24 * 60, i.startAt! + Math.max(15, ceil15(i.minutes))), title: i.title }));
+  const lay = layout(ordered, laySettings, [...busy, ...reserved], notes, after);
+  for (const i of fixedItems) {
+    const st = i.startAt!;
+    const en = Math.min(24 * 60 - 1, st + Math.max(15, ceil15(i.minutes)));
+    lay.blocks.push({ start: hhmm(st), end: hhmm(en), title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, ...(i.pin ? { pinned: i.pin } : {}), note: notes.get(i.key) ?? i.pinNote ?? null, allocated: en - st, need: ceil15(i.need ?? i.minutes) });
+    lay.plannedMinutes += en - st;
+  }
+  lay.blocks.sort((a, b) => (a.overflow ? 1 : 0) - (b.overflow ? 1 : 0) || (a.allDay ? 0 : 1) - (b.allDay ? 0 : 1) || a.start.localeCompare(b.start));
   // the blocked ones are listed after, so they are not forgotten
   for (const i of absent ? [] : items.filter((x) => x.blocked && !x.stale)) lay.blocks.push({ start: "", end: "", title: i.title, kind: i.kind, refId: i.refId, ...(i.projectId ? { projectId: i.projectId } : {}), ticketNumber: i.ticketNumber ?? null, priority: i.priority, note: locale === "en" ? "Waiting on another task" : "En attente d'une autre tâche", overflow: true });
   const cap = absent ? 0 : lay.capacityMinutes;
