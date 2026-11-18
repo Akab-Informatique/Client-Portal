@@ -152,6 +152,16 @@ Ce qu'il faut régler sur la télé elle-même :
 
 Les télés grand public sont souvent prévues pour moins d'heures par jour que les écrans commerciaux 24/7 : pour un remplacement, choisir un **écran commercial 24/7**.
 
+## Écran technique (télé du département technique)
+
+Une deuxième télé, à part de celle du hall : billets ouverts et en retard, billets non assignés, équipe (qui travaille sur quoi), projets en cours, parc Datto, réseau UniFi et tendance des 7 derniers jours. Elle a **sa propre clé et son propre lien** : Dashboard TV › onglet **Écran technique** (le lien se copie là, la clé se régénère là).
+
+- Adresse : `https://<le portail>/noc/index.html?key=<clé de l'écran technique>` (la clé du hall ne l'ouvre pas, et l'inverse).
+- **Clé Fire TV** : ouvrir le navigateur **Silk** (ou une application de kiosque comme **Fully Kiosk Browser**, qui garde la page ouverte, l'écran allumé et recharge après une panne) et aller à l'adresse ; passer en plein écran. La page s'ajuste seule à 1920 x 1080 et se rafraîchit toutes les 30 secondes. Dans les réglages de la Fire TV, désactiver l'économiseur d'écran.
+- **Réglages de l'écran** : le repos (jours et heures d'ouverture) et la luminosité sont **les mêmes que ceux de la télé du hall** (Dashboard TV › Gérer › Protection de l'écran). Le décalage de pixels est toujours actif. L'onglet a un bouton « Prévisualiser le repos ».
+- Ce que l'adresse laisse voir (elle est lisible depuis Internet avec la clé) : numéros de billet, noms de client, titres abrégés, prénoms des techniciens, totaux. Jamais d'adresse IP, de courriel, de téléphone, de note ni de montant. Les panneaux Datto et UniFi n'apparaissent que si l'intégration est branchée ; si une source tombe en panne, seul son panneau l'indique.
+- Si la clé fuite : « Régénérer la clé », puis mettre l'adresse à jour sur la télé.
+
 ## 6. Si ça ne marche pas
 
 | Symptôme | À vérifier |

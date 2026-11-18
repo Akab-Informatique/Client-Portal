@@ -94,6 +94,7 @@ export const SECTION_ACCESS: Record<string, string[]> = {
   "API keys for outside tools (Grok…) (latest)": ["admin.integrations"],
   "Mes outils TI › Console UniFi (latest)": ["unifi.view", "admin.integrations"],
   "Newsletter (Gestion › Infolettre) (latest)": ["newsletter.view"],
+  "Technical TV dashboard (latest)": ["tv.view", "tv.manage"],
   "Charges on a project (latest)": ["projects.view"],
   "Ma journée: events can be moved in the plan (latest)": ["pipeline.view"],
   "Pause and play on a project task, ticket window scroll, narrow Projets (latest)": ["projects.view"],

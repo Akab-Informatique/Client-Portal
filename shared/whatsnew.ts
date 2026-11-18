@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-18.1",
+    date: "2026-11-18",
+    sections: [
+      {
+        fr: "Dashboard TV",
+        en: "Dashboard TV",
+        items: [
+          { fr: "Nouvel écran technique pour la télé du département : billets ouverts, en retard et non assignés, équipe, projets en cours, parc Datto, réseau UniFi et tendance de la semaine. Il a son propre lien et sa propre clé (Dashboard TV, onglet Écran technique), et ne montre ni adresse, ni courriel, ni note, ni montant.", en: "New technical screen for the department's TV: open, overdue and unassigned tickets, team, projects in progress, Datto devices, UniFi network and the week's trend. It has its own link and key (Dashboard TV, Technical screen tab), and shows no address, email, note or amount of money." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-17.15",
     date: "2026-11-17",
     sections: [

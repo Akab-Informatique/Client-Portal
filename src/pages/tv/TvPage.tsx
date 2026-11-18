@@ -4,6 +4,8 @@ import { Maximize2, Tv } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { useCan } from "@/lib/session";
+import { cn } from "@/lib/utils";
+import { NocScreen } from "./NocScreen";
 import { TvManage } from "./TvManage";
 
 /** Lobby TV sign: the pixel-art AI office (public/tv), shown live inside the portal */
@@ -12,6 +14,7 @@ export function TvPage() {
   const can = useCan();
   const frame = useRef<HTMLIFrameElement>(null);
   const [xmasDay, setXmasDay] = useState(0); // staff preview of a day of the Christmas scene (0 = none)
+  const [tab, setTab] = useState<"lobby" | "tech">(() => (new URLSearchParams(window.location.search).get("screen") === "tech" ? "tech" : "lobby"));
   const [restPreview, setRestPreview] = useState(false); // staff preview of the rest screen
   const params = [xmasDay ? `xmas=${xmasDay}` : "", restPreview ? "rest=1" : ""].filter(Boolean).join("&");
   const feed = params ? `/api/tv/state?${params}` : "/api/tv/state";
@@ -23,6 +26,23 @@ export function TvPage() {
   return (
     <div className="relative isolate space-y-6">
       <GlassBackdrop className="-inset-x-8 -top-6" />
+      <div role="tablist" className="inline-flex gap-1 rounded-lg border border-border p-1">
+        {(["lobby", "tech"] as const).map((k) => (
+          <button
+            key={k}
+            role="tab"
+            aria-selected={tab === k}
+            onClick={() => setTab(k)}
+            className={cn("rounded-md px-3 py-1.5 text-sm font-medium transition-colors", tab === k ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
+          >
+            {t(k === "lobby" ? "noc.tabLobby" : "noc.tabTech")}
+          </button>
+        ))}
+      </div>
+      {tab === "tech" ? (
+        <NocScreen />
+      ) : (
+        <>
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold">
@@ -49,6 +69,8 @@ export function TvPage() {
       </div>
 
       {can("tv.manage") && <TvManage xmasDay={xmasDay} onXmasDay={setXmasDay} restPreview={restPreview} onRestPreview={setRestPreview} />}
+        </>
+      )}
     </div>
   );
 }

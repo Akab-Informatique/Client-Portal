@@ -3,6 +3,7 @@ import { initReactI18next } from "react-i18next";
 import fr from "./fr";
 import en from "./en";
 import * as unifiTexts from "./unifi";
+import * as nocTexts from "./noc";
 import * as smStaff from "./selfManaged.staff";
 import * as smClient from "./selfManaged.client";
 import * as smDelegate from "./selfManaged.delegate";
@@ -48,7 +49,7 @@ function applyLocale(lng: string) {
   document.title = TITLE[l];
 }
 // the self-managed clients feature keeps its texts in their own files
-for (const lng of ["fr", "en"] as const) for (const m of [smStaff, smClient, smDelegate, listTexts, reportTexts, assistantTexts, projTexts, projListTexts, projWorkTexts, projBillTexts, watchTexts, devicesTexts, termTexts, unifiTexts]) i18n.addResourceBundle(lng, "translation", m[lng], true, false);
+for (const lng of ["fr", "en"] as const) for (const m of [smStaff, smClient, smDelegate, listTexts, reportTexts, assistantTexts, projTexts, projListTexts, projWorkTexts, projBillTexts, watchTexts, devicesTexts, termTexts, unifiTexts, nocTexts]) i18n.addResourceBundle(lng, "translation", m[lng], true, false);
 
 applyLocale(i18n.language);
 i18n.on("languageChanged", applyLocale);

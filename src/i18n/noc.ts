@@ -1,0 +1,61 @@
+/** Texts of the technical TV screen tab of Dashboard TV (src/pages/tv/NocScreen.tsx): keys under `noc`. */
+export const fr = {
+  noc: {
+    tabLobby: "Hall d'entrée",
+    tabTech: "Écran technique",
+    title: "Écran technique",
+    subtitle: "La télé du département technique : billets, équipe, projets, parc Datto et réseau UniFi, en direct.",
+    livePreview: "Aperçu en direct",
+    fullscreen: "Plein écran",
+    previewRest: "Prévisualiser le repos",
+    link: {
+      title: "Lien d'affichage de la télé technique",
+      hint: "Une clé à part de celle du hall. À ouvrir sur la télé, sans session.",
+      copy: "Copier",
+      copied: "Lien copié",
+      rotate: "Régénérer la clé",
+      rotateTitle: "Régénérer la clé de l'écran technique ?",
+      rotateText: "L'ancien lien cessera de fonctionner : il faudra mettre à jour l'adresse sur la télé.",
+      cancel: "Annuler",
+      error: "L'action a échoué",
+    },
+    public: "Cette adresse est lisible depuis Internet avec la clé : l'écran n'affiche que des numéros de billet, des noms de client, des titres abrégés, des prénoms et des totaux, jamais d'adresse IP, de courriel, de téléphone, de note ni de montant.",
+    screen: "Le repos de l'écran (heures d'ouverture et luminosité) suit les mêmes réglages que la télé du hall.",
+    fire: {
+      title: "Sur une clé Fire TV",
+      s1: "Ouvrir le navigateur Silk (ou une application de kiosque comme Fully Kiosk Browser) et aller à l'adresse ci-dessus.",
+      s2: "Passer en plein écran : la page s'ajuste seule à 1920 x 1080 et se rafraîchit toutes les 30 secondes.",
+      s3: "Dans les réglages de la Fire TV, désactiver l'économiseur d'écran pour que l'écran reste allumé.",
+    },
+  },
+};
+export const en = {
+  noc: {
+    tabLobby: "Lobby",
+    tabTech: "Technical screen",
+    title: "Technical screen",
+    subtitle: "The technical department's TV: tickets, team, projects, Datto devices and UniFi network, live.",
+    livePreview: "Live preview",
+    fullscreen: "Full screen",
+    previewRest: "Preview the rest screen",
+    link: {
+      title: "Technical TV display link",
+      hint: "A key of its own, separate from the lobby's. Open it on the TV, no sign-in.",
+      copy: "Copy",
+      copied: "Link copied",
+      rotate: "Regenerate the key",
+      rotateTitle: "Regenerate the technical screen key?",
+      rotateText: "The old link stops working: the address on the TV must be updated.",
+      cancel: "Cancel",
+      error: "The action failed",
+    },
+    public: "This address can be read from the Internet with the key: the screen only shows ticket numbers, client names, shortened titles, first names and totals, never an IP address, email, phone number, note or amount of money.",
+    screen: "The screen's rest (opening hours and brightness) uses the same settings as the lobby TV.",
+    fire: {
+      title: "On a Fire TV stick",
+      s1: "Open the Silk browser (or a kiosk app such as Fully Kiosk Browser) and go to the address above.",
+      s2: "Go full screen: the page fits itself to 1920 x 1080 and refreshes every 30 seconds.",
+      s3: "In the Fire TV settings, turn the screensaver off so the screen stays on.",
+    },
+  },
+};

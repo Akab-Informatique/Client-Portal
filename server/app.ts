@@ -70,6 +70,7 @@ import { timeRoutes } from "./routes/time.ts";
 import { hrRoutes } from "./routes/hr.ts";
 import { chatRoutes } from "./routes/chat.ts";
 import { tvRoutes } from "./routes/tv.ts";
+import { nocRoutes } from "./routes/noc.ts";
 import { assistantRoutes } from "./routes/assistant.ts";
 
 export function createApp() {
@@ -80,6 +81,11 @@ export function createApp() {
   app.use("/api/tv/*", async (c, next) => {
     await next();
     if (c.req.path.startsWith("/api/tv/display/") || c.req.path.startsWith("/api/tv/r/")) c.header("Referrer-Policy", "no-referrer");
+  });
+  // Technical TV dashboard: its public feed carries its own secret key in the URL
+  app.use("/api/noc/*", async (c, next) => {
+    await next();
+    if (c.req.path.startsWith("/api/noc/display/")) c.header("Referrer-Policy", "no-referrer");
   });
 
   app.use(
@@ -197,6 +203,8 @@ export function createApp() {
   api.route("/chat", chatRoutes);
   // Dashboard TV: the lobby screen's bots (public display and report links use secret keys; the rest needs tv.view / tv.manage)
   api.route("/tv", tvRoutes);
+  // Technical TV dashboard (own display key)
+  api.route("/noc", nocRoutes);
   api.route("/assistant", assistantRoutes);
   api.route("/messages", messageRoutes);
   api.route("/board", boardRoutes);
