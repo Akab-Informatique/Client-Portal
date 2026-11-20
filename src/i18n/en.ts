@@ -6134,6 +6134,7 @@ const en: Dict = {
       tickets: "Tickets",
       projects: "Projects",
       devices: "Devices",
+      vault: "Vault",
       documentation: "Documentation",
       invoices: "Invoices",
       contracts: "Contracts",

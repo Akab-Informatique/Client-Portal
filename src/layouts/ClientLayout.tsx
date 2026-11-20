@@ -88,7 +88,7 @@ export function ClientLayout() {
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
-            className="relative mx-auto w-full max-w-5xl px-4 pb-24 pt-8 sm:px-6 lg:px-10"
+            className={cn("relative mx-auto w-full pb-24 pt-8", location.pathname === "/vault" ? "px-2 sm:px-3" : "max-w-5xl px-4 sm:px-6 lg:px-10")}
           >
             <Suspense fallback={<div className="pane h-40 animate-pulse rounded-2xl" />}>
               <Outlet />

@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-19.2",
+    date: "2026-11-19",
+    sections: [
+      {
+        fr: "Vault pour les clients",
+        en: "Vault for clients",
+        items: [
+          { fr: "Le portail client a maintenant une page Vault (Opérations) : le client s'y connecte avec son propre compte Vault. Le droit « Ouvrir le coffre-fort » est donné à tous les rôles client et se retire par rôle.", en: "The client portal now has a Vault page (Operations): the client signs in with their own Vault account. The \"Open the vault\" right is given to every client role and can be removed per role." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-19.1",
     date: "2026-11-19",
     sections: [

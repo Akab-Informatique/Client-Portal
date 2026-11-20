@@ -6133,6 +6133,7 @@ const fr = {
       projects: "Projets",
       devices: "Appareils",
       documentation: "Documentation",
+      vault: "Vault",
       invoices: "Factures",
       contracts: "Contrats",
       quotes: "Soumissions",

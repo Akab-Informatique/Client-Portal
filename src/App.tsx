@@ -193,6 +193,7 @@ function Root() {
               <Route path="tickets" element={<Guard permission="clientTickets.view"><ClientTicketsPage /></Guard>} />
               <Route path="manage" element={<Guard permission="clientTickets.delegate"><DelegatePage /></Guard>} />
               <Route path="invoices" element={<Guard permission="clientInvoices.view"><ClientInvoicesPage /></Guard>} />
+              <Route path="vault" element={<Guard permission="clientVault.use"><VaultPage client /></Guard>} />
               <Route path="contracts" element={<Guard permission="clientContracts.view"><ClientContractsPage /></Guard>} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>

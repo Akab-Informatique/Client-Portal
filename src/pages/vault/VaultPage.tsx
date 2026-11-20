@@ -24,11 +24,12 @@ function writeSeen(key: string, on: boolean) {
 }
 
 /** My IT tools > Vault: vault.akab.ca inside the portal. First time, the sign-in (Microsoft 365) is done in a new tab. */
-export function VaultPage() {
+export function VaultPage({ client = false }: { client?: boolean }) {
   const { t } = useTranslation();
   const me = useMe();
   const key = `akab.vault.signedIn.${me.id}`;
-  const [seen, setSeen] = useState(() => readSeen(key));
+  // a client signs in right in the frame with their own Vault account (no Microsoft 365 step)
+  const [seen, setSeen] = useState(() => client || readSeen(key));
   const [opened, setOpened] = useState(false);
 
   const openTab = () => window.open(VAULT_URL, "_blank", "noopener,noreferrer");
@@ -53,10 +54,12 @@ export function VaultPage() {
       </div>
       {seen && (
         <>
-          <Button variant="outline" size="sm" onClick={again}>
-            <KeyRound className="mr-1 size-4" />
-            {t("vault.signAgain")}
-          </Button>
+          {!client && (
+            <Button variant="outline" size="sm" onClick={again}>
+              <KeyRound className="mr-1 size-4" />
+              {t("vault.signAgain")}
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={openTab}>
             <ExternalLink className="mr-1 size-4" />
             {t("vault.openTab")}

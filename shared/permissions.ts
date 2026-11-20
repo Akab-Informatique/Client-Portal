@@ -690,6 +690,12 @@ export const MODULES = [
     permissions: [{ key: "clientInvoices.view", label: { fr: "Voir les factures de l'entreprise", en: "See the company's invoices" } }],
   },
   {
+    key: "clientVault",
+    audience: "client",
+    label: { fr: "Coffre-fort (Vault)", en: "Vault" },
+    permissions: [{ key: "clientVault.use", label: { fr: "Ouvrir le coffre-fort", en: "Open the vault" }, description: { fr: "Afficher vault.akab.ca dans le portail ; la personne s'y connecte avec son propre compte Vault", en: "Show vault.akab.ca inside the portal; the person signs in with their own Vault account" } }],
+  },
+  {
     key: "clientContracts",
     audience: "client",
     label: { fr: "Contrats", en: "Contracts" },
@@ -748,7 +754,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
   { key: "clientBoard", audience: "client", label: { fr: "Babillard", en: "Message board" }, modules: ["board"] },
-  { key: "clientOperations", audience: "client", label: { fr: "Opérations", en: "Operations" }, modules: ["clientTickets", "clientProjects", "clientDevices", "clientDocs"] },
+  { key: "clientOperations", audience: "client", label: { fr: "Opérations", en: "Operations" }, modules: ["clientTickets", "clientProjects", "clientDevices", "clientDocs", "clientVault"] },
   { key: "clientAccounting", audience: "client", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["clientInvoices", "clientContracts", "clientQuotes"] },
   { key: "clientSettings", audience: "client", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["clientAdmin"] },
 ];
@@ -866,7 +872,7 @@ export const SYSTEM_ROLES: Array<{
     name: { fr: "Comptabilité client", en: "Client accounting" },
     description: { fr: "Babillard, factures et soumissions", en: "Message board, invoices and quotes" },
     // the main and billing contacts get this role: their company's invoices, contracts and every ticket of the company
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientInvoices.view", "clientContracts.view", "clientContracts.autopay", "clientQuotes.view", "clientVault.use"],
     locked: false,
   },
   {
@@ -877,7 +883,7 @@ export const SYSTEM_ROLES: Array<{
       fr: "Babillard et tous les billets de l'entreprise (filtres par usager), sans les paramètres admin du portail",
       en: "Message board and every ticket of the company (filters by user), without the portal's admin settings",
     },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientVault.use"],
     locked: false,
   },
   {
@@ -885,7 +891,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Technicien délégué", en: "Delegated technician" },
     description: { fr: "Gère les billets de l'entreprise (entreprise autogérée) : créer, répondre, noter, fermer, demander l'aide d'AKAB", en: "Manages the company's tickets (self-managed company): create, reply, note, close, ask AKAB for help" },
-    permissions: ["board.view", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.delegate"],
+    permissions: ["board.view", "clientTickets.view", "clientTickets.all", "clientTickets.comment", "clientTickets.attach", "clientTickets.delegate", "clientVault.use"],
     locked: false,
   },
   {
@@ -893,7 +899,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Technique client", en: "Client technical" },
     description: { fr: "Babillard, billets, appareils et documentation", en: "Message board, tickets, devices and documentation" },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientTickets.all", "clientDevices.view", "clientDocs.view"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientTickets.all", "clientDevices.view", "clientDocs.view", "clientVault.use"],
     locked: false,
   },
   {
@@ -901,7 +907,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Configuration admin", en: "Admin configuration" },
     description: { fr: "Paramètres admin du portail : informations de l'entreprise et liste des usagers", en: "Portal admin settings: company information and user list" },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientAdmin.company", "clientAdmin.users"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientAdmin.company", "clientAdmin.users", "clientVault.use"],
     locked: false,
   },
   {
@@ -909,7 +915,7 @@ export const SYSTEM_ROLES: Array<{
     audience: "client",
     name: { fr: "Usager client", en: "Client user" },
     description: { fr: "Employé du client : le babillard et ses billets", en: "Client employee: the message board and their tickets" },
-    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate"],
+    permissions: ["board.view", "board.ticket", "clientTickets.view", "clientTickets.comment", "clientTickets.attach", "clientTickets.escalate", "clientVault.use"],
     locked: false,
   },
 ];

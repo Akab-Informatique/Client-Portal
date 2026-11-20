@@ -95,6 +95,7 @@ export const CLIENT_MODULES: ClientNavModule[] = [
   { key: "delegate", path: "/manage", labelKey: "selfManaged.delegate.nav", icon: Kanban, section: "operations", permission: "clientTickets.delegate" },
   { key: "devices", path: "/devices", labelKey: "client.nav.devices", icon: MonitorSmartphone, section: "operations", permission: "clientDevices.view", upcoming: true },
   { key: "documentation", path: "/documentation", labelKey: "client.nav.documentation", icon: BookOpen, section: "operations", permission: "clientDocs.view", upcoming: true },
+  { key: "vault", path: "/vault", labelKey: "client.nav.vault", icon: Vault, section: "operations", permission: "clientVault.use" },
   { key: "invoices", path: "/invoices", labelKey: "client.nav.invoices", icon: Receipt, section: "accounting", permission: "clientInvoices.view" },
   { key: "contracts", path: "/contracts", labelKey: "client.nav.contracts", icon: FileText, section: "accounting", permission: "clientContracts.view" },
   { key: "quotes", path: "/quotes", labelKey: "client.nav.quotes", icon: FileSignature, section: "accounting", permission: "clientQuotes.view", upcoming: true },
