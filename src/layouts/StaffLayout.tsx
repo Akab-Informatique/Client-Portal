@@ -248,7 +248,7 @@ function NavItem({ m, collapsed, active, fav, idPrefix = "nav" }: { m: NavModule
 }
 
 /** Pages with wide tables and side-by-side panes (Opérations and the Tickets and Projects pages shown in it): they use the whole screen */
-const WIDE_PAGES = ["/pipeline", "/tickets", "/projects"];
+const WIDE_PAGES = ["/pipeline", "/tickets", "/projects", "/it/vault"];
 
 function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?: () => void }) {
   const { t } = useTranslation();

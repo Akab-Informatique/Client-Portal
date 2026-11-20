@@ -94,14 +94,14 @@ export function VaultPage() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="-mb-16 space-y-3">
       {header}
       <iframe
         title={t("vault.frameTitle")}
         src={VAULT_URL}
         allow="clipboard-read; clipboard-write; publickey-credentials-get; publickey-credentials-create"
         className="w-full rounded-xl border-0"
-        style={{ border: 0, width: "100%", height: "calc(100vh - 11rem)", minHeight: 480 }}
+        style={{ border: 0, width: "100%", height: "calc(100vh - 8.5rem)", minHeight: 520 }}
       />
     </div>
   );
