@@ -217,6 +217,14 @@ export const MODULES = [
     ],
   },
   {
+    key: "vault",
+    audience: "staff",
+    label: { fr: "Coffre-fort (Vault)", en: "Vault" },
+    permissions: [
+      { key: "vault.use", label: { fr: "Ouvrir le coffre-fort", en: "Open the vault" }, description: { fr: "Afficher vault.akab.ca dans le portail (la connexion se fait avec le compte Microsoft 365 de la personne)", en: "Show vault.akab.ca inside the portal (sign-in uses the person's own Microsoft 365 account)" } },
+    ],
+  },
+  {
     key: "newsletter",
     audience: "staff",
     label: { fr: "Infolettre", en: "Newsletter" },
@@ -732,7 +740,7 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom", "tv"] },
   { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb", "assistant"] },
-  { key: "ittools", audience: "staff", label: { fr: "Mes outils TI", en: "My IT tools" }, modules: ["unifi"] },
+  { key: "ittools", audience: "staff", label: { fr: "Mes outils TI", en: "My IT tools" }, modules: ["unifi", "vault"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "proj", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "reports", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
@@ -808,6 +816,7 @@ export const SYSTEM_ROLES: Array<{
       "dashboard.view",
       "tv.view",
       "unifi.view",
+      "vault.use",
       "tickets.view",
       "tickets.edit",
       "tickets.selfManaged",

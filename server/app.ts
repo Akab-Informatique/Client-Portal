@@ -101,7 +101,7 @@ export function createApp() {
         // only our own pages frame our pages (the invoice PDF preview window) — and the sites listed in EMBED_ORIGINS, if any
         frameAncestors: ["'self'", ...config.embedOrigins],
         // the coffee break videos (youtube-nocookie: no tracking cookie until played)
-        frameSrc: ["'self'", "blob:", "https://www.youtube-nocookie.com"],
+        frameSrc: ["'self'", "blob:", "https://www.youtube-nocookie.com", "https://vault.akab.ca"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
         // the browser's PDF viewer (invoice preview) shows a PDF of ours inside the window

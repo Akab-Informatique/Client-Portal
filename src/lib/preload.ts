@@ -23,6 +23,7 @@ export const pageLoaders = {
   pipeline: () => import("@/pages/pipeline/PipelinePage"),
   projects: () => import("@/pages/projects/ProjectsPage"),
   outlook: () => import("@/pages/outlook/OutlookPage"),
+  vault: () => import("@/pages/vault/VaultPage"),
   unifi: () => import("@/pages/unifi/UnifiPage"),
   tv: () => import("@/pages/tv/TvPage"),
   meetings: () => import("@/pages/meetings/MeetingsPage"),

@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-19.1",
+    date: "2026-11-19",
+    sections: [
+      {
+        fr: "Mes outils TI",
+        en: "My IT tools",
+        items: [
+          { fr: "Nouvelle page Vault : le coffre-fort vault.akab.ca s'affiche dans le portail. À la première visite, la connexion Microsoft 365 se fait dans un nouvel onglet.", en: "New Vault page: the vault.akab.ca password vault shows inside the portal. On the first visit, the Microsoft 365 sign-in is done in a new tab." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-18.1",
     date: "2026-11-18",
     sections: [

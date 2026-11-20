@@ -434,6 +434,7 @@ const fr = {
     marketing: "Marketing",
     myItTools: "Mes outils TI",
     unifi: "Console UniFi",
+    vault: "Vault",
     quotesLatest: "Dernières soumissions",
     quotesNew: "Nouvelle soumission",
     outlook: "Outlook",

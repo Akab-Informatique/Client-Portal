@@ -436,6 +436,7 @@ const en: Dict = {
     marketing: "Marketing",
     myItTools: "My IT tools",
     unifi: "UniFi console",
+    vault: "Vault",
     quotesLatest: "Latest quotes",
     quotesNew: "New quote",
     outlook: "Outlook",

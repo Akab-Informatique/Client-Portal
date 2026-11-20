@@ -1,4 +1,4 @@
-import { Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, Archive, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Network, Newspaper, CalendarClock, Receipt, KeyRound, Store, Ticket, Wallet, TrendingUp, Wrench, type LucideIcon } from "lucide-react";
+import { Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, Archive, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Network, Newspaper, CalendarClock, Receipt, KeyRound, Store, Ticket, Wallet, TrendingUp, Wrench, Vault, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -70,6 +70,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "meetings", path: "/meetings", labelKey: "nav.meetings", icon: CalendarCheck, section: "team", permission: "meetings.view" },
   { key: "breakroom", path: "/breakroom", labelKey: "nav.breakroom", icon: Coffee, section: "team", permission: "breakroom.use" },
   { key: "unifi", path: "/it/unifi", labelKey: "nav.unifi", icon: Network, section: "ittools", permission: "unifi.view" },
+  { key: "vault", path: "/it/vault", labelKey: "nav.vault", icon: Vault, section: "ittools", permission: "vault.use" },
   { key: "tv", path: "/tv", labelKey: "nav.tv", icon: Tv, section: "team", permission: "tv.view" },
   { key: "devices", path: "/devices", labelKey: "nav.devices", icon: MonitorSmartphone, section: "ittools", permission: "crm.view" },
   { key: "documentation", path: "/documentation", labelKey: "nav.documentation", icon: BookOpen, section: "command", permission: "sops.view", orRight: "kb.view" },
