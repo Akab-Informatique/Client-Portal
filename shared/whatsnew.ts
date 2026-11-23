@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-23.2",
+    date: "2026-11-23",
+    sections: [
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Nouveau bouton « Étiquette d'équipement » dans le billet : imprime le nombre d'étiquettes voulu (Équipement 1/2, 2/2…) avec le numéro du billet, son titre et le client, à coller sur l'équipement du client.", en: "New \"Equipment label\" button in the ticket: prints as many labels as you want (Equipment 1/2, 2/2…) with the ticket number, title and client, to stick on the client's equipment." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-23.1",
     date: "2026-11-23",
     sections: [

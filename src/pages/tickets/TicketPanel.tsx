@@ -42,6 +42,7 @@ import { ClientHoursGauge } from "./ClientHoursGauge";
 import { AcceptDialog } from "./AcceptDialog";
 import { AddToDayDialog, useDayTicket } from "./AddToDayDialog";
 import { MergeDialog } from "./MergeDialog";
+import { EquipmentLabelDialog } from "./EquipmentLabel";
 import { useMakeProject } from "@/pages/proj/useMakeProject";
 import { NotifyTech } from "./NotifyTech";
 import { ChecklistCard } from "./Checklist";
@@ -316,6 +317,7 @@ function TicketBody({
   const dayState = useDayTicket(tk.id, can("pipeline.edit"));
   const [accepting, setAccepting] = useState(false);
   const [merging, setMerging] = useState(false);
+  const [equipLabel, setEquipLabel] = useState(false);
   const makeProject = useMakeProject(() => onClose());
   // the three squares: full size, or collapsed to small icons (kept per browser)
   const [tilesOpen, setTilesOpen] = useState(() => {
@@ -739,6 +741,7 @@ function TicketBody({
             <div className="mt-3 flex flex-wrap items-center gap-1.5 lg:mt-12 lg:justify-end lg:justify-self-end">
               {remote && <QuickAction icon={MonitorPlay} label={t("tickets.asset.remote")} href={remote} accent />}
               {editable && !partial && tk.assignee?.id !== me.id && statusKind !== "complete" && <QuickAction icon={UserCheck} label={t("tickets.accept.button")} onClick={() => setAccepting(true)} accent />}
+              {!partial && <QuickAction icon={Tag} label={t("equipLabel.button")} onClick={() => setEquipLabel(true)} />}
               {editable && !partial && tk.local && statusKind !== "complete" && <QuickAction icon={GitMerge} label={t("tickets.merge.button")} onClick={() => setMerging(true)} />}
               {editable && !partial && tk.local && statusKind !== "complete" && can("proj.edit") && <QuickAction icon={FolderKanban} label={t("projBill.fromTicket.button")} onClick={() => void makeProject.fromTicket(tk.id)} />}
               {can("pipeline.edit") && !partial && statusKind !== "complete" && (
@@ -892,6 +895,7 @@ function TicketBody({
         </aside>
       </div>
       <OpenedByOthers viewers={viewers} />
+      {equipLabel && <EquipmentLabelDialog ticket={{ number: tk.number, title: tk.title, client: tk.company?.name ?? "" }} onClose={() => setEquipLabel(false)} />}
       {merging && <MergeDialog open onOpenChange={(o) => !o && setMerging(false)} tk={tk} onDone={() => onClose()} />}
       {addingDay && <AddToDayDialog open onOpenChange={(o) => !o && setAddingDay(false)} tk={tk} />}
       {accepting && <AcceptDialog open onOpenChange={(o) => !o && setAccepting(false)} tk={tk} statuses={tk.options.statuses} />}
