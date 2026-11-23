@@ -216,7 +216,8 @@ export async function processIncoming(m: Incoming): Promise<{ outcome: Outcome; 
       if (t) {
         await src.addMailReply(t.id, m.from!, m.text.slice(0, 7500));
         await keepFiles(t.id, m);
-        await src.markNeedsAttention(t.id).catch(() => false);
+        // a reply on a closed ticket reopens it (never a merged one)
+        await src.markNeedsAttention(t.id, { reopen: true }).catch(() => false);
         await done("reply", { ticketId: t.id, ticketNumber: t.number, companyId: t.company.id });
         return { outcome: "reply", ticket: { id: t.id, number: t.number } };
       }

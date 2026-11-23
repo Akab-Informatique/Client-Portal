@@ -156,7 +156,7 @@ export async function receiveSms(p: { from: string; message: string; id?: string
 /** The ticket goes to "needs attention" because of a text; a failure here never loses the text. */
 async function needsAttention(ticketId: number) {
   try {
-    await (await ticketSource({ all: true })).markNeedsAttention(ticketId);
+    await (await ticketSource({ all: true })).markNeedsAttention(ticketId, { reopen: true });
   } catch (e) {
     console.warn("[sms] needs attention:", e instanceof Error ? e.message : e);
   }

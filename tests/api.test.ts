@@ -5853,6 +5853,13 @@ describe("tickets from the support mailbox (Admin › Courriel entrant)", () => 
     const after = (await tech.get(`/api/tickets/${first.ticket!.id}`)).json;
     expect(after.notes.some((n: any) => n.text.includes("C'est revenu, merci."))).toBe(true);
 
+    // a reply by email on a closed ticket reopens it
+    const closedValue = (await tech.get("/api/tickets?view=all")).json.facets.statuses.find((s: any) => s.kind === "complete").value;
+    expect((await tech.patch(`/api/tickets/${first.ticket!.id}`, { status: closedValue })).status).toBe(200);
+    expect((await tech.get(`/api/tickets/${first.ticket!.id}`)).json.statusKind).toBe("complete");
+    expect((await processIncoming(mail("m-4b", known.email, `RE: [${first.ticket!.number}] Imprimante en panne`, "Ça recommence."))).outcome).toBe("reply");
+    expect((await tech.get(`/api/tickets/${first.ticket!.id}`)).json.statusKind).toBe("needsAttention");
+
     // machines and loops
     expect((await processIncoming(mail("m-5", "no-reply@service.com", "Votre facture"))).outcome).toBe("skipped");
     expect((await processIncoming(mail("m-6", known.email, "Réponse automatique : absent"))).outcome).toBe("skipped");

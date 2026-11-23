@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-22.1",
+    date: "2026-11-22",
+    sections: [
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Une réponse du client par courriel ou par texto sur un billet fermé rouvre maintenant le billet (statut « Nécessite attention »), comme une réponse faite dans le portail. Un billet fusionné reste fermé.", en: "A client's reply by email or text on a closed ticket now reopens it (status \"Needs attention\"), like a reply made in the portal. A merged ticket stays closed." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-19.2",
     date: "2026-11-19",
     sections: [
