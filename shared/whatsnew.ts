@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-23.1",
+    date: "2026-11-23",
+    sections: [
+      {
+        fr: "Courriel",
+        en: "Email",
+        items: [
+          { fr: "Le courriel « Billet reçu » (flux de travail « Réponse à un nouveau billet », toujours désactivé jusqu'à ce que vous l'activiez) dit maintenant qu'un technicien sera assigné sous peu, donne le numéro du soutien pour une urgence (514-834-3344, option 1) et invite à suivre la demande sur le portail ou à nous contacter pour obtenir l'accès. Le texte reste modifiable dans Admin › Courriel.", en: "The \"Ticket received\" email (the \"Reply to a new ticket\" workflow, still off until you switch it on) now says a technician will be assigned shortly, gives the support number for an emergency (514-834-3344, option 1) and invites people to follow the request on the portal or contact us for access. The text can still be edited in Admin › Email." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-22.1",
     date: "2026-11-22",
     sections: [

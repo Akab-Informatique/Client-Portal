@@ -196,7 +196,13 @@ TEMPLATES.push({
 
 Nous avons bien reçu votre demande « {{title}} ». Elle porte le numéro {{number}}.
 
-Vous n'avez rien à faire pour le moment : un technicien d'AKAB Informatique la prendra en charge sous peu. Pour toute question, mentionnez le numéro {{number}}.
+Un technicien d'AKAB Informatique lui sera assigné sous peu.
+
+S'il s'agit d'une urgence, appelez notre soutien au 514-834-3344, option 1.
+
+Vous pouvez aussi suivre l'évolution de votre demande sur le portail d'AKAB : {{portalUrl}}. Si vous n'y avez pas encore accès, soumettez-nous une demande d'accès en nous contactant (courriel ou téléphone).
+
+Pour toute question, mentionnez le numéro {{number}}.
 
 ${SIGN.fr}`,
       action: "Voir mon billet",
@@ -207,7 +213,13 @@ ${SIGN.fr}`,
 
 We received your request "{{title}}". Its number is {{number}}.
 
-There is nothing you need to do for now: a technician from AKAB Informatique will take it on shortly. For any question, mention number {{number}}.
+A technician from AKAB Informatique will be assigned to it shortly.
+
+If this is an emergency, call our support at 514-834-3344, option 1.
+
+You can also follow the progress of your request on the AKAB portal: {{portalUrl}}. If you do not have access yet, send us an access request by contacting us (email or phone).
+
+For any question, mention number {{number}}.
 
 ${SIGN.en}`,
       action: "View my ticket",
