@@ -286,6 +286,20 @@ export const MODULES = [
     ],
   },
   {
+    key: "opps",
+    audience: "staff",
+    label: { fr: "Opportunités", en: "Opportunities" },
+    permissions: [
+      { key: "opps.view", label: { fr: "Voir les opportunités", en: "View opportunities" }, description: { fr: "Liste, détail et rapport des opportunités signalées", en: "List, detail and report of the flagged opportunities" } },
+      { key: "opps.create", label: { fr: "Signaler une opportunité", en: "Flag an opportunity" }, description: { fr: "Signaler une opportunité à partir d'un client, ajouter des notes", en: "Flag an opportunity for a client, add notes" } },
+      {
+        key: "opps.manage",
+        label: { fr: "Gérer les opportunités", en: "Manage opportunities" },
+        description: { fr: "Prendre en charge, assigner, lier une soumission, un contrat, un frais ou un projet, fermer et rouvrir", en: "Take or assign, link a quote, contract, charge or project, close and reopen" },
+      },
+    ],
+  },
+  {
     key: "messages",
     audience: "staff",
     label: { fr: "Babillard", en: "Message board" },
@@ -749,7 +763,7 @@ export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized;
   { key: "ittools", audience: "staff", label: { fr: "Mes outils TI", en: "My IT tools" }, modules: ["unifi", "vault"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "proj", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "reports", "hr"] },
-  { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opportunities", "quotes"] },
+  { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opps", "opportunities", "quotes"] },
   { key: "marketing", audience: "staff", label: { fr: "Marketing", en: "Marketing" }, modules: ["newsletter"] },
   { key: "accounting", audience: "staff", label: { fr: "Comptabilité", en: "Accounting" }, modules: ["accounting"] },
   { key: "admin", audience: "staff", label: { fr: "Paramètres admin", en: "Admin settings" }, modules: ["admin"] },
@@ -847,6 +861,8 @@ export const SYSTEM_ROLES: Array<{
       "messages.post",
       "messages.pin",
       "messages.email",
+      "opps.view",
+      "opps.create",
     ],
     locked: false,
   },

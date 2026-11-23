@@ -3915,3 +3915,82 @@ export const watchState = pgTable(
   },
   (t) => [primaryKey({ columns: [t.kind, t.itemId] })],
 );
+
+/**
+ * Opportunités: a lead a technician flags for the sales technician (shared/opps.ts). Not the Ventes pipeline
+ * (sales_opportunities): this is the intake and the backlog. Closed ones are archived, never deleted.
+ */
+export const opps = pgTable(
+  "opps",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** "O-1001": the next one is the highest + 1 */
+    number: text("number").notNull(),
+    clientId: uuid("client_id")
+      .notNull()
+      .references(() => clients.id, { onDelete: "restrict" }),
+    contactId: uuid("contact_id")
+      .notNull()
+      .references(() => clientContacts.id, { onDelete: "restrict" }),
+    description: text("description").notNull(),
+    /** ticket | sales_call | tech_call | onsite | email | other (shared/opps.ts) */
+    source: text("source").notNull().default("other"),
+    /** quote_only | needs_call (shared/opps.ts) */
+    handling: text("handling").notNull().default("quote_only"),
+    /** new | working | won | lost | canceled */
+    status: text("status").notNull().default("new"),
+    /** The sales technician in charge */
+    ownerId: uuid("owner_id").references(() => users.id, { onDelete: "set null" }),
+    /** The ticket it came from (no foreign key: a ticket may be a copy of another source); number and title are a snapshot */
+    ticketId: bigint("ticket_id", { mode: "number" }),
+    ticketNumber: text("ticket_number"),
+    ticketTitle: text("ticket_title"),
+    lostReason: text("lost_reason"),
+    closeNote: text("close_note"),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: created(),
+    updatedAt: updated(),
+    takenAt: timestamp("taken_at", { withTimezone: true }),
+    closedAt: timestamp("closed_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("opps_number_unique").on(t.number), index("opps_status_idx").on(t.status), index("opps_client_idx").on(t.clientId), index("opps_ticket_idx").on(t.ticketId)],
+);
+
+/** What an opportunity became: a quote, a contract, a charge or a project of its client (label = snapshot, built by the server) */
+export const oppLinks = pgTable(
+  "opp_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    oppId: uuid("opp_id")
+      .notNull()
+      .references(() => opps.id, { onDelete: "cascade" }),
+    /** quote | contract | charge | project (shared/opps.ts) */
+    kind: text("kind").notNull(),
+    refId: text("ref_id").notNull(),
+    label: text("label").notNull(),
+    createdBy: uuid("created_by")
+      .notNull()
+      .references(() => users.id),
+    createdAt: created(),
+  },
+  (t) => [uniqueIndex("opp_links_unique").on(t.oppId, t.kind, t.refId)],
+);
+
+/** The notes of an opportunity, and the system notes written on each change (authorId null) */
+export const oppNotes = pgTable(
+  "opp_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    oppId: uuid("opp_id")
+      .notNull()
+      .references(() => opps.id, { onDelete: "cascade" }),
+    authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
+    /** note | system */
+    kind: text("kind").notNull().default("note"),
+    text: text("text").notNull(),
+    createdAt: created(),
+  },
+  (t) => [index("opp_notes_opp_idx").on(t.oppId, t.createdAt)],
+);

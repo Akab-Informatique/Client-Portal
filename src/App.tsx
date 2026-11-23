@@ -47,6 +47,7 @@ const ContractsPage = lazy(() => pageLoaders.contracts().then((m) => ({ default:
 const VendorPaymentsPage = lazy(() => pageLoaders.vendorPayments().then((m) => ({ default: m.VendorPaymentsPage })));
 const PaymentsPage = lazy(() => pageLoaders.payments().then((m) => ({ default: m.PaymentsPage })));
 const SalesPage = lazy(() => pageLoaders.sales().then((m) => ({ default: m.SalesPage })));
+const OppsPage = lazy(() => pageLoaders.opps().then((m) => ({ default: m.OppsPage })));
 const QuotesPage = lazy(() => pageLoaders.quotes().then((m) => ({ default: m.QuotesPage })));
 const QuoteEditor = lazy(() => pageLoaders.quote().then((m) => ({ default: m.QuoteEditor })));
 const AccountingPage = lazy(() => pageLoaders.accounting().then((m) => ({ default: m.AccountingPage })));
@@ -155,6 +156,7 @@ function StaffApp() {
         <Route path="accounting/vendor-payments" element={<Guard permission="accounting.view"><VendorPaymentsPage /></Guard>} />
         <Route path="accounting/payments" element={<Guard permission="accounting.view"><PaymentsPage /></Guard>} />
         <Route path="sales" element={<Guard permission="opportunities.view"><SalesPage /></Guard>} />
+        <Route path="opps" element={<Guard permission="opps.view"><OppsPage /></Guard>} />
         <Route path="accounting/quotes" element={<Guard permission="quotes.view"><QuotesPage /></Guard>} />
         <Route path="accounting/quotes/:id" element={<Guard permission="quotes.view"><QuoteEditor /></Guard>} />
         <Route path="*" element={<Navigate to="/" replace />} />

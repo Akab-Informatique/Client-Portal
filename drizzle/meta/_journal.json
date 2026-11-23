@@ -1352,6 +1352,13 @@
       "when": 1794941143454,
       "tag": "0192_happy_professor_monster",
       "breakpoints": true
+    },
+    {
+      "idx": 193,
+      "version": "7",
+      "when": 1795468106662,
+      "tag": "0193_aberrant_gertrude_yorkes",
+      "breakpoints": true
     }
   ]
 }

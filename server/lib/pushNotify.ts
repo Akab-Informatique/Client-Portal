@@ -28,6 +28,8 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "project.note": { fr: "Note de projet pour vous", en: "A project note for you" },
   "proj.kickoff": { fr: "Vous dirigez un projet", en: "You lead a project" },
   "proj.assigned": { fr: "Tâche de projet pour vous", en: "Project task for you" },
+  "opp.new": { fr: "Nouvelle opportunité", en: "New opportunity" },
+  "opp.assigned": { fr: "Opportunité assignée à vous", en: "Opportunity assigned to you" },
   "pipeline.day_added": { fr: "Ajouté à votre journée", en: "Added to your day" },
   "security.alert": { fr: "Alerte de sécurité", en: "Security alert" },
   "breakroom.invite": { fr: "Invitation à jouer", en: "Game invitation" },

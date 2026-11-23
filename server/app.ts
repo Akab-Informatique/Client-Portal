@@ -43,6 +43,7 @@ import { ticketRoutes } from "./routes/tickets.ts";
 import { ticketBoardRoutes } from "./routes/ticketBoards.ts";
 import { quoteRoutes } from "./routes/quotes.ts";
 import { salesRoutes } from "./routes/sales.ts";
+import { oppsRoutes } from "./routes/opps.ts";
 import { vendorPaymentRoutes } from "./routes/vendorPayments.ts";
 import { storeRoutes } from "./routes/store.ts";
 import { pipelineRoutes } from "./routes/pipeline.ts";
@@ -167,6 +168,7 @@ export function createApp() {
   api.route("/store", storeRoutes);
   api.route("/quotes", quoteRoutes);
   api.route("/sales", salesRoutes);
+  api.route("/opps", oppsRoutes);
   api.route("/vendor-payments", vendorPaymentRoutes);
   api.route("/pipeline", pipelineRoutes);
   api.route("/sops", sopRoutes);

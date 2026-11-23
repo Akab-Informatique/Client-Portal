@@ -54,6 +54,7 @@ import { contractNote } from "./contract";
 import { EmailSend } from "./EmailSend";
 import { ContactTicketsList, useContactOpen } from "./ContactTickets";
 import { ChargeButtons } from "./Charges";
+import { TicketOpps } from "@/pages/opps/TicketOpps";
 import { PriorityDialog, TicketPriorities } from "./Planning";
 import { TicketSmsPanel, useTicketSms } from "@/pages/sms/SmsPage";
 import {
@@ -743,6 +744,7 @@ function TicketBody({
               {editable && !partial && tk.assignee?.id !== me.id && statusKind !== "complete" && <QuickAction icon={UserCheck} label={t("tickets.accept.button")} onClick={() => setAccepting(true)} accent />}
               {!partial && <QuickAction icon={Tag} label={t("equipLabel.button")} onClick={() => setEquipLabel(true)} />}
               {editable && !partial && tk.local && statusKind !== "complete" && <QuickAction icon={GitMerge} label={t("tickets.merge.button")} onClick={() => setMerging(true)} />}
+              {!partial && <TicketOpps tk={tk} />}
               {editable && !partial && tk.local && statusKind !== "complete" && can("proj.edit") && <QuickAction icon={FolderKanban} label={t("projBill.fromTicket.button")} onClick={() => void makeProject.fromTicket(tk.id)} />}
               {can("pipeline.edit") && !partial && statusKind !== "complete" && (
                 <QuickAction icon={CalendarPlus} label={dayState.data?.added ? (dayState.data.dueTime ? t("tickets.addDay.inBefore", { time: dayState.data.dueTime }) : t("tickets.addDay.in")) : t("tickets.addDay.title")} onClick={() => setAddingDay(true)} accent={dayState.data?.added} />

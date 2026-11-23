@@ -8,6 +8,20 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-23.3",
+    date: "2026-11-23",
+    sections: [
+      {
+        fr: "Vente",
+        en: "Sales",
+        items: [
+          { fr: "Nouvelle section Opportunités (menu Vente) : un technicien signale une demande de vente pour le technicien aux ventes, avec le client, le contact, la description, et si une soumission suffit ou s'il faut appeler le client. Le bouton « Créer une opportunité » est dans la fenêtre du billet, qui reste liée à l'opportunité. On choisit par courriel qui informer; un badge dans le menu et une étoile près de Vente indiquent les nouvelles.", en: "New Opportunities section (Sales menu): a technician flags a sales request for the sales technician, with the client, the contact, the description, and whether a quote is enough or the client must be called. The \"Create an opportunity\" button is in the ticket window, and the ticket stays linked. You pick who is told by email; a badge in the menu and a star near Sales show the new ones." },
+          { fr: "Depuis une opportunité on crée une soumission (liée automatiquement) ou on lie un contrat, un frais ou un projet. Une opportunité gagnée, perdue ou annulée est archivée, jamais supprimée, et l'onglet Rapport compte ce qu'on a gagné, perdu et ce que ça a rapporté.", en: "From an opportunity you create a quote (linked automatically) or link a contract, a charge or a project. A won, lost or canceled opportunity is archived, never deleted, and the Report tab counts what was won, lost and what it brought in." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-23.2",
     date: "2026-11-23",
     sections: [

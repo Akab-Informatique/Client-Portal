@@ -1,4 +1,4 @@
-import { Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, Archive, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Network, Newspaper, CalendarClock, Receipt, KeyRound, Store, Ticket, Wallet, TrendingUp, Wrench, Vault, type LucideIcon } from "lucide-react";
+import { Flag, Tv, FilePlus2, FileText, Kanban, HeartHandshake, MessagesSquare, History, Workflow, Coffee, BarChart3, BookOpen, Archive, ClipboardCheck, Building2, CalendarCheck, Clock, FileSignature, LayoutDashboard, Mail, Megaphone, MonitorSmartphone, Network, Newspaper, CalendarClock, Receipt, KeyRound, Store, Ticket, Wallet, TrendingUp, Wrench, Vault, type LucideIcon } from "lucide-react";
 import type { PermissionKey } from "@shared/permissions";
 
 /**
@@ -38,6 +38,8 @@ export type NavModule = {
   alsoPaths?: string[];
   /** A collapsible sub-menu inside its section (the entries of one group sit under its header) */
   group?: "security";
+  /** A live counter shown on the entry (gold number; a dot when collapsed) */
+  badge?: "opps";
 };
 
 /** The sub-menus inside a section */
@@ -57,6 +59,7 @@ export const STAFF_MODULES: NavModule[] = [
   { key: "contracts", path: "/accounting/contracts", labelKey: "nav.contracts", icon: FileText, section: "accounting", permission: "accounting.view" },
   { key: "vendorPayments", path: "/accounting/vendor-payments", labelKey: "nav.vendorPayments", icon: CalendarClock, section: "accounting", permission: "accounting.view" },
   { key: "approvals", path: "/accounting/approvals", labelKey: "nav.approvals", icon: ClipboardCheck, section: "accounting", permission: "accounting.view" },
+  { key: "opps", path: "/opps", labelKey: "nav.opps", icon: Flag, section: "sales", permission: "opps.view", badge: "opps" },
   { key: "sales", path: "/sales", labelKey: "nav.salesDashboard", icon: TrendingUp, section: "sales", permission: "opportunities.view" },
   { key: "quotes", path: "/accounting/quotes", labelKey: "nav.quotesLatest", icon: History, section: "sales", permission: "quotes.view" },
   { key: "quotesNew", path: "/accounting/quotes/new", labelKey: "nav.quotesNew", icon: FilePlus2, section: "sales", permission: "quotes.manage" },

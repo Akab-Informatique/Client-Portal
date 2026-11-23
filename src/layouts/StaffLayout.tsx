@@ -48,6 +48,8 @@ import {
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NAV_GROUPS, NAV_SECTIONS, STAFF_MODULES, type NavModule } from "@/modules/registry";
+import { useOppBadge } from "@/pages/opps/shared";
+import { NewOppsStar, OppsCount } from "@/pages/opps/SidebarOpps";
 import { moduleVisible } from "@/modules/visible";
 import { signOut, useCan, useMe } from "@/lib/session";
 import { cn, initials } from "@/lib/utils";
@@ -172,7 +174,7 @@ export function StaffLayout() {
 
 type Fav = { on: boolean; toggle: () => void };
 
-function NavItem({ m, collapsed, active, fav, idPrefix = "nav" }: { m: NavModule; collapsed: boolean; active: boolean; fav?: Fav; idPrefix?: string }) {
+function NavItem({ m, collapsed, active, fav, idPrefix = "nav", count = 0 }: { m: NavModule; collapsed: boolean; active: boolean; fav?: Fav; idPrefix?: string; count?: number }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   if (m.upcoming) {
@@ -214,6 +216,7 @@ function NavItem({ m, collapsed, active, fav, idPrefix = "nav" }: { m: NavModule
       {active && <motion.span layoutId={`${idPrefix}-bar`} className="absolute -left-3 top-2 bottom-2 w-1 rounded-r-full bg-grad-gold" />}
       <m.icon className={cn("relative size-[18px] shrink-0", active && "text-primary")} />
       {!collapsed && <span className={cn("relative truncate", fav && "pr-6")}>{t(m.labelKey)}</span>}
+      <OppsCount count={count} collapsed={collapsed} />
     </NavLink>
   );
   if (collapsed) {
@@ -257,6 +260,10 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
   const can = useCan();
   const location = useLocation();
   const me = useMe();
+  // new opportunities to take: the entry's number and the Sales section star (only with opps.view)
+  const oppBadge = useOppBadge(can("opps.view"));
+  const oppsNew = can("opps.view") ? (oppBadge.data?.new ?? 0) : 0;
+  const countOf = (m: NavModule) => (m.badge === "opps" ? oppsNew : 0);
   const visible = (m: NavModule) => m.upcoming || moduleVisible(m, me, can);
   // the entry with the longest matching path is the one shown (Nouvelle soumission over Dernières soumissions)
   const isActive = (path: string) => {
@@ -329,7 +336,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
             <ul className={cn("space-y-1", !collapsed && "pb-2")}>
               {favs.map((m) => (
                 <li key={m.key}>
-                  <NavItem m={m} collapsed={collapsed} active={isOn(m)} fav={favOf(m)} idPrefix="fav" />
+                  <NavItem m={m} count={countOf(m)} collapsed={collapsed} active={isOn(m)} fav={favOf(m)} idPrefix="fav" />
                 </li>
               ))}
             </ul>
@@ -343,7 +350,10 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
           return (
             <div key={g.key}>
               {collapsed ? (
-                <div className="mx-auto mb-2 h-px w-6 bg-border first:hidden" />
+                <>
+                  {g.key === "sales" && <NewOppsStar count={oppsNew} collapsed />}
+                  <div className="mx-auto mb-2 h-px w-6 bg-border first:hidden" />
+                </>
               ) : (
                 <button
                   type="button"
@@ -352,6 +362,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                   className="group flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
                 >
                   <span className="flex-1 truncate">{t(g.labelKey)}</span>
+                  {g.key === "sales" && <NewOppsStar count={oppsNew} />}
                   {!shown && hasActive && <span className="size-1.5 rounded-full bg-grad-gold" />}
                   {!shown && <span className="font-mono text-[10px] font-normal tracking-normal opacity-60">{g.items.filter((m) => !m.upcoming).length}</span>}
                   <ChevronDown className={cn("size-3.5 shrink-0 transition-transform duration-200", !shown && "-rotate-90")} />
@@ -363,7 +374,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                     .filter((m) => !m.group)
                     .map((m) => (
                       <li key={m.key}>
-                        <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} fav={favOf(m)} />
+                        <NavItem m={m} count={countOf(m)} collapsed={collapsed} active={!m.upcoming && isOn(m)} fav={favOf(m)} />
                       </li>
                     ))}
                   {/* a sub-menu inside the section (Sécurité): collapsible too, remembered with the sections */}
@@ -389,7 +400,7 @@ function SidebarContent({ collapsed, onToggle }: { collapsed: boolean; onToggle?
                         <ul className={cn("space-y-1 overflow-hidden", !collapsed && "ml-3 border-l pl-2", !collapsed && !subOpen && "hidden")} inert={!subOpen}>
                           {sub.map((m) => (
                             <li key={m.key}>
-                              <NavItem m={m} collapsed={collapsed} active={!m.upcoming && isOn(m)} fav={favOf(m)} />
+                              <NavItem m={m} count={countOf(m)} collapsed={collapsed} active={!m.upcoming && isOn(m)} fav={favOf(m)} />
                             </li>
                           ))}
                         </ul>
