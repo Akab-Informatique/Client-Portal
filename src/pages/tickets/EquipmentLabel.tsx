@@ -23,7 +23,7 @@ function Label({ ticket, format, k, n, className }: { ticket: Ticket; format: La
   const size = SIZE[format];
   return (
     <div
-      className={cn("box-border flex shrink-0 flex-col overflow-hidden bg-white text-black", dymo ? "px-[0.1in] py-[0.07in]" : "p-[0.14in]", className)}
+      className={cn("box-border flex shrink-0 flex-col overflow-hidden bg-white text-black", dymo ? "py-[0.07in] pl-[0.12in] pr-[0.35in]" : "p-[0.14in] pr-[0.35in]", className)}
       style={{ width: size.width, height: size.height, colorScheme: "light" }}
     >
       <p className={cn("truncate font-mono font-extrabold leading-none", dymo ? "text-[22px]" : "text-[34px]")}>{ticket.number}</p>
