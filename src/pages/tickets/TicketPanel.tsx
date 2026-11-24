@@ -338,7 +338,7 @@ function TicketBody({
       return !v;
     });
   // the exchange shown: the ticket activity, or the texts with the client
-  const [thread, setThread] = useState<"activity" | "sms" | "files">("activity");
+  const [thread, setThread] = useState<"activity" | "sms" | "files" | "tasks">("activity");
   const { data: texts } = useTicketSms(tk.id, can("sms.view") && !partial);
   // texts received and not looked at yet; a new one also moved the ticket to "needs attention": the ticket is read again
   const unreadTexts = (texts?.conversations ?? []).reduce((n, c) => n + c.unread, 0);
@@ -785,12 +785,10 @@ function TicketBody({
               partial={partial}
               onSave={(description) => update.mutate({ description })}
             />
-            {/* the tasks to complete before the ticket can be: right under the description, folded away or open */}
-            <ChecklistCard tk={tk} editable={editable && !partial} />
             <AiPanel tk={tk} onToNote={(text) => setDraft({ text, internal: true })} />
             {(
               <div className="flex items-center gap-1 rounded-xl border p-1 text-xs">
-                {(can("sms.view") ? (["activity", "sms", "files"] as const) : (["activity", "files"] as const)).map((k) => (
+                {(can("sms.view") ? (["activity", "sms", "files", "tasks"] as const) : (["activity", "files", "tasks"] as const)).map((k) => (
                   <button
                     key={k}
                     type="button"
@@ -802,8 +800,13 @@ function TicketBody({
                       k === "sms" && unreadTexts > 0 && thread !== "sms" && "animate-attention font-semibold text-orange-200",
                     )}
                   >
-                    {k === "activity" ? <Clock3 className="size-3.5" /> : k === "files" ? <Paperclip className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
-                    {k === "files" ? t("tickets.files.tab") : t(`sms.thread.${k}`)}
+                    {k === "activity" ? <Clock3 className="size-3.5" /> : k === "files" ? <Paperclip className="size-3.5" /> : k === "tasks" ? <ListChecks className="size-3.5" /> : <MessageSquareText className="size-3.5" />}
+                    {k === "files" ? t("tickets.files.tab") : k === "tasks" ? t("tickets.checklist.tab") : t(`sms.thread.${k}`)}
+                    {k === "tasks" && (tk.checklist?.length ?? 0) > 0 && (
+                      <span className={cn("rounded-full px-1.5 font-mono text-[10px]", tk.checklist!.every((x) => x.done) ? "bg-emerald-500/25 text-emerald-300" : "bg-black/15")} title={t("tickets.checklist.tabHint")}>
+                        {tk.checklist!.filter((x) => !x.done).length}/{tk.checklist!.length}
+                      </span>
+                    )}
                     {k === "files" && (tk.attachments?.length ?? 0) > 0 && <span className="rounded-full bg-black/15 px-1.5 font-mono text-[10px]">{tk.attachments!.length}</span>}
                     {k === "sms" && unreadTexts > 0 && (
                       <span className="rounded-full bg-orange-500 px-1.5 font-mono text-[10px] font-bold text-white" title={t("sms.ticket.unread", { count: unreadTexts })}>
@@ -817,7 +820,9 @@ function TicketBody({
                 ))}
               </div>
             )}
-            {thread === "files" ? (
+            {thread === "tasks" ? (
+              <ChecklistCard tk={tk} editable={editable && !partial} tab />
+            ) : thread === "files" ? (
               <TicketFiles tk={tk} editable={editable && !partial} />
             ) : thread === "sms" && can("sms.view") ? (
               <TicketSmsPanel ticketId={tk.id} phone={phone} companyId={tk.company.id} clientName={tk.contact || null} />
@@ -829,7 +834,7 @@ function TicketBody({
           <div className="flex flex-wrap items-center gap-1.5 pb-2 lg:pr-2">
             <ChargeButtons tk={tk} editable={editable} partial={partial} />
           </div>
-          {editable && thread !== "sms" && thread !== "files" && (
+          {editable && thread !== "sms" && thread !== "files" && thread !== "tasks" && (
             <div className="sticky bottom-0 z-10 -mx-2 bg-gradient-to-t from-background via-background/95 to-transparent px-2 pb-4 pt-1 lg:static lg:mx-0 lg:bg-none lg:px-0 lg:pr-2">
               <NoteComposer tk={tk} draft={draft} onDraftUsed={() => setDraft(null)} focusRequest={focusNote} />
             </div>

@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-23.4",
+    date: "2026-11-23",
+    sections: [
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Nouvel onglet « Tâches » après Activité, Textos et Pièces jointes : la liste de contrôle du billet y est, et l'onglet montre les tâches restantes sur le total (1/2 = une tâche reste à faire, 0/2 = tout est fait).", en: "New \"Tasks\" tab after Activity, Texts and Attachments: the ticket's checklist lives there, and the tab shows tasks left out of the total (1/2 = one task left, 0/2 = all done)." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-23.3",
     date: "2026-11-23",
     sections: [

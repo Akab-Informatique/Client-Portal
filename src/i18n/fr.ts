@@ -4882,6 +4882,9 @@ const fr = {
       delete: "Supprimer la tâche",
       rule: "Le billet ne peut pas être fermé tant que toutes les tâches ne sont pas faites. Une tâche qui dépend d'une autre ne peut être cochée qu'après elle.",
       newHint: "Entrée ajoute la tâche. Une tâche peut dépendre d'une tâche plus haut : elle ne pourra être cochée qu'après. Le billet ne se fermera qu'une fois toutes les tâches faites.",
+      tab: "Tâches",
+      tabHint: "Tâches restantes / total",
+      empty: "Aucune tâche pour ce billet.",
       blocksClose_one: "{{count}} tâche à faire avant de fermer",
       blocksClose_other: "{{count}} tâches à faire avant de fermer",
       errors: {

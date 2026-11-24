@@ -15,7 +15,7 @@ import { ticketErrorText, type ChecklistItem, type TicketDetail } from "./shared
  * cannot be ticked before). Shown above the activity, folded away or open as the person likes; open by itself
  * while something is left to do.
  */
-export function ChecklistCard({ tk, editable }: { tk: TicketDetail; editable: boolean }) {
+export function ChecklistCard({ tk, editable, tab = false }: { tk: TicketDetail; editable: boolean; tab?: boolean }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const items = tk.checklist ?? [];
@@ -24,7 +24,7 @@ export function ChecklistCard({ tk, editable }: { tk: TicketDetail; editable: bo
   // open while something is left to do; a choice made here stays
   const [adding, setAdding] = useState(false);
   const [openChoice, setOpenChoice] = useState<boolean | null>(null);
-  const open = openChoice ?? (left > 0 || adding);
+  const open = tab || (openChoice ?? (left > 0 || adding));
   const [text, setText] = useState("");
   const [after, setAfter] = useState("");
   const refresh = () => {
@@ -47,9 +47,9 @@ export function ChecklistCard({ tk, editable }: { tk: TicketDetail; editable: bo
     setText("");
     setAfter("");
   };
-  if (!editable && items.length === 0) return null;
+  if (!editable && items.length === 0) return tab ? <p className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">{t("tickets.checklist.empty")}</p> : null;
   // nothing yet: a quiet line to start one
-  if (items.length === 0 && !adding) {
+  if (!tab && items.length === 0 && !adding) {
     return (
       <button type="button" onClick={() => setAdding(true)} className="flex w-full shrink-0 items-center gap-2 rounded-xl border border-dashed px-4 py-2.5 text-left text-sm text-muted-foreground transition-colors hover:border-[color:var(--gold)]/50 hover:text-foreground">
         <ListChecks className="size-4 text-primary" /> {t("tickets.checklist.start")}
@@ -60,7 +60,7 @@ export function ChecklistCard({ tk, editable }: { tk: TicketDetail; editable: bo
   const pct = items.length ? Math.round((done / items.length) * 100) : 0;
   return (
     <section className="glass shrink-0 overflow-hidden rounded-2xl border" aria-label={t("tickets.checklist.title")}>
-      <button type="button" onClick={() => setOpenChoice(!open)} aria-expanded={open} className="flex w-full items-center gap-3 px-4 py-2.5 text-left">
+      <button type="button" onClick={() => !tab && setOpenChoice(!open)} aria-expanded={open} className={cn("flex w-full items-center gap-3 px-4 py-2.5 text-left", tab && "cursor-default")}>
         <ListChecks className="size-4 shrink-0 text-primary" />
         <span className="text-sm font-semibold">{t("tickets.checklist.title")}</span>
         {items.length > 0 && (
@@ -74,7 +74,7 @@ export function ChecklistCard({ tk, editable }: { tk: TicketDetail; editable: bo
           </>
         )}
         {left > 0 && <span className="hidden text-[11px] text-muted-foreground md:inline">{t("tickets.checklist.blocksClose", { count: left })}</span>}
-        <ChevronDown className={cn("ml-auto size-4 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")} />
+        {!tab && <ChevronDown className={cn("ml-auto size-4 shrink-0 text-muted-foreground transition-transform", !open && "-rotate-90")} />}
       </button>
       {open && (
         <div className="space-y-2 border-t px-4 py-3">
@@ -98,7 +98,7 @@ export function ChecklistCard({ tk, editable }: { tk: TicketDetail; editable: bo
                 add();
               }}
             >
-              <Input value={text} onChange={(e) => setText(e.target.value)} maxLength={300} placeholder={t("tickets.checklist.add")} aria-label={t("tickets.checklist.add")} className="h-8 min-w-48 flex-1 text-sm" autoFocus={adding && items.length === 0} />
+              <Input value={text} onChange={(e) => setText(e.target.value)} maxLength={300} placeholder={t("tickets.checklist.add")} aria-label={t("tickets.checklist.add")} className="h-8 min-w-48 flex-1 text-sm" autoFocus={(adding || tab) && items.length === 0} />
               {items.length > 0 && (
                 <select value={after} onChange={(e) => setAfter(e.target.value)} aria-label={t("tickets.checklist.after")} className="h-8 max-w-56 rounded-md border bg-transparent px-2 text-xs text-muted-foreground outline-none focus:ring-2 focus:ring-[color:var(--gold)]/40">
                   <option value="">{t("tickets.checklist.noDependency")}</option>

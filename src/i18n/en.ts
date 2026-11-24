@@ -4884,6 +4884,9 @@ const en: Dict = {
       delete: "Delete the task",
       rule: "The ticket cannot be closed until every task is done. A task that depends on another can only be ticked after it.",
       newHint: "Enter adds the task. A task can depend on one above it: it can only be ticked after. The ticket can only be closed once every task is done.",
+      tab: "Tasks",
+      tabHint: "Tasks left / total",
+      empty: "No tasks on this ticket.",
       blocksClose_one: "{{count}} task to do before closing",
       blocksClose_other: "{{count}} tasks to do before closing",
       errors: {
