@@ -15,7 +15,8 @@ export const WHATS_NEW: WhatsNewEntry[] = [
         fr: "Billets",
         en: "Tickets",
         items: [
-          { fr: "Dans « Mes billets », le filtre de statut « Complété » montre maintenant vos billets complétés (il n'en montrait aucun).", en: "In \"My tickets\", the \"Complete\" status filter now shows your completed tickets (it showed none)." },
+          { fr: "Dans « Mes billets », « Non assignés » et « À échéance », le filtre de statut « Complété » montre maintenant les billets complétés (il n'en montrait aucun).", en: "In \"My tickets\", \"Unassigned\" and \"Due\", the \"Complete\" status filter now shows the completed tickets (it showed none)." },
+          { fr: "Le filtre « En retard » (et « Aujourd'hui ») ne compte plus les billets complétés dans la vue « Tous ».", en: "The \"Overdue\" (and \"Today\") filter no longer counts completed tickets in the \"All\" view." },
         ],
       },
     ],

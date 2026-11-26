@@ -1203,6 +1203,14 @@ describe("tickets (sample data)", () => {
     expect(everything.length).toBeGreaterThan(0);
     const idsOf = (items: any[]) => items.map((x: any) => x.id).sort();
     expect(idsOf(mineDone)).toEqual(idsOf(everything));
+    // "overdue" never counts a closed ticket, even in "all" (it listed completed tickets as late)
+    const late = (await tech.get("/api/tickets?view=all&due=overdue")).json.items;
+    expect(late.length).toBeGreaterThan(0);
+    expect(late.every((t: any) => t.statusKind !== "complete")).toBe(true);
+    // "Unassigned" and "Due" honour a status filter too (completed tickets with no technician)
+    const allDone = (await tech.get("/api/tickets?view=all&statusKind=complete")).json.items;
+    const unassignedDone = (await tech.get("/api/tickets?view=unassigned&statusKind=complete")).json.items;
+    expect(idsOf(unassignedDone)).toEqual(idsOf(allDone.filter((t: any) => !t.assignee && t.queue !== "alerts")));
 
     const target = all.items[0];
     expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: "2026-11-02" })).status).toBe(200);
