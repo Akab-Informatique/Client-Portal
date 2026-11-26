@@ -759,8 +759,8 @@ export type ModuleKey = (typeof MODULES)[number]["key"];
  */
 export const ACCESS_LAYOUT: { key: string; audience: Audience; label: Localized; modules: ModuleKey[] }[] = [
   { key: "team", audience: "staff", label: { fr: "Équipe", en: "Team" }, modules: ["dashboard", "meetings", "breakroom", "tv"] },
-  { key: "tools", audience: "staff", label: { fr: "Mes outils", en: "My tools" }, modules: ["outlook", "timesheets", "chat", "sops", "kb", "assistant"] },
-  { key: "ittools", audience: "staff", label: { fr: "Mes outils TI", en: "My IT tools" }, modules: ["unifi", "vault"] },
+  { key: "tools", audience: "staff", label: { fr: "Utilitaires", en: "Utilities" }, modules: ["outlook", "timesheets", "chat", "sops", "kb", "assistant"] },
+  { key: "ittools", audience: "staff", label: { fr: "Consoles TI", en: "IT consoles" }, modules: ["unifi", "vault"] },
   { key: "command", audience: "staff", label: { fr: "Centre de commande", en: "Command center" }, modules: ["messages", "tickets", "pipeline", "projects", "proj", "sms", "passbolt"] },
   { key: "management", audience: "staff", label: { fr: "Gestion", en: "Management" }, modules: ["crm", "clientview", "store", "services", "reports", "hr"] },
   { key: "sales", audience: "staff", label: { fr: "Vente", en: "Sales" }, modules: ["opps", "opportunities", "quotes"] },
