@@ -35,7 +35,7 @@ export const fr = {
       save: "Enregistrer",
       clear: "Retirer la cible",
     },
-    charges: { title: "Frais", tileEmpty: "Ajouter du matériel", tileValue: "{{count}} · {{total}}", none: "Aucun frais pour l'instant.", hint: "Le matériel vendu et les autres frais : ils vont à l'approbation tout de suite, pour le client du projet." },
+    charges: { title: "Frais", tileEmpty: "Ajouter du matériel", tileValue: "{{count}} · {{total}}", none: "Aucun frais pour l'instant.", labelShort: "Étiquette", hint: "Le matériel vendu et les autres frais : ils vont à l'approbation tout de suite, pour le client du projet." },
     tasks: {
       title: "Tâches",
       progress: "{{done}}/{{total}} faites",
@@ -165,7 +165,7 @@ export const en = {
       save: "Save",
       clear: "Remove the target",
     },
-    charges: { title: "Charges", tileEmpty: "Add equipment", tileValue: "{{count}} · {{total}}", none: "No charges yet.", hint: "The equipment sold and other fees: they go to approval right away, for the project's client." },
+    charges: { title: "Charges", tileEmpty: "Add equipment", tileValue: "{{count}} · {{total}}", none: "No charges yet.", labelShort: "Label", hint: "The equipment sold and other fees: they go to approval right away, for the project's client." },
     tasks: {
       title: "Tasks",
       progress: "{{done}}/{{total}} done",

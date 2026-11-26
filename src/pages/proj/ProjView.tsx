@@ -27,7 +27,7 @@ import { ProjCalendar } from "./ProjCalendar";
 import { ProjSide } from "./ProjSide";
 import { ProjGauge } from "./ProjGauge";
 import { ProjTasks, projError, initials } from "./ProjTasks";
-import { useProject, type ProjDetail, type ProjStatus, type ProjTask } from "./shared";
+import { useProject, type ProjDetail, type ProjStatus, type ProjTask, type ProjTimer } from "./shared";
 
 const STATUSES: ProjStatus[] = ["planning", "active", "waiting_customer", "waiting_vendor", "done"];
 const inputCls = "h-9 rounded-md border bg-transparent px-2 text-sm outline-none focus:ring-2 focus:ring-violet-500/40 disabled:opacity-60";
@@ -185,7 +185,13 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
   // closing with a timer going asks: enter the time, throw it away, or wait (minimize to the drawer)
   const [closing, setClosing] = useState(false);
   const [, setParams] = useSearchParams();
-  const requestClose = () => (d?.timer && canEdit ? setClosing(true) : onClose());
+  // under 3 minutes (a project only looked at), the time is thrown away without asking, like a ticket's
+  const timerSeconds = (tm: ProjTimer) => tm.baseSeconds + (tm.paused ? 0 : Math.max(0, (Date.now() - new Date(tm.startedAt).getTime()) / 1000));
+  const requestClose = () => {
+    if (!d?.timer || !canEdit) return onClose();
+    if (timerSeconds(d.timer) < 180) return discardTimer.mutate();
+    setClosing(true);
+  };
   const discardTimer = useMutation({
     mutationFn: () => api.post(`/proj/${id}/timer/discard`, {}),
     onSuccess: () => {

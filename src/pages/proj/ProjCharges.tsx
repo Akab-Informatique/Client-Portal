@@ -119,8 +119,14 @@ function ChargesDialog({ d, canEdit, onClose }: { d: ProjDetail; canEdit: boolea
                   {c.rebate > 0 && <span className="ml-1 text-emerald-300">−{c.rebate} %</span>}
                 </span>
                 <span className="w-24 text-right font-mono">{c.billable ? money(c.total) : <span className="text-muted-foreground">{t("projects.charges.notBilled")}</span>}</span>
-                <button type="button" onClick={() => setLabel(c)} title={t("tickets.charges.label.button")} aria-label={t("tickets.charges.label.button")} className="rounded p-1 text-muted-foreground hover:text-primary">
-                  <Tag className="size-3.5" />
+                <button
+                  type="button"
+                  onClick={() => setLabel(c)}
+                  title={t("tickets.charges.label.button")}
+                  aria-label={t("tickets.charges.label.button")}
+                  className="inline-flex items-center gap-1 rounded-md border border-[color:var(--gold)]/40 px-2 py-1 text-[11px] font-medium text-primary transition hover:bg-[color:var(--gold)]/10"
+                >
+                  <Tag className="size-3.5" /> {t("proj.charges.labelShort")}
                 </button>
                 <SupplySelect value={c.supply} disabled={!canEdit || setSupply.isPending} onChange={(v) => setSupply.mutate({ id: c.id, supply: v })} />
                 {c.billable && c.billing && (
