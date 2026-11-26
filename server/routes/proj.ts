@@ -21,6 +21,8 @@ import { syncBillablesNow } from "../lib/billables.ts";
 import { billingSettings } from "../lib/billing.ts";
 import { hourlyRateOf } from "../lib/contracts.ts";
 import { chargesOfProj } from "../lib/projCharges.ts";
+import { notifyTechs } from "../lib/techNotify.ts";
+import { checkOverrun, configuredReviewers, effectiveReviewers, setReviewers } from "../lib/projDelivery.ts";
 import { bpsOfPercent } from "../../shared/rebate.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import {
@@ -134,6 +136,9 @@ const zNote = z.object({
   to: z.array(zEmail).max(10).optional(),
   /** files uploaded first (POST /:id/files), sent with this note */
   attachmentIds: zIds(10).optional(),
+  /** internal notes only: colleagues told, and how */
+  notifyUserIds: zIds(20).optional(),
+  notifyChannels: z.object({ bell: z.boolean(), email: z.boolean(), chat: z.boolean() }).optional(),
 });
 
 const zTimeFields = {
@@ -147,7 +152,7 @@ const zTime = z.object({ ...zTimeFields, hours: z.number().gt(0).max(24) });
 const zStop = z.object({ ...zTimeFields, hours: z.number().gt(0).max(24).optional() });
 
 const zListQuery = z.object({
-  status: z.enum(["open", "done", "all"]).optional(),
+  status: z.enum(["open", "done", "delivered", "all"]).optional(),
   q: z.string().max(200).optional(),
   lead: zUuid.optional(),
   member: zUuid.optional(),
@@ -232,6 +237,13 @@ async function billingColumns(o: { mode: string; contractId: string | null | und
   return { billingMode: "contract" as const, ...none, contractId: k.id as string | null };
 }
 
+/** The client's name, or empty */
+async function clientNameOf(id: string | null): Promise<string> {
+  if (!id) return "";
+  const [c] = await db().select({ name: schema.clients.name }).from(schema.clients).where(eq(schema.clients.id, id));
+  return c?.name ?? "";
+}
+
 /** Tells the person a task was given to them (never to oneself) */
 async function tellAssignee(p: ProjRow, who: string | null | undefined, by: { id: string; name: string }, title: string) {
   if (!who || who === by.id) return;
@@ -252,6 +264,7 @@ export const projRoutes = new Hono<AppEnv>()
     const conds = [];
     if (status === "open") conds.push(inArray(schema.projProjects.status, ["planning", "active", "waiting_customer", "waiting_vendor"]));
     if (status === "done") conds.push(inArray(schema.projProjects.status, ["done", "cancelled"]));
+    if (status === "delivered") conds.push(eq(schema.projProjects.status, "delivered"));
     if (q.data.lead) conds.push(eq(schema.projProjects.leadId, q.data.lead));
     if (q.data.client) conds.push(eq(schema.projProjects.clientId, q.data.client));
     let rows = await db()
@@ -302,6 +315,22 @@ export const projRoutes = new Hono<AppEnv>()
       .innerJoin(schema.projProjects, eq(schema.projProjects.id, schema.projTimers.projectId))
       .where(eq(schema.projTimers.userId, a.user.id));
     return c.json(rows.map((r) => ({ projectId: r.p.id, number: r.p.number, name: r.p.name, seconds: timerSeconds(r.t), paused: r.t.pausedAt !== null })));
+  })
+
+
+  /** Who is told when a project is delivered (the picked people; none picked = the master administrators) */
+  .get("/delivery-reviewers", requirePermission("proj.view"), async (c) => {
+    const picked = await configuredReviewers();
+    return c.json({ userIds: picked, effective: await effectiveReviewers() });
+  })
+  .put("/delivery-reviewers", requirePermission("proj.manage"), async (c) => {
+    const a = auth(c);
+    const b = await body(c, z.object({ userIds: zIds(30) }));
+    const ids = [...new Set(b.userIds)];
+    if (ids.length) await activeStaff(ids);
+    await setReviewers(ids);
+    await audit(a.user.id, "proj.delivery_reviewers", "proj", { userIds: ids });
+    return c.json({ userIds: ids, effective: await effectiveReviewers() });
   })
 
   /** The client's active contracts a project can be billed under, with what an hour costs under each */
@@ -509,6 +538,9 @@ export const projRoutes = new Hono<AppEnv>()
     const set: Partial<typeof schema.projProjects.$inferInsert> = { updatedAt: now, clientId, contactId, leadId, startDate, dueDate };
     if (p.name !== undefined) set.name = p.name;
     if (p.status !== undefined) {
+      // a delivered project is closed (or sent back) by whoever manages projects; leaving the state clears who delivered it
+      if (cur.status === "delivered" && !isManager(a)) throw new HTTPException(403, { message: "project_delivered" });
+      if (cur.status === "delivered") Object.assign(set, { deliveredAt: null, deliveredBy: null });
       set.status = p.status;
       set.doneAt = p.status === "done" ? (cur.doneAt ?? now) : null;
     }
@@ -541,9 +573,70 @@ export const projRoutes = new Hono<AppEnv>()
     } else if (leadId && leadId !== cur.leadId) {
       await db().insert(schema.projMembers).values({ projectId: cur.id, userId: leadId }).onConflictDoNothing();
     }
+    if (p.soldHours !== undefined) await checkOverrun(cur.id);
     await audit(a.user.id, "proj.updated", cur.id, { fields: Object.keys(p) });
     const fresh = await loadProj(cur.id);
     return c.json(await viewFor(fresh, a));
+  })
+
+
+  /** Notify colleagues about this project, like a ticket: the bell always, an email / text / Teams as ticked */
+  .post("/:id/notify-tech", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    if (!rateLimit(`proj-notify-tech:${a.user.id}`, 30, 60_000).ok) throw new HTTPException(429, { message: "rate_limited" });
+    const p = await loadProj(c.req.param("id"));
+    const b = await body(
+      c,
+      z.object({
+        userIds: zIds(20).min(1),
+        message: z.string().trim().max(1000).default(""),
+        channels: z.object({ email: z.boolean(), sms: z.boolean(), teams: z.boolean() }),
+      }),
+    );
+    const client = await clientNameOf(p.clientId);
+    const people = await notifyTechs(
+      { id: 0, number: p.number, title: p.name, company: { name: client }, link: `/pipeline?section=tickets&pj=${p.id}`, head: `vous signale le projet ${p.number} (${p.name}${client ? `, ${client}` : ""})`, bellType: "proj.notify" },
+      { id: a.user.id, name: a.realUser.name },
+      b.userIds,
+      b.message,
+      b.channels,
+    );
+    if (!people.length) throw new HTTPException(400, { message: "no_recipient" });
+    await audit(a.user.id, "proj.notify_tech", p.id, { to: people.map((x) => x.id), channels: b.channels });
+    return c.json({ people });
+  })
+
+  /** Delivered: the work is done, waiting to be checked and billed. The reviewers are told (never the person who clicked). */
+  .post("/:id/deliver", requirePermission("proj.edit"), async (c) => {
+    const a = auth(c);
+    const p = await loadProj(c.req.param("id"));
+    if (isClosed(p)) throw new HTTPException(409, { message: "project_closed" });
+    if (p.status === "delivered") throw new HTTPException(409, { message: "already_delivered" });
+    const now = new Date();
+    await db().update(schema.projProjects).set({ status: "delivered", deliveredAt: now, deliveredBy: a.user.id, updatedAt: now }).where(eq(schema.projProjects.id, p.id));
+    const client = await clientNameOf(p.clientId);
+    const reviewers = (await effectiveReviewers()).map((x) => x.id).filter((id) => id !== a.user.id);
+    const told = reviewers.length
+      ? await notifyTechs(
+          { id: 0, number: p.number, title: p.name, company: { name: client }, link: `/pipeline?section=tickets&pj=${p.id}`, headFull: `Projet ${p.number} — ${p.name}${client ? ` (${client})` : ""} livré par ${a.realUser.name} : à vérifier et facturer`, bellType: "proj.delivered" },
+          { id: a.user.id, name: a.realUser.name },
+          reviewers,
+          "",
+          { email: true, sms: false, teams: false, bell: true },
+        ).catch(() => [])
+      : [];
+    await audit(a.user.id, "proj.delivered", p.id, { number: p.number, notified: told.map((x) => x.id) });
+    return c.json({ ...(await viewFor(await loadProj(p.id), a)), notified: told.length });
+  })
+
+  /** Back to work: whoever manages projects takes a delivered project back to active */
+  .post("/:id/undeliver", requirePermission("proj.manage"), async (c) => {
+    const a = auth(c);
+    const p = await loadProj(c.req.param("id"));
+    if (p.status !== "delivered") throw new HTTPException(409, { message: "not_delivered" });
+    await db().update(schema.projProjects).set({ status: "active", deliveredAt: null, deliveredBy: null, updatedAt: new Date() }).where(eq(schema.projProjects.id, p.id));
+    await audit(a.user.id, "proj.undelivered", p.id, { number: p.number });
+    return c.json(await viewFor(await loadProj(p.id), a));
   })
 
   /** Deleting a project (administrators): its tasks, notes and timers go; the time stays on the timesheets */
@@ -886,8 +979,22 @@ export const projRoutes = new Hono<AppEnv>()
     await takeFiles(p.id, attachmentIds, row.id);
     await db().update(schema.projProjects).set({ updatedAt: new Date() }).where(eq(schema.projProjects.id, p.id));
     await audit(a.user.id, "proj.note_added", row.id, { project: p.number, internal, tasks: taskIds.length });
+    // an internal note can tell colleagues (active staff, never oneself): the bell, and as ticked an email and a Teams chat message
+    let told: Awaited<ReturnType<typeof notifyTechs>> = [];
+    if (internal && n.notifyUserIds?.length) {
+      const ch = n.notifyChannels ?? { bell: true, email: true, chat: false };
+      const client = await clientNameOf(p.clientId);
+      told = await notifyTechs(
+        { id: 0, number: p.number, title: p.name, company: { name: client }, link: `/pipeline?section=tickets&pj=${p.id}`, head: `vous signale une note du projet ${p.number} (${p.name}${client ? `, ${client}` : ""})`, bellType: "proj.notify" },
+        { id: a.user.id, name: a.realUser.name },
+        n.notifyUserIds,
+        n.text,
+        { email: ch.email, sms: false, teams: false, bell: ch.bell, chat: ch.chat },
+      ).catch(() => []);
+      await audit(a.user.id, "proj.note_notified", p.id, { to: told.map((x) => x.id), channels: ch });
+    }
     const [view] = await noteViews([row]);
-    return c.json({ ...view, emailed: sent, failed }, 201);
+    return c.json({ ...view, emailed: sent, failed, notified: told.length, chatNotReady: told.some((x) => x.chat === "not_ready") }, 201);
   })
 
   /** A note removed: its author, or whoever manages projects */
@@ -966,6 +1073,7 @@ export const projRoutes = new Hono<AppEnv>()
       if (!editable(sheet.status)) throw new HTTPException(409, { message: "timesheet_locked" });
     }
     await db().delete(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, e.id));
+    await checkOverrun(p.id);
     await refreshAccrual(e.userId, weekStartOf(e.date));
     if (e.userId !== a.user.id) await audit(a.user.id, "proj.time_removed_for", e.userId, { project: p.number, date: e.date });
     else await audit(a.user.id, "proj.time_removed", e.id, { project: p.number, date: e.date });

@@ -13219,7 +13219,8 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `prtime:${entry.id}`))).length).toBe(0);
     expect((await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `project:${p.id}`))).length).toBe(1);
     const sources = (await localBilling()).filter((i) => i.id === `prtime:${entry.id}` || i.id === `projtime:${entry.id}`);
-    expect(sources.map((i) => i.id)).toEqual([`projtime:${entry.id}`]);
+    // the project has 40 h sold: its time is no longer billed entry by entry (neither the old nor the new line comes from the source)
+    expect(sources.map((i) => i.id)).toEqual([]);
     // once only; the archive stays as it was
     expect((await admin.post(`/api/proj/archive/${old.id}/import`, {})).json.error).toBe("already_imported");
     expect((await admin.get("/api/proj/archive")).json.find((r: any) => r.id === old.id)).toMatchObject({ imported: true, newId: p.id });
@@ -13627,5 +13628,120 @@ describe("UniFi console (read only)", () => {
       await db().delete(schema.integrations).where(eq(schema.integrations.provider, "unifi"));
       await db().delete(schema.users).where(eq(schema.users.email, "viewer@unifi.example"));
     }
+  });
+});
+
+describe("new-format projects: all projects, notify, delivered, hours sold", () => {
+  const userOf = async (email: string) => (await db().select().from(schema.users).where(eq(schema.users.email, email)))[0];
+  const bellsOf = async (userId: string, type: string, projectId: string) =>
+    (await db().select().from(schema.notifications).where(and(eq(schema.notifications.userId, userId), eq(schema.notifications.type, type)))).filter((n) => n.link.includes(projectId));
+
+  it("the list: delivered projects are not open work but have their own filter", async () => {
+    const tech = await signIn("tech@akab.local");
+    const p = (await tech.post("/api/proj", { name: "Zz livrable filtre" })).json;
+    expect((await tech.post(`/api/proj/${p.id}/deliver`, {})).json).toMatchObject({ status: "delivered" });
+    expect((await tech.get("/api/proj?status=open")).json.map((x: any) => x.id)).not.toContain(p.id);
+    expect((await tech.get("/api/proj?status=delivered")).json.map((x: any) => x.id)).toContain(p.id);
+    expect((await tech.get("/api/proj?status=all")).json.map((x: any) => x.id)).toContain(p.id);
+  });
+
+  it("delivered: the master administrators are told (not the person who clicked), rights, undo", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const adminUser = await userOf("admin@akab.local");
+    const techUser = await userOf("tech@akab.local");
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+    const p = (await tech.post("/api/proj", { name: "Livraison" })).json;
+    const r = await tech.post(`/api/proj/${p.id}/deliver`, {});
+    expect(r.status).toBe(200);
+    expect(r.json.status).toBe("delivered");
+    expect(r.json.notified).toBeGreaterThanOrEqual(1);
+    expect((await bellsOf(adminUser.id, "proj.delivered", p.id)).length).toBe(1);
+    expect((await bellsOf(techUser.id, "proj.delivered", p.id)).length).toBe(0);
+    const [row] = await db().select().from(schema.projProjects).where(eq(schema.projProjects.id, p.id));
+    expect(row.deliveredBy).toBe(techUser.id);
+    expect(row.deliveredAt).not.toBeNull();
+    expect((await tech.post(`/api/proj/${p.id}/deliver`, {})).json.error).toBe("already_delivered");
+    // a delivered project is changed by a manager only; undoing too
+    expect((await tech.patch(`/api/proj/${p.id}`, { status: "active" })).json.error).toBe("project_delivered");
+    expect((await tech.post(`/api/proj/${p.id}/undeliver`, {})).status).toBe(403);
+    expect((await admin.post(`/api/proj/${p.id}/undeliver`, {})).json.status).toBe("active");
+    expect((await admin.post(`/api/proj/${p.id}/undeliver`, {})).json.error).toBe("not_delivered");
+    // closed: nothing to deliver
+    await admin.patch(`/api/proj/${p.id}`, { status: "done" });
+    expect((await tech.post(`/api/proj/${p.id}/deliver`, {})).json.error).toBe("project_closed");
+
+    // the setting: who is told changes (manager only); the clicker is never told
+    expect((await tech.put("/api/proj/delivery-reviewers", { userIds: [techUser.id] })).status).toBe(403);
+    expect((await admin.put("/api/proj/delivery-reviewers", { userIds: [techUser.id, adminUser.id] })).status).toBe(200);
+    const q = (await admin.post("/api/proj", { name: "Livraison 2" })).json;
+    await admin.post(`/api/proj/${q.id}/deliver`, {});
+    expect((await bellsOf(techUser.id, "proj.delivered", q.id)).length).toBe(1);
+    expect((await bellsOf(adminUser.id, "proj.delivered", q.id)).length).toBe(0);
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+  });
+
+  it("notify a colleague from a project, and from an internal note", async () => {
+    const tech = await signIn("tech@akab.local");
+    const adminUser = await userOf("admin@akab.local");
+    const techUser = await userOf("tech@akab.local");
+    const p = (await tech.post("/api/proj", { name: "À signaler" })).json;
+    const no = { email: false, sms: false, teams: false };
+    expect((await tech.post(`/api/proj/${p.id}/notify-tech`, { userIds: [techUser.id], message: "", channels: no })).json.error).toBe("no_recipient");
+    const r = await tech.post(`/api/proj/${p.id}/notify-tech`, { userIds: [adminUser.id], message: "Regarde ça", channels: no });
+    expect(r.status).toBe(200);
+    expect(r.json.people).toHaveLength(1);
+    const bells = await bellsOf(adminUser.id, "proj.notify", p.id);
+    expect(bells).toHaveLength(1);
+    expect(bells[0].link).toBe(`/pipeline?section=tickets&pj=${p.id}`);
+    const note = await tech.post(`/api/proj/${p.id}/notes`, { text: "Note pour toi", internal: true, notifyUserIds: [adminUser.id], notifyChannels: { bell: true, email: false, chat: false } });
+    expect(note.status).toBe(201);
+    expect(note.json.notified).toBe(1);
+    expect(await bellsOf(adminUser.id, "proj.notify", p.id)).toHaveLength(2);
+    // a public reply never notifies colleagues
+    const reply = await tech.post(`/api/proj/${p.id}/notes`, { text: "Réponse", internal: false, notifyUserIds: [adminUser.id] });
+    expect(reply.json.notified).toBe(0);
+  });
+
+  it("hours sold: billed by those hours whatever was worked, never entry by entry; going past tells once", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    const adminUser = await userOf("admin@akab.local");
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+    await db().delete(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.userId, (await userOf("tech@akab.local")).id), eq(schema.timesheetEntries.date, qcToday())));
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    const { localTicketSource } = await import("../server/lib/localTickets.ts");
+    const { localBase } = await import("../server/lib/localBase.ts");
+    const items = async () => (await localTicketSource(localBase).billables("2020-01-01")).items.filter((i) => i.id.startsWith("projtime:"));
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj sold inc.", autotaskId: 9_100_951, portalEnabled: true }).returning();
+    const p = (await tech.post("/api/proj", { name: "Vendu 10 h", clientId: client.id, billingMode: "special", hourlyRate: 100, soldHours: 10 })).json;
+    expect((await tech.post(`/api/proj/${p.id}/time`, { date: qcToday(), hours: 8, note: "x" })).status).toBe(201);
+    // included from the start; even switched to billable, no line per entry
+    expect((await tech.post(`/api/proj/${p.id}/time`, { date: qcToday(), hours: 1, billable: true })).status).toBe(201);
+    expect((await items()).filter((i) => i.ticketNumber === p.number)).toHaveLength(0);
+    expect(await bellsOf(adminUser.id, "proj.overrun", p.id)).toHaveLength(0);
+    // billed once: the hours sold x the rate, not the 9 h worked
+    const billed = await admin.post(`/api/proj/${p.id}/bill`, {});
+    expect(billed.json).toMatchObject({ lines: 1, totalCents: 100000 });
+    const [line] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `project:${p.id}`));
+    expect(line).toMatchObject({ quantityX100: 1000, amountCents: 100000 });
+    expect(line.description).toContain("10 h");
+    // going past 10 h tells the reviewers once
+    await tech.post(`/api/proj/${p.id}/time`, { date: qcToday(), hours: 3 });
+    expect(await bellsOf(adminUser.id, "proj.overrun", p.id)).toHaveLength(1);
+    await tech.post(`/api/proj/${p.id}/time`, { date: qcToday(), hours: 1 });
+    expect(await bellsOf(adminUser.id, "proj.overrun", p.id)).toHaveLength(1);
+
+    // raising the hours sold clears it; crossing again tells again
+    const q = (await tech.post("/api/proj", { name: "Vendu 10 h bis", clientId: client.id, soldHours: 10 })).json;
+    await tech.post(`/api/proj/${q.id}/time`, { date: "2026-11-03", hours: 11 });
+    expect(await bellsOf(adminUser.id, "proj.overrun", q.id)).toHaveLength(1);
+    await tech.patch(`/api/proj/${q.id}`, { soldHours: 20 });
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.id, q.id)))[0].overrunNotifiedAt).toBeNull();
+    await tech.post(`/api/proj/${q.id}/time`, { date: "2026-11-04", hours: 10 });
+    expect(await bellsOf(adminUser.id, "proj.overrun", q.id)).toHaveLength(2);
+    // an hourly project with hours sold is billed by the project line too
+    expect((await admin.post(`/api/proj/${q.id}/bill`, {})).json).toMatchObject({ lines: 1 });
   });
 });

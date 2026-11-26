@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 
 /** Shapes of /api/proj (see the contract: they mirror server/routes/proj.ts) */
-export type ProjStatus = "planning" | "active" | "waiting_customer" | "waiting_vendor" | "done" | "cancelled";
+export type ProjStatus = "planning" | "active" | "waiting_customer" | "waiting_vendor" | "delivered" | "done" | "cancelled";
 export type ProjPriority = "low" | "medium" | "high" | "urgent";
 export type ProjTaskStatus = "todo" | "doing" | "done";
 export type PersonRef = { id: string; name: string };
@@ -84,7 +84,7 @@ export type ProjDetail = ProjectRow & {
 export type ProjTimeEntry = { id: string; userId: string; name: string; date: string; hours: number; note: string; billable: boolean; taskIds: string[] };
 
 /** Open projects (planning + active) for the tickets list; the page filters them further on screen */
-export function useProjectRows(enabled: boolean, status: "open" | "done" | "all" = "open") {
+export function useProjectRows(enabled: boolean, status: "open" | "done" | "delivered" | "all" = "open") {
   return useQuery({ queryKey: ["proj", "list", status], queryFn: () => api.get<ProjectRow[]>(`/proj?status=${status}`), enabled, refetchInterval: 60_000 });
 }
 

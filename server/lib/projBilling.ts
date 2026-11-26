@@ -6,6 +6,8 @@ import { depositOfProject } from "./projectLinks.ts";
 import { insertProject, snapshotOf } from "./proj.ts";
 import { addDays, todayQc } from "./timesheets.ts";
 import { getQuote } from "./quotes.ts";
+import { billingSettings } from "./billing.ts";
+import { hourlyRateOf } from "./contracts.ts";
 
 /**
  * New-format projects: billing (the price sold of a fixed-price / bank project goes to Approbation once), bringing the
@@ -19,21 +21,34 @@ export async function billProj(projectId: string) {
   const d = db();
   const [p] = await d.select().from(schema.projProjects).where(eq(schema.projProjects.id, projectId));
   if (!p) throw new ProjBillError("not_found");
-  if (p.billingMode !== "fixed" && p.billingMode !== "bank") throw new ProjBillError("project_not_sold");
+  const sold = (p.soldHoursX100 ?? 0) / 100;
+  const packaged = p.billingMode === "fixed" || p.billingMode === "bank";
+  // any project with hours sold is billed by its hours sold (never the hours worked); the others only by a price sold
+  if (!packaged && !(sold > 0)) throw new ProjBillError("project_not_sold");
   if (!p.clientId) throw new ProjBillError("project_no_client");
-  if (!p.fixedPriceCents || p.fixedPriceCents <= 0) throw new ProjBillError("project_no_price");
+  // the amount: the price sold (fixed price, bank), else the hours sold × the project's rate (special / hourly) or its contract's
+  let totalCents = p.fixedPriceCents ?? 0;
+  if (!packaged) {
+    let rate: number | null = p.hourlyRateCents;
+    if (p.billingMode === "contract" && p.contractId) {
+      const [k] = await d.select().from(schema.clientContracts).where(eq(schema.clientContracts.id, p.contractId));
+      rate = k ? hourlyRateOf(k, (await billingSettings()).rates.hourly) : null;
+    } else if (rate == null) rate = Math.round((await billingSettings()).rates.hourly * 100);
+    totalCents = rate && rate > 0 ? Math.round(sold * rate) : 0;
+  }
+  if (totalCents <= 0) throw new ProjBillError("project_no_price");
   const [already] = await d.select({ id: schema.billingItems.id }).from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${p.id}%`));
   if (already || p.invoicedAt) throw new ProjBillError("project_billed");
-  const hours = (p.soldHoursX100 ?? 0) / 100;
+  const hours = sold;
   const qty = hours > 0 ? Math.round(hours * 100) : 100;
-  const unit = Math.round((p.fixedPriceCents * 100) / qty);
+  const unit = Math.round((totalCents * 100) / qty);
   const day = todayQc();
   const now = new Date();
   const name = `Projet ${p.number} — ${p.name}${hours > 0 ? ` — ${hours.toLocaleString("fr-CA")} h` : ""}`;
   // a bank of hours is paid in full when sold; a fixed price takes off the deposit taken on the quote's hours
-  const dep = p.billingMode === "fixed" ? await depositOfProject(p) : null;
+  const dep = p.billingMode !== "bank" ? await depositOfProject(p) : null;
   const values = [
-    { clientId: p.clientId, kind: "project", source: "portal", sourceId: `project:${p.id}`, date: day, description: name.slice(0, 2000), ticketNumber: p.number, quantityX100: qty, unitPriceCents: unit, amountCents: p.fixedPriceCents, taxable: true, status: "pending", edited: true },
+    { clientId: p.clientId, kind: "project", source: "portal", sourceId: `project:${p.id}`, date: day, description: name.slice(0, 2000), ticketNumber: p.number, quantityX100: qty, unitPriceCents: unit, amountCents: totalCents, taxable: true, status: "pending", edited: true },
     ...(dep?.lines ?? [])
       .filter((l) => l.amountCents > 0)
       .map((l, i) => ({

@@ -86,7 +86,7 @@ import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
 import { useMyProjectCount, useProjectRows } from "@/pages/proj/shared";
 import { KickoffDialog } from "@/pages/proj/KickoffDialog";
-import { dueBandsMixed, GroupToggle, KindLegend, KindSwitch, ProjRow, filterProjectRows, slotProjects, type ProjKind } from "@/pages/proj/ProjRows";
+import { ALL_PROJECTS_QUERY, AllProjectsButton, dueBandsMixed, GroupToggle, KindLegend, KindSwitch, ProjRow, ProjectsViewChips, filterProjectRows, slotProjects, useProjectCounts, type ProjKind, type ProjectsView } from "@/pages/proj/ProjRows";
 import { ProjView } from "@/pages/proj/ProjView";
 import { NewProjDialog } from "@/pages/proj/NewProjDialog";
 import { ArchiveImportDialog } from "@/pages/proj/ArchiveImportDialog";
@@ -221,16 +221,20 @@ export function TicketsPage() {
   // Shown on the table and the compact view only; hidden when a ticket-only filter is on (status, priority, due…).
   const canProj = can("proj.view");
   const kind = (["tickets", "projects"].includes(params.get("kind") ?? "") ? params.get("kind") : "all") as ProjKind;
-  const projectsOn = canProj && kind !== "tickets" && layout !== "kanban";
-  const { data: projectRows } = useProjectRows(projectsOn);
-  const projectsFit = view !== "due" && activeFilters.every((k) => k === "assignee" || k === "company");
+  // "Tous les projets" (kind=projects&pv=open|delivered|finished): only projects, every one of the chosen state, whoever leads them
+  const pvParam = params.get("pv");
+  const pv: ProjectsView | null = kind === "projects" && (pvParam === "open" || pvParam === "delivered" || pvParam === "finished") ? pvParam : null;
+  const projectsOn = canProj && kind !== "tickets" && (layout !== "kanban" || pv !== null);
+  const { data: projectRows } = useProjectRows(projectsOn, pv === "delivered" ? "delivered" : pv === "finished" ? "done" : "open");
+  const projCounts = useProjectCounts(canProj && pv !== null);
+  const projectsFit = pv !== null || (view !== "due" && activeFilters.every((k) => k === "assignee" || k === "company"));
   const projects =
     projectsOn && projectsFit && projectRows
       ? filterProjectRows(projectRows, {
           q: params.get("q") ?? "",
-          view,
+          view: pv !== null ? "all" : view,
           meId: me.id,
-          assignee: (params.get("assignee") ?? "").split(",").filter(Boolean),
+          assignee: pv !== null ? [] : (params.get("assignee") ?? "").split(",").filter(Boolean),
           company: (params.get("company") ?? "").split(",").filter(Boolean),
           companyNames: new Map((data?.facets.companies ?? []).map((c) => [String(c.id), c.name])),
         })
@@ -239,7 +243,9 @@ export function TicketsPage() {
   // projects mixed with the tickets by due date, unless the person asked to group them (group=1)
   const grouped = params.get("group") === "1";
   const pj = params.get("pj");
-  const bandSets = dueBandsMixed(data?.items ?? [], projects, grouped);
+  // in the all-projects view the tickets are left out
+  const shownItems = pv !== null ? [] : data?.items ?? [];
+  const bandSets = dueBandsMixed(shownItems, projects, grouped);
 
   // Shortcuts: "/" search, "n" new ticket (not while typing)
   useEffect(() => {
@@ -325,6 +331,7 @@ export function TicketsPage() {
           {canProj && (
             <div className="flex flex-wrap items-center gap-2">
               <KindSwitch value={kind} onChange={(k) => set({ kind: k === "all" ? null : k })} />
+              {pv !== null && <ProjectsViewChips value={pv} counts={projCounts} onChange={(v) => set({ pv: v })} />}
               {kind === "all" && <GroupToggle value={grouped} onChange={(v) => set({ group: v ? "1" : null })} />}
               <KindLegend />
             </div>
@@ -434,17 +441,17 @@ export function TicketsPage() {
               <Skeleton key={i} className="h-14 rounded-lg" />
             ))}
           </div>
-        ) : layout === "kanban" ? (
+        ) : layout === "kanban" && pv === null ? (
           // boards of the team: the tickets of this list, sorted on columns (only in this view)
           <KanbanBoard items={data.items} canEdit={can("tickets.edit")} onOpen={(id) => ws.open(id)} facets={data.facets} />
-        ) : data.items.length === 0 && projects.length === 0 ? (
+        ) : shownItems.length === 0 && projects.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-6 py-16 text-center text-sm text-muted-foreground">
             <Inbox className="size-8 opacity-50" />
             {activeFilters.length || params.get("q") ? t("tickets.emptyFiltered") : t(`tickets.empty.${view}`)}
           </div>
         ) : layout === "compact" ? (
           <CompactList
-            items={data.items}
+            items={shownItems}
             activeIds={new Set([...(ws.openId ? [ws.openId] : []), ...ws.docked.map((d) => d.id)])}
             onOpen={(id) => ws.open(id)}
             projects={projects}
@@ -456,9 +463,9 @@ export function TicketsPage() {
           <ul className="divide-y divide-[color:var(--glass-border)]">
             {/* projects (violet) mixed with the tickets (amber tint) by due date, or grouped on top */}
             {grouped && projects.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
-            {data.items.map((tk, i) => (
+            {shownItems.map((tk, i) => (
               <Fragment key={tk.id}>
-              {!grouped && slotProjects(data.items, projects).before.get(tk.id)?.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
+              {!grouped && slotProjects(shownItems, projects).before.get(tk.id)?.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
               <TicketRow
                 key={tk.id}
                 tk={tk}
@@ -492,12 +499,12 @@ export function TicketsPage() {
               />
               </Fragment>
             ))}
-            {!grouped && slotProjects(data.items, projects).tail.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
+            {!grouped && slotProjects(shownItems, projects).tail.map((p) => <ProjRow key={`p-${p.id}`} band={bandSets.projs.has(p.id)} p={p} active={pj === p.id} onOpen={() => openProject(p.id)} />)}
           </ul>
         )}
-        {data && (data.items.length > 0 || projects.length > 0) && (
+        {data && (shownItems.length > 0 || projects.length > 0) && (
           <div className="border-t border-[color:var(--glass-border)] bg-white/[0.02] px-5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            {[projects.length > 0 ? t("projList.shownProjects", { count: projects.length }) : null, data.items.length > 0 ? t("tickets.shown", { count: data.items.length }) : null].filter(Boolean).join(" · ")}
+            {[projects.length > 0 ? t("projList.shownProjects", { count: projects.length }) : null, shownItems.length > 0 ? t("tickets.shown", { count: shownItems.length }) : null].filter(Boolean).join(" · ")}
           </div>
         )}
       </div>
@@ -616,6 +623,8 @@ function TileDetails({ title, hint, rows, note }: { title: string; hint: string;
 }
 
 function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void; onSms: () => void }) {
+  const canProj = useCan()("proj.view");
+  const projCounts = useProjectCounts(canProj);
   const [withSecondary, setWithSecondary] = useShowSecondary();
   const myProjects = useMyProjectCount();
   const { t } = useTranslation();
@@ -724,6 +733,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
           </Fragment>
         );
       })}
+      {canProj && <AllProjectsButton active={["open", "delivered", "finished"].includes(params.get("pv") ?? "") && params.get("kind") === "projects"} count={projCounts.open} onClick={() => apply(ALL_PROJECTS_QUERY)} />}
     </div>
     {/* line 2: my saved filters */}
     {buttons.length > 0 && (

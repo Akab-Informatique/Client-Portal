@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Plus, Receipt, Ticket } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { FolderPlus, Loader2, Plus, Receipt, Ticket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { api } from "@/lib/api";
 import { useCan } from "@/lib/session";
+import { NewProjDialog } from "@/pages/proj/NewProjDialog";
 import { ChargesDialog } from "@/pages/tickets/Charges";
 import { NewTicketDialog } from "@/pages/tickets/NewTicketDialog";
 import { TicketSearch } from "@/pages/tickets/TicketSearch";
@@ -24,9 +26,12 @@ export function QuickAdd() {
   const [ticket, setTicket] = useState(false);
   const [charge, setCharge] = useState(false);
   const [picked, setPicked] = useState<number | null>(null);
-  const allowed = can("tickets.edit");
+  const [project, setProject] = useState(false);
+  const navigate = useNavigate();
+  const canProject = can("proj.edit");
+  const allowed = can("tickets.edit") || canProject;
   // the new-ticket form's lists (queues, priorities…), loaded when it is asked for
-  const facets = useQuery({ queryKey: ["tickets", "view=mine"], queryFn: () => api.get<TicketList>("/tickets?view=mine"), enabled: allowed && ticket, staleTime: 60_000 });
+  const facets = useQuery({ queryKey: ["tickets", "view=mine"], queryFn: () => api.get<TicketList>("/tickets?view=mine"), enabled: can("tickets.edit") && ticket, staleTime: 60_000 });
   const detail = useQuery({ queryKey: ["tickets", "detail", picked], queryFn: () => api.get<TicketDetail>(`/tickets/${picked}`), enabled: picked !== null });
   if (!allowed) return null;
   const closeCharge = () => {
@@ -42,14 +47,33 @@ export function QuickAdd() {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuItem onSelect={() => setTicket(true)}>
-            <Ticket className="size-4 text-primary" /> {t("quickAdd.ticket")}
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setCharge(true)}>
-            <Receipt className="size-4 text-primary" /> {t("quickAdd.charge")}
-          </DropdownMenuItem>
+          {can("tickets.edit") && (
+            <DropdownMenuItem onSelect={() => setTicket(true)}>
+              <Ticket className="size-4 text-primary" /> {t("quickAdd.ticket")}
+            </DropdownMenuItem>
+          )}
+          {can("tickets.edit") && (
+            <DropdownMenuItem onSelect={() => setCharge(true)}>
+              <Receipt className="size-4 text-primary" /> {t("quickAdd.charge")}
+            </DropdownMenuItem>
+          )}
+          {canProject && (
+            <DropdownMenuItem onSelect={() => setProject(true)}>
+              <FolderPlus className="size-4 text-violet-300" /> {t("projDeliver.quickProject")}
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {project && (
+        <NewProjDialog
+          onClose={() => setProject(false)}
+          onCreated={(id) => {
+            setProject(false);
+            navigate(`/pipeline?section=tickets&pj=${id}&kickoff=1`);
+          }}
+        />
+      )}
 
       {ticket && facets.data && <NewTicketDialog open onOpenChange={(o) => !o && setTicket(false)} facets={facets.data.facets} onCreated={(id) => ws.open(id)} />}
 

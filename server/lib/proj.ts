@@ -7,6 +7,7 @@ import { labourType, editable, sheetOf, weekStartOf } from "./timesheets.ts";
 import { splitBillable } from "./hr.ts";
 import { zUuid } from "./validate.ts";
 import { watchOf } from "./watch.ts";
+import { checkOverrun } from "./projDelivery.ts";
 import type { ProjQuoteSnapshot } from "../db/schema.ts";
 
 /**
@@ -235,7 +236,7 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
     "proj",
     rows.map((p) => {
       const lastTask = tasks.filter((t) => t.projectId === p.id).reduce<Date>((m, t) => (t.updatedAt > m ? t.updatedAt : m), p.updatedAt);
-      return { id: p.id, due: p.dueDate, activityAt: lastTask, open: !isClosed(p) };
+      return { id: p.id, due: p.dueDate, activityAt: lastTask, open: !isClosed(p) && p.status !== "delivered" };
     }),
   );
   return rows.map((p) => {
@@ -433,7 +434,7 @@ export async function addEntry(
     .where(and(eq(schema.timesheetEntries.userId, userId), eq(schema.timesheetEntries.date, o.date)));
   if (total + hoursX100 > 2400) throw new HTTPException(409, { message: "day_over_24" });
   // a project sold as a package (fixed price, bank of hours) starts its entries included; each entry can be switched
-  const billable = o.billable ?? !(p.billingMode === "fixed" || p.billingMode === "bank");
+  const billable = o.billable ?? !(p.billingMode === "fixed" || p.billingMode === "bank" || (p.soldHoursX100 ?? 0) > 0);
   const [row] = await d
     .insert(schema.timesheetEntries)
     .values({
@@ -460,6 +461,7 @@ export async function addEntry(
     await markDone(o.doneTaskIds);
   }
   await d.update(schema.projProjects).set({ updatedAt: new Date() }).where(eq(schema.projProjects.id, p.id));
+  await checkOverrun(p.id);
   return { id: row.id };
 }
 

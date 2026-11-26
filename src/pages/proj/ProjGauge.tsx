@@ -61,6 +61,7 @@ export function ProjGauge({ worked, sold, canEdit, onSaveSold }: { worked: numbe
       <div className="min-w-0">
         <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("proj.gauge.title")}</div>
         <div className="text-sm">{label}</div>
+        {hasTarget && worked > (sold ?? 0) && <div className="text-xs font-semibold text-red-300">{t("projOverrun.over", { hours: fmt(worked - (sold ?? 0)) })}</div>}
       </div>
     </>
   );

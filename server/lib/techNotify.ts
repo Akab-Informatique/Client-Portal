@@ -4,7 +4,7 @@ import { config } from "../config.ts";
 import { sendMail } from "./mail.ts";
 import { smsReady, sendSms, normalizePhone } from "./voipms.ts";
 import { sendTeams, teamsReady } from "./teams.ts";
-import { notify } from "./notify.ts";
+import { notify, type NotificationType } from "./notify.ts";
 import { sendChatNotice } from "./teamsChat.ts";
 
 /**
@@ -21,7 +21,7 @@ export type PersonResult = { id: string; name: string; bell: true; email?: Outco
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 export async function notifyTechs(
-  tk: { id: number; number: string; title: string; company: { name: string }; /** another page of the portal (a task), with its own opening line */ link?: string; head?: string },
+  tk: { id: number; number: string; title: string; company: { name: string }; /** another page of the portal (a task), with its own opening line */ link?: string; head?: string; /** the whole opening sentence, with no sender name put before it */ headFull?: string; /** what the bell shows as the message (default: the message sent) */ bellMessage?: string; /** the bell kind (default: ticket.notify) */ bellType?: NotificationType },
   from: { id: string; name: string },
   userIds: string[],
   message: string,
@@ -40,7 +40,7 @@ export async function notifyTechs(
   if (ch.bell !== false)
     await notify(
       people.map((p) => p.id),
-      { type: "ticket.notify", data: { number: tk.number, title: tk.title, from: from.name, company: tk.company.name, message: message.slice(0, 300) }, link: path },
+      { type: tk.bellType ?? "ticket.notify", data: { number: tk.number, title: tk.title, from: from.name, company: tk.company.name, message: (tk.bellMessage ?? message).slice(0, 300) }, link: path },
     );
   const smsOn = ch.sms ? await smsReady().catch(() => false) : false;
   const teamsOn = ch.teams ? await teamsReady().catch(() => false) : false;
@@ -48,7 +48,7 @@ export async function notifyTechs(
   const out: PersonResult[] = [];
   for (const p of people) {
     const r: PersonResult = { id: p.id, name: p.name, bell: true };
-    const head = tk.head ? `${from.name} ${tk.head}` : `${from.name} vous signale le billet ${tk.number} (${tk.title}, ${tk.company.name})`;
+    const head = tk.headFull ? tk.headFull : tk.head ? `${from.name} ${tk.head}` : `${from.name} vous signale le billet ${tk.number} (${tk.title}, ${tk.company.name})`;
     if (ch.email) {
       const text = [`Bonjour ${p.name},`, "", `${head}.`, ...(message ? ["", message] : []), ...(url ? ["", url] : []), "", "—", "AKAB Informatique"].join("\n");
       const html = `<p>Bonjour ${esc(p.name)},</p><p>${esc(head)}.</p>${message ? `<p style="white-space:pre-wrap;border-left:3px solid #ffce1a;padding-left:10px">${esc(message)}</p>` : ""}${url ? `<p><a href="${esc(url)}">${tk.link ? "Ouvrir" : "Ouvrir le billet"}</a></p>` : ""}<p>—<br>AKAB Informatique</p>`;

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { AiTextarea } from "@/components/AiPolish";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { ColleaguePicker, DEFAULT_TELL, type TellHow } from "@/components/ColleaguePicker";
 import { RecipientInput } from "@/pages/outlook/RecipientInput";
 import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
@@ -87,6 +88,9 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
   const [text, setText, clearText] = useDraft(`proj:${project.id}:note`);
   const [taskIds, setTaskIds] = useState<string[]>([]);
   const [to, setTo] = useState<string[]>([]);
+  // internal note: colleagues told (bell / email / Teams)
+  const [tell, setTell] = useState<string[]>([]);
+  const [tellHow, setTellHow] = useState<TellHow>(DEFAULT_TELL);
   const [mailChoice, setMailChoice] = useState<boolean | null>(null);
   // files uploaded first, sent with the note or the reply (kept like a ticket's)
   const [files, setFiles] = useState<ProjFile[]>([]);
@@ -136,6 +140,7 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
   const send = useMutation({
     mutationFn: (body: Record<string, unknown>) => api.post<ProjNote & { emailed?: string[]; failed?: string[] }>(`/proj/${project.id}/notes`, body),
     onSuccess: (res, vars) => {
+      if ((res as { chatNotReady?: boolean }).chatNotReady) toast.warning(t("tickets.noteTell.chatNotReady"));
       const emailed = res.emailed ?? [];
       const failed = res.failed ?? [];
       if (vars.internal === false) {
@@ -149,6 +154,7 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
       setFiles([]);
       setTaskIds([]);
       setTo([]);
+      setTell([]);
       void qc.invalidateQueries({ queryKey: ["proj"] });
     },
     onError: (e) => toast.error(projError(t, e)),
@@ -158,7 +164,7 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
     const body = text.trim();
     if (!body) return;
     const attachmentIds = files.map((f) => f.id);
-    if (tab === "note") return send.mutate({ text: body, internal: true, taskIds, attachmentIds });
+    if (tab === "note") return send.mutate({ text: body, internal: true, taskIds, attachmentIds, ...(tell.length ? { notifyUserIds: tell, notifyChannels: tellHow } : {}) });
     if (mailOn && to.length === 0) return toast.error(t("projWork.composer.noRecipient"));
     send.mutate({ text: body, internal: false, taskIds, email: mailOn, to: mailOn ? to : [], attachmentIds });
   };
@@ -168,7 +174,7 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
   const [hours, setHours] = useState("");
   const [timeNote, setTimeNote, clearTimeNote] = useDraft(`proj:${project.id}:time`);
   // a project sold as a package (fixed price, bank of hours) starts its entries included; each entry can be switched
-  const [billable, setBillable] = useState(project.billing.mode !== "fixed" && project.billing.mode !== "bank");
+  const [billable, setBillable] = useState(project.billing.mode !== "fixed" && project.billing.mode !== "bank" && !((project.soldHours ?? 0) > 0));
   const [covered, setCovered] = useState<string[]>([]);
   const [finished, setFinished] = useState<string[]>([]);
   const [stopping, setStopping] = useState(false);
@@ -338,6 +344,8 @@ export function ProjComposer({ project }: { project: ProjDetail }) {
           </div>
 
           <TaskTags tasks={project.tasks} selected={taskIds} onToggle={(id) => toggle(taskIds, id, setTaskIds)} label={t("projWork.composer.tagTasks")} empty={t("projWork.composer.noTasks")} />
+
+          {tab === "note" && <ColleaguePicker value={tell} onChange={setTell} how={tellHow} onHow={setTellHow} />}
 
           {tab === "reply" && (
             <div className="space-y-2 rounded-xl border bg-background/40 p-3">

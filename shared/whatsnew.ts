@@ -8,6 +8,23 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-26.1",
+    date: "2026-11-26",
+    sections: [
+      {
+        fr: "Projets",
+        en: "Projects",
+        items: [
+          { fr: "Nouveau bouton « Tous les projets » parmi les boutons rapides des billets : il affiche tous les projets ouverts, peu importe le responsable ou le client, sans les billets, avec des filtres Ouverts, Livrés et Terminés.", en: "New \"All projects\" button among the ticket quick buttons: it shows every open project, whoever leads it or whichever client, without tickets, with Open, Delivered and Finished filters." },
+          { fr: "Le bouton + de la barre du haut propose maintenant « Nouveau projet ».", en: "The + button of the top bar now offers \"New project\"." },
+          { fr: "Dans un projet : la cloche « Notifier un technicien » (cloche, courriel, texto, Teams) et, sur une note interne, le choix des collègues à aviser, comme sur un billet.", en: "In a project: the \"Notify a technician\" bell (bell, email, text, Teams) and, on an internal note, a choice of colleagues to tell, like on a ticket." },
+          { fr: "Nouveau bouton « Marquer comme livré » : le projet passe à « Livré — à facturer » et les personnes qui vérifient et facturent (réglage par un gestionnaire, sinon les administrateurs principaux) reçoivent la cloche et un courriel.", en: "New \"Mark as delivered\" button: the project becomes \"Delivered — to bill\" and the people who check and bill (set by a manager, otherwise the master administrators) get the bell and an email." },
+          { fr: "Un projet qui a des heures vendues est facturé selon ces heures (jamais selon les heures travaillées) et ses entrées de temps ne sont pas facturées une à une. Quand les heures travaillées dépassent les heures vendues, les mêmes personnes sont averties une fois, et la jauge indique le dépassement.", en: "A project with hours sold is billed by those hours (never the hours worked) and its time entries are not billed one by one. When the hours worked pass the hours sold, the same people are told once, and the gauge shows the overrun." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-23.4",
     date: "2026-11-23",
     sections: [

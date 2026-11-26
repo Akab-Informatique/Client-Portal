@@ -22,6 +22,7 @@ import { ProjComposer } from "./ProjComposer";
 import { ProjTimerChip } from "./ProjTimerChip";
 import { ProjNotes } from "./ProjNotes";
 import { WatchReminder, useWatchOnOpen } from "@/components/WatchReminder";
+import { DeliverButton, DeliveryReviewersButton, ProjNotifyButton } from "./ProjDelivery";
 import { ProjCalendar } from "./ProjCalendar";
 import { ProjSide } from "./ProjSide";
 import { ProjGauge } from "./ProjGauge";
@@ -178,7 +179,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
   // an open project with no task left to do: a warning once when it is opened (not while it is being started)
   const [params] = useSearchParams();
   const [warnedNoTask, setWarnedNoTask] = useState(false);
-  const noTaskAlert = Boolean(d) && !warnedNoTask && params.get("kickoff") !== "1" && d!.status !== "done" && d!.status !== "cancelled" && d!.tasks.every((x) => x.status === "done");
+  const noTaskAlert = Boolean(d) && !warnedNoTask && params.get("kickoff") !== "1" && d!.status !== "done" && d!.status !== "cancelled" && d!.status !== "delivered" && d!.tasks.every((x) => x.status === "done");
 
   const canEdit = can("proj.edit");
   // closing with a timer going asks: enter the time, throw it away, or wait (minimize to the drawer)
@@ -288,8 +289,8 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                   <div className="flex flex-wrap items-end gap-3">
                     <label className="space-y-1">
                       <span className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("proj.status")}</span>
-                      <select className={inputCls} value={d.status} disabled={!canEdit} onChange={(e) => save.mutate({ status: e.target.value })}>
-                        {STATUSES.map((s) => (
+                      <select className={inputCls} value={d.status} disabled={!canEdit || (d.status === "delivered" && !d.canManage)} onChange={(e) => save.mutate({ status: e.target.value })}>
+                        {(d.status === "delivered" ? [...STATUSES.slice(0, 4), "delivered" as ProjStatus, "done" as ProjStatus] : STATUSES).map((s) => (
                           <option key={s} value={s}>
                             {t(`proj.statusValue.${s}`)}
                           </option>
@@ -327,6 +328,9 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                 <WatchReminder kind="proj" id={d.id} info={d} canEdit={canEdit} compact />
 
                 <div className="ml-auto flex items-center gap-1">
+                  <DeliverButton project={d} canEdit={canEdit} />
+                  {canEdit && <ProjNotifyButton project={d} />}
+                  {d.canManage && <DeliveryReviewersButton />}
                   {d.canManage && (
                     <Button type="button" variant="ghost" size="icon" aria-label={t("proj.delete.button")} title={t("proj.delete.button")} onClick={() => void askRemove()} disabled={remove.isPending}>
                       <Trash2 className="size-4 text-red-300" aria-hidden />
@@ -351,6 +355,9 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                 </div>
               </header>
 
+              {d.status === "delivered" && (
+                <div className="border-b border-teal-400/30 bg-teal-500/10 px-5 py-2 text-sm text-teal-100">{t("projDeliver.deliver.banner")}</div>
+              )}
               <div className="min-h-0 flex-1 overflow-y-auto p-5">
                 <div className="grid gap-5 lg:grid-cols-3">
                   <div className="min-w-0 space-y-5 lg:col-span-2">

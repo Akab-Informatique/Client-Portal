@@ -55,7 +55,7 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
     },
     onError: (e) => toast.error(projError(t, e)),
   });
-  const sold = project.billing.mode === "fixed" || project.billing.mode === "bank";
+  const sold = project.billing.mode === "fixed" || project.billing.mode === "bank" || (project.soldHours ?? 0) > 0;
 
   const save = useMutation({
     mutationFn: (fields: Record<string, string>) => api.patch(`/proj/${project.id}`, fields),

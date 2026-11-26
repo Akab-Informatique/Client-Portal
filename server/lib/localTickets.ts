@@ -515,7 +515,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
         .innerJoin(schema.clients, eq(schema.clients.id, schema.projProjects.clientId))
         .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
         .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.projProjects.contractId))
-        .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, isNull(schema.timesheetEntries.ticketTimeId), gte(schema.timesheetEntries.date, since)));
+        .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, isNull(schema.timesheetEntries.ticketTimeId), gte(schema.timesheetEntries.date, since), sql`coalesce(${schema.projProjects.soldHoursX100}, 0) <= 0`));
       for (const { e, number, name, mode, rate: projectRate, contract: projectContract, companyId, who } of onProj) {
         if (companyId == null) continue;
         // contract: the contract's hourly rate (none: the hours are included, nothing to bill); special: the rate typed; fixed / bank: an entry

@@ -39,21 +39,22 @@ export function NotifyTech({ tk }: { tk: TicketDetail }) {
         </TooltipTrigger>
         <TooltipContent>{t("tickets.notifyTech.button")}</TooltipContent>
       </Tooltip>
-      {open && <NotifyDialog tk={tk} onClose={() => setOpen(false)} />}
+      {open && <NotifyDialog endpoint={`/tickets/${tk.id}/notify-tech`} subject={`${tk.number} · ${tk.title}`} people={tk.options.technicians} onClose={() => setOpen(false)} />}
     </>
   );
 }
 
-function NotifyDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }) {
+/** The dialog itself: any page posts the same body to its own `endpoint` (tickets, projects) */
+export function NotifyDialog({ endpoint, subject, people: all, onClose }: { endpoint: string; subject: string; people: { id: string; name: string }[]; onClose: () => void }) {
   const { t } = useTranslation();
   const me = useMe();
   const defaults = me.preferences.notify ?? { email: true, sms: false, teams: false };
   const [picked, setPicked] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [ch, setCh] = useState<Record<Channel, boolean>>({ email: defaults.email, sms: defaults.sms, teams: defaults.teams });
-  const people = tk.options.technicians.filter((p) => p.id !== me.id);
+  const people = all.filter((p) => p.id !== me.id);
   const send = useMutation({
-    mutationFn: () => api.post<Result>(`/tickets/${tk.id}/notify-tech`, { userIds: picked, message: message.trim(), channels: ch }),
+    mutationFn: () => api.post<Result>(endpoint, { userIds: picked, message: message.trim(), channels: ch }),
     onSuccess: (r) => {
       toast.success(t("tickets.notifyTech.sent", { count: r.people.length }));
       // what could not go out, said plainly
@@ -75,7 +76,7 @@ function NotifyDialog({ tk, onClose }: { tk: TicketDetail; onClose: () => void }
             <BellRing className="size-5 text-primary" /> {t("tickets.notifyTech.title")}
           </DialogTitle>
           <DialogDescription>
-            {tk.number} · {tk.title}
+            {subject}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">

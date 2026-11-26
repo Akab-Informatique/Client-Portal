@@ -1,4 +1,5 @@
 import { isMileageUnit, tripLabel } from "../../shared/mileage.ts";
+import { checkOverrun } from "../lib/projDelivery.ts";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { and, asc, desc, eq, getTableColumns, gte, inArray, lte, ne, sql } from "drizzle-orm";
@@ -634,6 +635,7 @@ export const timeRoutes = new Hono<AppEnv>()
     await tripLocked(e.id);
     // the account rows of the entry go with it (hr_ledger.entry_id cascades)
     await db().delete(schema.timesheetEntries).where(eq(schema.timesheetEntries.id, e.id));
+    if (e.projId) await checkOverrun(e.projId);
     await refreshAccrual(e.userId, weekStartOf(e.date));
     if (e.userId !== a.user.id) await audit(a.user.id, "timesheet.entry_removed_for", e.userId, { date: e.date });
     return c.json({ ok: true });

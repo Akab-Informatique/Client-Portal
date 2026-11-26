@@ -3753,7 +3753,7 @@ export const projProjects = pgTable(
     clientId: uuid("client_id").references(() => clients.id, { onDelete: "set null" }),
     leadId: uuid("lead_id").references(() => users.id, { onDelete: "set null" }),
     contactId: uuid("contact_id").references(() => clientContacts.id, { onDelete: "set null" }),
-    status: text("status", { enum: ["planning", "active", "waiting_customer", "waiting_vendor", "done", "cancelled"] }).notNull().default("planning"),
+    status: text("status", { enum: ["planning", "active", "waiting_customer", "waiting_vendor", "delivered", "done", "cancelled"] }).notNull().default("planning"),
     /** YYYY-MM-DD (Québec) */
     startDate: text("start_date"),
     dueDate: text("due_date"),
@@ -3778,6 +3778,11 @@ export const projProjects = pgTable(
     createdAt: created(),
     updatedAt: updated(),
     doneAt: timestamp("done_at", { withTimezone: true }),
+    /** Delivered to the client, waiting to be checked and billed (status delivered): when and by whom */
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    deliveredBy: uuid("delivered_by").references(() => users.id, { onDelete: "set null" }),
+    /** When the reviewers were told the hours worked passed the hours sold (cleared when back under, so a later crossing tells again) */
+    overrunNotifiedAt: timestamp("overrun_notified_at", { withTimezone: true }),
   },
   (t) => [index("proj_projects_status_idx").on(t.status), index("proj_projects_client_idx").on(t.clientId), index("proj_projects_lead_idx").on(t.leadId)],
 );

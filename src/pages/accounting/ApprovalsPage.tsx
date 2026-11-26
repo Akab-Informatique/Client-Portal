@@ -45,6 +45,7 @@ const PROJ_STATUS_TONE: Record<string, string> = {
   active: "border-violet-400/70 bg-violet-500/20 text-violet-100",
   waiting_customer: "border-amber-400/50 bg-amber-500/10 text-amber-200",
   waiting_vendor: "border-sky-400/50 bg-sky-500/10 text-sky-200",
+  delivered: "border-teal-400/60 bg-teal-500/15 text-teal-200",
   done: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   cancelled: "border-slate-500/40 text-slate-400",
 };

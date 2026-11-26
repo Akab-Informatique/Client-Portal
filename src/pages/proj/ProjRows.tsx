@@ -5,7 +5,7 @@ import { FolderOpen } from "lucide-react";
 import { cn, initials } from "@/lib/utils";
 import { shortDate, DUE_BAND } from "@/pages/tickets/shared";
 import { DayEdge } from "@/pages/pipeline/DayEdge";
-import type { ProjectRow, ProjStatus } from "./shared";
+import { useProjectRows, type ProjectRow, type ProjStatus } from "./shared";
 
 /** Which rows the Tickets list shows: both, tickets only, projects only. */
 export type ProjKind = "all" | "tickets" | "projects";
@@ -93,6 +93,7 @@ const STATUS_TONE: Record<ProjStatus, string> = {
   active: "border-violet-400/70 bg-violet-500/20 text-violet-100",
   waiting_customer: "border-amber-400/50 bg-amber-500/10 text-amber-200",
   waiting_vendor: "border-sky-400/50 bg-sky-500/10 text-sky-200",
+  delivered: "border-teal-400/60 bg-teal-500/15 text-teal-200",
   done: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
   cancelled: "border-slate-500/40 text-slate-400",
 };
@@ -111,12 +112,12 @@ export function projDue(p: ProjectRow): string | null {
 
 /** An open project with no task left to do: it flashes and says so */
 export function noTask(p: ProjectRow): boolean {
-  return p.status !== "done" && p.status !== "cancelled" && (p.taskOpen ?? 1) === 0;
+  return p.status !== "done" && p.status !== "cancelled" && p.status !== "delivered" && (p.taskOpen ?? 1) === 0;
 }
 
 function isLate(p: ProjectRow) {
   const due = projDue(p);
-  return Boolean(due) && due! < todayIso() && p.status !== "done" && p.status !== "cancelled";
+  return Boolean(due) && due! < todayIso() && p.status !== "done" && p.status !== "cancelled" && p.status !== "delivered";
 }
 
 function hoursText(p: ProjectRow, t: (k: string, o?: Record<string, unknown>) => string) {
@@ -153,7 +154,7 @@ export function ProjRow({ p, active, onOpen, band }: { p: ProjectRow; active?: b
           "group relative isolate grid w-full grid-cols-1 gap-x-3 gap-y-1.5 border-l-4 border-violet-500 bg-[color:var(--gold)]/[0.035] py-2.5 pl-9 pr-5 text-left transition-colors hover:bg-[linear-gradient(90deg,rgba(255,206,26,0.07),transparent_60%)] xl:min-w-[var(--tk-min)] xl:grid-cols-[var(--tk-cols)] xl:items-center",
           band && DUE_BAND,
           active && "bg-[linear-gradient(90deg,rgba(255,206,26,0.1),transparent_70%)]",
-          (noTask(p) || (p.stale && p.status !== "done" && p.status !== "cancelled")) && STALE_ROW,
+          (noTask(p) || (p.stale && p.status !== "done" && p.status !== "cancelled" && p.status !== "delivered")) && STALE_ROW,
         )}
       >
         <span aria-hidden className="pointer-events-none absolute left-[11px] top-1/2 -translate-y-1/2 text-violet-300">
@@ -300,4 +301,62 @@ export function dueBandsMixed(items: { id: number; dueAt: string }[], projects: 
   }
   slot?.tail.forEach(doProject);
   return { tickets, projs };
+}
+
+/** The query of the "Tous les projets" button: only projects, every open one, whoever leads them (`pv` = which ones) */
+export const ALL_PROJECTS_QUERY = "kind=projects&pv=open";
+export type ProjectsView = "open" | "delivered" | "finished";
+
+/** Counts shown on the "Tous les projets" button and its chips (open, and delivered to bill) */
+export function useProjectCounts(enabled: boolean) {
+  const open = useProjectRows(enabled, "open");
+  const delivered = useProjectRows(enabled, "delivered");
+  return { open: open.data?.length, delivered: delivered.data?.length };
+}
+
+/** "Tous les projets": a violet button among the quick buttons of the Tickets page */
+export function AllProjectsButton({ active, count, onClick }: { active: boolean; count?: number; onClick: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={t("projDeliver.allProjectsHint")}
+      aria-pressed={active}
+      className={cn(
+        "glass group flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-violet-400/40 px-2.5 text-left transition-all hover:border-violet-400/70",
+        active && "border-violet-400/80 bg-violet-500/15",
+      )}
+    >
+      <FolderOpen className="size-4 shrink-0 text-violet-300" />
+      <span className="whitespace-nowrap text-xs font-medium text-violet-100">{t("projDeliver.allProjects")}</span>
+      <span className="font-mono text-base font-semibold tabular-nums text-violet-200">{count ?? "–"}</span>
+    </button>
+  );
+}
+
+/** In the "all projects" view: Ouverts / Livrés (to check and bill) / Terminés */
+export function ProjectsViewChips({ value, counts, onChange }: { value: ProjectsView; counts: { open?: number; delivered?: number }; onChange: (v: ProjectsView) => void }) {
+  const { t } = useTranslation();
+  const items: { key: ProjectsView; label: string; hint?: string }[] = [
+    { key: "open", label: t("projDeliver.openChip", { count: counts.open ?? 0 }) },
+    { key: "delivered", label: t("projDeliver.deliveredChip", { count: counts.delivered ?? 0 }), hint: t("projDeliver.deliveredChipHint") },
+    { key: "finished", label: t("projDeliver.finishedChip") },
+  ];
+  return (
+    <div className="flex items-center rounded-xl border bg-background/40 p-0.5" role="group">
+      {items.map((x) => (
+        <button
+          key={x.key}
+          type="button"
+          title={x.hint}
+          aria-pressed={value === x.key}
+          onClick={() => onChange(x.key)}
+          className={cn("h-7 rounded-lg px-2.5 text-xs font-medium transition-colors", value === x.key ? (x.key === "delivered" ? "bg-teal-500/20 text-teal-200" : "bg-violet-500/20 text-violet-200") : "text-muted-foreground hover:text-foreground")}
+        >
+          {x.label}
+        </button>
+      ))}
+    </div>
+  );
 }
