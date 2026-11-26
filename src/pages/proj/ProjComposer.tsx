@@ -24,7 +24,7 @@ const EMAIL = /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/;
 export const isEmail = (s: string) => EMAIL.test(s.trim());
 export const todayYmd = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 
-const KNOWN = ["project_closed", "timesheet_locked", "task_blocked", "task_cycle", "task_invalid", "person_invalid", "project_no_client", "reply_needs_recipient", "not_found", "entry_billed", "time_billed", "quote_forbidden", "hours_invalid"];
+const KNOWN = ["project_closed", "timesheet_locked", "task_blocked", "task_cycle", "task_invalid", "person_invalid", "project_no_client", "reply_needs_recipient", "not_found", "entry_billed", "time_billed", "quote_forbidden", "hours_invalid", "project_not_sold"];
 
 /** A server refusal as a sentence (known codes translated, others shown with their code). */
 export function projError(t: TFn, e: unknown): string {

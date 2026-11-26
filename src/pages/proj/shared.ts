@@ -23,6 +23,7 @@ export type ProjectRow = {
   watchOwn?: number | null;
   soldHours: number | null;
   billingMode: ProjBillingMode;
+  deliveredAt?: string | null;
   workedHours: number;
   taskTotal: number;
   taskDone: number;
@@ -84,8 +85,15 @@ export type ProjDetail = ProjectRow & {
 export type ProjTimeEntry = { id: string; userId: string; name: string; date: string; hours: number; note: string; billable: boolean; taskIds: string[] };
 
 /** Open projects (planning + active) for the tickets list; the page filters them further on screen */
-export function useProjectRows(enabled: boolean, status: "open" | "done" | "delivered" | "all" = "open") {
-  return useQuery({ queryKey: ["proj", "list", status], queryFn: () => api.get<ProjectRow[]>(`/proj?status=${status}`), enabled, refetchInterval: 60_000 });
+export function useProjectRows(enabled: boolean, status: "open" | "done" | "delivered" | "all" = "open", withDelivered = false) {
+  const wd = withDelivered && status === "open";
+  return useQuery({ queryKey: ["proj", "list", status, wd], queryFn: () => api.get<ProjectRow[]>(`/proj?status=${status}${wd ? "&withDelivered=1" : ""}`), enabled, refetchInterval: 60_000 });
+}
+
+/** Whether I check and bill projects (a manager or a picked reviewer): the server decides, the page only asks */
+export function useIsReviewer(enabled: boolean): boolean {
+  const q = useQuery({ queryKey: ["proj", "delivery-reviewers"], queryFn: () => api.get<{ mine?: boolean }>("/proj/delivery-reviewers"), enabled, staleTime: 5 * 60_000 });
+  return Boolean(q.data?.mine);
 }
 
 /** How many open projects I lead or work on: added to the tickets count of the "Tickets / Projects" button */

@@ -8,6 +8,26 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-27.2",
+    date: "2026-11-27",
+    sections: [
+      {
+        fr: "Projets livrés",
+        en: "Delivered projects",
+        items: [
+          { fr: "Pour ceux qui vérifient et facturent, les projets livrés restent en haut de la liste des billets, avec « Livré — à facturer » et la date, jusqu'à leur fermeture. Un compteur « n livrés » est sur le bouton Tous les projets, et le projet ouvert propose « Envoyer à l'approbation » et « Fermer le projet (facturé) ».", en: "For the people who check and bill, delivered projects stay at the top of the tickets list, marked \"Delivered — to bill\" with the date, until they are closed. An \"n delivered\" count sits on the All projects button, and the opened project offers \"Send to approval\" and \"Close the project (billed)\"." },
+        ],
+      },
+      {
+        fr: "Facturation des projets",
+        en: "Project billing",
+        items: [
+          { fr: "Un projet se facture toujours sur les heures vendues, jamais sur les heures travaillées : plus aucune ligne par entrée de temps. « Heures vendues » est obligatoire (sauf sous une banque d'heures prépayée), et le client ne voit jamais les heures travaillées.", en: "A project is always billed on the hours sold, never the hours worked: no more line per time entry. \"Hours sold\" is required (except under a prepaid hours bank), and the client never sees the hours worked." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-27.1",
     date: "2026-11-27",
     sections: [

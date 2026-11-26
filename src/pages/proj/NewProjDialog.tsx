@@ -79,7 +79,16 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
     onError: (e) => toast.error(projError(t, e)),
   });
 
-  const canSubmit = name.trim().length > 0 && !create.isPending;
+  // hours sold are what a project is billed on: required, except under a prepaid hours bank (its hours are the bank's)
+  const contractList = useQuery({
+    queryKey: ["proj", "client-contracts", clientId, ""],
+    queryFn: () => api.get<{ id: string; prepaid?: boolean }[]>(`/proj/client-contracts/${clientId}`),
+    enabled: billing.mode === "contract" && Boolean(clientId),
+    staleTime: 30_000,
+  });
+  const prepaid = billing.mode === "contract" && Boolean(contractList.data?.find((k) => k.id === billing.contractId)?.prepaid);
+  const soldOk = prepaid || Number(soldHours.replace(",", ".")) > 0;
+  const canSubmit = name.trim().length > 0 && soldOk && !create.isPending;
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -187,7 +196,8 @@ export function NewProjDialog({ onClose, onCreated }: { onClose: () => void; onC
             </label>
             <label className={labelCls}>
               <span className={labelText}>{t("proj.newProj.soldHours")}</span>
-              <Input type="number" inputMode="decimal" min={0} max={100000} step={0.25} value={soldHours} onChange={(e) => setSoldHours(e.target.value)} />
+              <Input type="number" inputMode="decimal" min={0} max={100000} step={0.25} required={!prepaid} value={soldHours} onChange={(e) => setSoldHours(e.target.value)} />
+              <span className="text-[11px] text-muted-foreground">{prepaid ? t("projBill.soldPrepaid") : t("projBill.soldRequired")}</span>
             </label>
           </div>
 

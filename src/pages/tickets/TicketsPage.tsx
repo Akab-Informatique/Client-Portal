@@ -84,7 +84,7 @@ import { SmsInboxDialog, SmsTile } from "@/pages/sms/SmsPage";
 import { AiSetupHint, InlinePick, useAiError } from "./TicketPanel";
 import { AssistantDialog } from "./Assistant";
 import { CompactList, KanbanBoard, LayoutSwitch, useTicketLayout } from "./Layouts";
-import { useMyProjectCount, useProjectRows } from "@/pages/proj/shared";
+import { useIsReviewer, useMyProjectCount, useProjectRows } from "@/pages/proj/shared";
 import { KickoffDialog } from "@/pages/proj/KickoffDialog";
 import { ALL_PROJECTS_QUERY, AllProjectsButton, dueBandsMixed, GroupToggle, KindLegend, KindSwitch, ProjRow, ProjectsViewChips, filterProjectRows, slotProjects, useProjectCounts, type ProjKind, type ProjectsView } from "@/pages/proj/ProjRows";
 import { ProjView } from "@/pages/proj/ProjView";
@@ -225,7 +225,9 @@ export function TicketsPage() {
   const pvParam = params.get("pv");
   const pv: ProjectsView | null = kind === "projects" && (pvParam === "open" || pvParam === "delivered" || pvParam === "finished") ? pvParam : null;
   const projectsOn = canProj && kind !== "tickets" && (layout !== "kanban" || pv !== null);
-  const { data: projectRows } = useProjectRows(projectsOn, pv === "delivered" ? "delivered" : pv === "finished" ? "done" : "open");
+  const isReviewer = useIsReviewer(canProj);
+  // the people who check and bill also see the delivered projects in the default rows, first, until the project is closed
+  const { data: projectRows } = useProjectRows(projectsOn, pv === "delivered" ? "delivered" : pv === "finished" ? "done" : "open", pv === null && isReviewer);
   const projCounts = useProjectCounts(canProj && pv !== null);
   const projectsFit = pv !== null || (view !== "due" && activeFilters.every((k) => k === "assignee" || k === "company"));
   const projects =
@@ -625,6 +627,7 @@ function TileDetails({ title, hint, rows, note }: { title: string; hint: string;
 function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefined; params: URLSearchParams; apply: (q: string) => void; onSms: () => void }) {
   const canProj = useCan()("proj.view");
   const projCounts = useProjectCounts(canProj);
+  const isReviewer = useIsReviewer(canProj);
   const [withSecondary, setWithSecondary] = useShowSecondary();
   const myProjects = useMyProjectCount();
   const { t } = useTranslation();
@@ -733,7 +736,7 @@ function MetricTiles({ data, params, apply, onSms }: { data: TicketList | undefi
           </Fragment>
         );
       })}
-      {canProj && <AllProjectsButton active={["open", "delivered", "finished"].includes(params.get("pv") ?? "") && params.get("kind") === "projects"} count={projCounts.open} onClick={() => apply(ALL_PROJECTS_QUERY)} />}
+      {canProj && <AllProjectsButton active={["open", "delivered", "finished"].includes(params.get("pv") ?? "") && params.get("kind") === "projects"} count={projCounts.open} delivered={isReviewer ? projCounts.delivered : undefined} onClick={() => apply(ALL_PROJECTS_QUERY)} onDelivered={() => apply("kind=projects&pv=delivered")} />}
     </div>
     {/* line 2: my saved filters */}
     {buttons.length > 0 && (

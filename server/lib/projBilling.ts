@@ -23,8 +23,13 @@ export async function billProj(projectId: string) {
   if (!p) throw new ProjBillError("not_found");
   const sold = (p.soldHoursX100 ?? 0) / 100;
   const packaged = p.billingMode === "fixed" || p.billingMode === "bank";
-  // any project with hours sold is billed by its hours sold (never the hours worked); the others only by a price sold
-  if (!packaged && !(sold > 0)) throw new ProjBillError("project_not_sold");
+  // a project is always billed by its hours sold (never the hours worked): none sold, nothing to bill. A project under a prepaid hours bank
+  // is paid by the bank's own sale, so it makes no line here.
+  if (p.billingMode === "contract" && p.contractId) {
+    const [k] = await d.select({ prepaid: schema.clientContracts.bankPrepaid }).from(schema.clientContracts).where(eq(schema.clientContracts.id, p.contractId));
+    if (k?.prepaid) throw new ProjBillError("project_nothing_to_bill");
+  }
+  if (!(sold > 0)) throw new ProjBillError("project_not_sold");
   if (!p.clientId) throw new ProjBillError("project_no_client");
   // the amount: the price sold (fixed price, bank), else the hours sold × the project's rate (special / hourly) or its contract's
   let totalCents = p.fixedPriceCents ?? 0;

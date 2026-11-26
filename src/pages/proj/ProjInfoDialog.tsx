@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { BillingFields, billingPayload, type BillingValue } from "./ProjBilling";
 import { useTranslation } from "react-i18next";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AiTextarea } from "@/components/AiPolish";
@@ -38,8 +39,19 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
     expires: b0.bankExpiresOn ?? "",
   });
   const clientId = project.client?.id ?? "";
+  // hours sold are what the project is billed on: required, except under a prepaid hours bank (its hours are the bank's)
+  const [soldHours, setSoldHours] = useState(project.soldHours == null ? "" : String(project.soldHours));
+  const contractList = useQuery({
+    queryKey: ["proj", "client-contracts", clientId, project.id],
+    queryFn: () => api.get<{ id: string; prepaid?: boolean }[]>(`/proj/client-contracts/${clientId}?project=${project.id}`),
+    enabled: billing.mode === "contract" && Boolean(clientId),
+    staleTime: 30_000,
+  });
+  const prepaid = billing.mode === "contract" && Boolean(contractList.data?.find((k) => k.id === billing.contractId)?.prepaid);
+  const soldNum = Number(soldHours.replace(",", "."));
+  const soldOk = prepaid || soldNum > 0;
   const saveBilling = useMutation({
-    mutationFn: () => api.patch(`/proj/${project.id}`, billingPayload(billing)),
+    mutationFn: () => api.patch(`/proj/${project.id}`, { ...billingPayload(billing), ...(soldHours.trim() !== "" && Number.isFinite(soldNum) && soldNum >= 0 ? { soldHours: soldNum } : {}) }),
     onSuccess: () => {
       toast.success(t("projBill.saved"));
       void qc.invalidateQueries({ queryKey: ["proj"] });
@@ -116,9 +128,14 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
 
           <section className="space-y-3">
             <BillingFields value={billing} onChange={setBilling} clientId={clientId} projectId={project.id} disabled={!canEdit || Boolean(b0.billedAt)} />
+            <label className="block space-y-1">
+              <span className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("projBill.soldHours")}</span>
+              <Input type="number" inputMode="decimal" min={0} max={100000} step={0.25} value={soldHours} disabled={!canEdit || Boolean(b0.billedAt)} onChange={(e) => setSoldHours(e.target.value)} />
+              <span className={cn("text-[11px]", soldOk ? "text-muted-foreground" : "text-amber-300")}>{prepaid ? t("projBill.soldPrepaid") : t("projBill.soldRequired")}</span>
+            </label>
             {b0.billedAt && <p className="text-xs text-muted-foreground">{t("projBill.locked")}</p>}
             {canEdit && !b0.billedAt && (
-              <Button type="button" size="sm" disabled={saveBilling.isPending} onClick={() => saveBilling.mutate()}>
+              <Button type="button" size="sm" disabled={saveBilling.isPending || !soldOk} onClick={() => saveBilling.mutate()}>
                 {t("projBill.save")}
               </Button>
             )}

@@ -22,7 +22,7 @@ import { ProjComposer } from "./ProjComposer";
 import { ProjTimerChip } from "./ProjTimerChip";
 import { ProjNotes } from "./ProjNotes";
 import { WatchReminder, useWatchOnOpen } from "@/components/WatchReminder";
-import { DeliverButton, DeliveryReviewersButton, ProjNotifyButton } from "./ProjDelivery";
+import { DeliveredActions, DeliverButton, DeliveryReviewersButton, ProjNotifyButton } from "./ProjDelivery";
 import { ProjCalendar } from "./ProjCalendar";
 import { ProjSide } from "./ProjSide";
 import { ProjGauge } from "./ProjGauge";
@@ -356,7 +356,10 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
               </header>
 
               {d.status === "delivered" && (
-                <div className="border-b border-teal-400/30 bg-teal-500/10 px-5 py-2 text-sm text-teal-100">{t("projDeliver.deliver.banner")}</div>
+                <div className="flex flex-wrap items-center gap-2 border-b border-teal-400/30 bg-teal-500/10 px-5 py-2 text-sm text-teal-100">
+                  {t("projDeliver.deliver.banner")}
+                  <DeliveredActions project={d} />
+                </div>
               )}
               <div className="min-h-0 flex-1 overflow-y-auto p-5">
                 <div className="grid gap-5 lg:grid-cols-3">

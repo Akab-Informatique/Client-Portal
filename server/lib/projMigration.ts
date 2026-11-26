@@ -29,13 +29,8 @@ export async function checkProjectsMigration() {
   const stillArchive = lines.filter((l) => entryOf(l.sourceId) && entries.get(entryOf(l.sourceId)!) == null && entries.has(entryOf(l.sourceId)!));
   const inNew = lines.filter((l) => l.sourceId?.startsWith("projtime:"));
 
-  // billable time on a brought-over project with no line yet (the next copy makes them)
-  const billable = await d
-    .select({ id: schema.timesheetEntries.id })
-    .from(schema.timesheetEntries)
-    .where(sql`${schema.timesheetEntries.projId} is not null and ${schema.timesheetEntries.billableX100} > 0 and ${schema.timesheetEntries.ticketTimeId} is null`);
-  const have = new Set(lines.map((l) => l.sourceId));
-  const missing = billable.filter((e) => !have.has(`projtime:${e.id}`) && !have.has(`prtime:${e.id}`));
+  // project time is never billed entry by entry any more (a project is billed by its hours sold): no missing lines to make
+  const missing: unknown[] = [];
 
   // the price sold still keyed on an archive id of a project that was brought over
   const imported = new Map(archive.filter((p) => p.imported && p.newId).map((p) => [p.id, p.newId!]));

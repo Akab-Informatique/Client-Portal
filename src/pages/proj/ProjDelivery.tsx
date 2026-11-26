@@ -10,6 +10,8 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { NotifyDialog } from "@/pages/tickets/NotifyTech";
 import { api, ApiError } from "@/lib/api";
 import { usePeople } from "@/pages/pipeline/TaskDialog";
+import { useCan } from "@/lib/session";
+import { projError } from "./ProjComposer";
 import type { ProjDetail } from "./shared";
 
 const KNOWN = ["project_delivered", "already_delivered", "not_delivered", "no_recipient", "project_closed"];
@@ -89,6 +91,55 @@ export function DeliverButton({ project, canEdit }: { project: ProjDetail; canEd
     >
       <PackageCheck className="size-4" aria-hidden /> {t("projDeliver.deliver.button")}
     </Button>
+  );
+}
+
+/** Actions of the teal banner of a delivered project: send it to approval (accounting.manage), close it as billed (proj.manage) */
+export function DeliveredActions({ project }: { project: ProjDetail }) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const confirm = useConfirm();
+  const can = useCan();
+  const bill = useMutation({
+    mutationFn: () => api.post(`/proj/${project.id}/bill`, {}),
+    onSuccess: () => {
+      toast.success(t("projDeliver.deliver.sentApproval"));
+      void qc.invalidateQueries({ queryKey: ["proj"] });
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+    },
+    onError: (e) => toast.error(projError(t, e)),
+  });
+  const close = useMutation({
+    mutationFn: () => api.patch(`/proj/${project.id}`, { status: "done" }),
+    onSuccess: () => {
+      toast.success(t("projDeliver.deliver.closed"));
+      void qc.invalidateQueries({ queryKey: ["proj"] });
+    },
+    onError: (e) => toast.error(projError(t, e)),
+  });
+  const showBill = can("accounting.manage") && !project.billing.billedAt;
+  if (!showBill && !project.canManage) return null;
+  return (
+    <span className="ml-auto flex flex-wrap gap-2">
+      {showBill && (
+        <Button type="button" size="sm" variant="outline" disabled={bill.isPending} onClick={() => bill.mutate()}>
+          {t("projDeliver.deliver.sendApproval")}
+        </Button>
+      )}
+      {project.canManage && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={close.isPending}
+          onClick={async () => {
+            if (await confirm({ title: t("projDeliver.deliver.closeTitle"), description: t("projDeliver.deliver.closeText"), confirmLabel: t("projDeliver.deliver.closeBilled") })) close.mutate();
+          }}
+        >
+          {t("projDeliver.deliver.closeBilled")}
+        </Button>
+      )}
+    </span>
   );
 }
 

@@ -46,7 +46,7 @@ export async function effectiveReviewers(): Promise<{ id: string; name: string }
     .where(and(eq(schema.users.roleId, role.id), eq(schema.users.kind, "staff"), eq(schema.users.active, true)));
 }
 
-export type DeliveryBilling = { status: "created" | "already" | "time_lines" | "nothing"; reason?: string };
+export type DeliveryBilling = { status: "created" | "already" | "time_lines" | "not_sold" | "nothing"; reason?: string };
 
 /** Delivered = to Approbation: the project's single line (hours sold / price sold), else its time lines are copied. Never throws, never bills twice. */
 export async function billOnDelivery(projectId: string): Promise<DeliveryBilling> {
@@ -60,12 +60,8 @@ export async function billOnDelivery(projectId: string): Promise<DeliveryBilling
     } catch (e) {
       if (!(e instanceof ProjBillError)) throw e;
       if (e.message === "project_billed") return { status: "already" };
-      if (e.message === "project_not_sold") {
-        // an hourly project with no hours sold: its time is emitted entry by entry, just copy it
-        const { syncBillablesNow } = await import("./billables.ts");
-        await syncBillablesNow();
-        return { status: "time_lines" };
-      }
+      // never billed on the hours worked: no hours sold, nothing to bill until they are entered
+      if (e.message === "project_not_sold") return { status: "not_sold" };
       return { status: "nothing", reason: e.message };
     }
   } catch (e) {

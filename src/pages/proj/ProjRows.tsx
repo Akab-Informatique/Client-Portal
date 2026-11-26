@@ -173,7 +173,14 @@ export function ProjRow({ p, active, onOpen, band }: { p: ProjectRow; active?: b
         </span>
         <span className="flex flex-wrap items-center gap-2 xl:contents">
           <span className="min-w-0 xl:[order:var(--o-status)]">
-            <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_TONE[p.status])}>{t(`projList.status.${p.status}`)}</span>
+            {p.status === "delivered" ? (
+              <span className={cn("inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold leading-tight", STATUS_TONE.delivered)}>
+                {t("projDeliver.badge")}
+                {p.deliveredAt && <span className="font-mono font-normal opacity-80">{shortDate(p.deliveredAt.slice(0, 10))}</span>}
+              </span>
+            ) : (
+              <span className={cn("inline-flex max-w-full items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-tight", STATUS_TONE[p.status])}>{t(`projList.status.${p.status}`)}</span>
+            )}
           </span>
           <span className="min-w-0 text-xs xl:[order:var(--o-company)]">
             {p.client ? <span className="block break-words leading-snug">{p.client.name}</span> : <span className="text-muted-foreground/60">—</span>}
@@ -258,13 +265,15 @@ export function GroupToggle({ value, onChange }: { value: boolean; onChange: (v:
  * `tail` is what goes after the last ticket. `lo` / `hi` (YYYY-MM-DD) keep only the projects due in [lo, hi) — for a page of a list.
  */
 export function slotProjects(items: { id: number; dueAt: string }[], projects: ProjectRow[], lo?: string | null, hi?: string | null) {
+  // a delivered project (to check and bill) goes before everything else
+  const key = (p: ProjectRow) => (p.status === "delivered" ? "" : (projDue(p) ?? "9999"));
   const sorted = [...projects]
-    .filter((p) => (lo == null || (projDue(p) ?? "9999") >= lo) && (hi == null || (projDue(p) ?? "9999") < hi))
-    .sort((a, b) => (projDue(a) ?? "9999").localeCompare(projDue(b) ?? "9999"));
+    .filter((p) => (lo == null || key(p) >= lo) && (hi == null || key(p) < hi))
+    .sort((a, b) => key(a).localeCompare(key(b)));
   const before = new Map<number, ProjectRow[]>();
   const tail: ProjectRow[] = [];
   for (const p of sorted) {
-    const day = projDue(p) ?? "9999";
+    const day = key(p);
     const at = items.find((tk) => tk.dueAt.slice(0, 10) > day);
     if (!at) tail.push(p);
     else before.set(at.id, [...(before.get(at.id) ?? []), p]);
@@ -315,23 +324,26 @@ export function useProjectCounts(enabled: boolean) {
 }
 
 /** "Tous les projets": a violet button among the quick buttons of the Tickets page */
-export function AllProjectsButton({ active, count, onClick }: { active: boolean; count?: number; onClick: () => void }) {
+export function AllProjectsButton({ active, count, delivered, onClick, onDelivered }: { active: boolean; count?: number; delivered?: number; onClick: () => void; onDelivered?: () => void }) {
   const { t } = useTranslation();
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={t("projDeliver.allProjectsHint")}
-      aria-pressed={active}
+    <div
       className={cn(
-        "glass group flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-violet-400/40 px-2.5 text-left transition-all hover:border-violet-400/70",
+        "glass group flex h-10 shrink-0 items-center gap-1.5 rounded-xl border border-violet-400/40 pl-2.5 pr-1.5 transition-all hover:border-violet-400/70",
         active && "border-violet-400/80 bg-violet-500/15",
       )}
     >
-      <FolderOpen className="size-4 shrink-0 text-violet-300" />
-      <span className="whitespace-nowrap text-xs font-medium text-violet-100">{t("projDeliver.allProjects")}</span>
-      <span className="font-mono text-base font-semibold tabular-nums text-violet-200">{count ?? "–"}</span>
-    </button>
+      <button type="button" onClick={onClick} title={t("projDeliver.allProjectsHint")} aria-pressed={active} className="flex h-full items-center gap-1.5 text-left">
+        <FolderOpen className="size-4 shrink-0 text-violet-300" />
+        <span className="whitespace-nowrap text-xs font-medium text-violet-100">{t("projDeliver.allProjects")}</span>
+        <span className="font-mono text-base font-semibold tabular-nums text-violet-200">{count ?? "–"}</span>
+      </button>
+      {Boolean(delivered) && onDelivered && (
+        <button type="button" onClick={onDelivered} title={t("projDeliver.deliveredChipHint")} className="whitespace-nowrap rounded-full border border-teal-400/60 bg-teal-500/15 px-2 py-0.5 text-[11px] font-semibold text-teal-200 hover:bg-teal-500/25">
+          {t("projDeliver.deliveredPill", { count: delivered })}
+        </button>
+      )}
+    </div>
   );
 }
 

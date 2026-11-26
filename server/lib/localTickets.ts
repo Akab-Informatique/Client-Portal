@@ -506,41 +506,7 @@ export function localTicketSource(base: TicketSource): TicketSource {
           taxable: true,
         });
       }
-      // the time logged on new-format projects (Opérations › Billets › a project): billable hours, priced like labour
-      // (the contract's rate, else the client's default support contract, else the client's rate / the usual one: set when copied)
-      const onProj = await db()
-        .select({ e: schema.timesheetEntries, number: schema.projProjects.number, name: schema.projProjects.name, mode: schema.projProjects.billingMode, rate: schema.projProjects.hourlyRateCents, contract: schema.clientContracts, companyId: schema.clients.autotaskId, who: schema.users.name })
-        .from(schema.timesheetEntries)
-        .innerJoin(schema.projProjects, eq(schema.projProjects.id, schema.timesheetEntries.projId))
-        .innerJoin(schema.clients, eq(schema.clients.id, schema.projProjects.clientId))
-        .innerJoin(schema.users, eq(schema.users.id, schema.timesheetEntries.userId))
-        .leftJoin(schema.clientContracts, eq(schema.clientContracts.id, schema.projProjects.contractId))
-        .where(and(sql`${schema.timesheetEntries.billableX100} > 0`, isNull(schema.timesheetEntries.ticketTimeId), gte(schema.timesheetEntries.date, since), sql`coalesce(${schema.projProjects.soldHoursX100}, 0) <= 0`));
-      for (const { e, number, name, mode, rate: projectRate, contract: projectContract, companyId, who } of onProj) {
-        if (companyId == null) continue;
-        // contract: the contract's hourly rate (none: the hours are included, nothing to bill); special: the rate typed; fixed / bank: an entry
-        // switched to billable takes the project's rate or the usual one; hourly: no rate here, the client's default contract rule prices it
-        let unit: number | null = null;
-        let contractSourceId: string | undefined;
-        if (mode === "contract" && projectContract) {
-          unit = hourlyRateOf(projectContract, usual);
-          if (unit == null) continue;
-          contractSourceId = projectContract.autotaskId ?? undefined;
-        } else if (mode === "special" || mode === "fixed" || mode === "bank") unit = projectRate ?? Math.round(usual * 100);
-        items.push({
-          id: `projtime:${e.id}`,
-          kind: "project",
-          companyId,
-          date: e.date,
-          description: [name, e.note].filter(Boolean).join(" — ").slice(0, 2000),
-          ticketNumber: number,
-          resourceName: who,
-          contractSourceId,
-          quantity: (e.billableX100 ?? e.hoursX100) / 100,
-          unitPriceCents: unit,
-          taxable: true,
-        });
-      }
+      // the time logged on new-format projects is never billed entry by entry: a project is billed by its hours sold only (`billProj`)
       // a trip billed to a client (Timesheet › Déplacement, billable with an amount): one charge for the amount typed
       const trips = await db()
         .select({ e: schema.timesheetEntries, companyId: schema.clients.autotaskId, who: schema.users.name })

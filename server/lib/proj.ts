@@ -33,6 +33,7 @@ export type ProjectView = {
   dueDate: string | null;
   soldHours: number | null;
   billingMode: string;
+  deliveredAt: string | null;
   workedHours: number;
   taskTotal: number;
   taskDone: number;
@@ -254,6 +255,7 @@ export async function projectViews(rows: ProjRow[]): Promise<ProjectView[]> {
       dueDate: p.dueDate,
       soldHours: p.soldHoursX100 == null ? null : hoursOf(p.soldHoursX100),
       billingMode: p.billingMode,
+      deliveredAt: p.deliveredAt ? p.deliveredAt.toISOString() : null,
       workedHours: hoursOf(Number(worked)),
       taskTotal: mine.length,
       taskDone: mine.filter((t) => t.status === "done").length,

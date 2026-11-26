@@ -157,6 +157,7 @@ const zListQuery = z.object({
   lead: zUuid.optional(),
   member: zUuid.optional(),
   client: zUuid.optional(),
+  withDelivered: z.enum(["1"]).optional(),
 });
 
 const isManager = (a: ReturnType<typeof auth>) => a.permissions.includes("proj.manage");
@@ -264,7 +265,12 @@ export const projRoutes = new Hono<AppEnv>()
     if (!q.success) throw new HTTPException(400, { message: "Validation failed" });
     const status = q.data.status ?? "open";
     const conds = [];
-    if (status === "open") conds.push(inArray(schema.projProjects.status, ["planning", "active", "waiting_customer", "waiting_vendor"]));
+    if (status === "open") {
+      // the people who check and bill (managers, the picked reviewers) also see the delivered ones until closed; decided here, never by the browser
+      const a = auth(c);
+      const reviewer = q.data.withDelivered === "1" && (isManager(a) || (await effectiveReviewers()).some((r) => r.id === a.user.id));
+      conds.push(inArray(schema.projProjects.status, reviewer ? ["planning", "active", "waiting_customer", "waiting_vendor", "delivered"] : ["planning", "active", "waiting_customer", "waiting_vendor"]));
+    }
     if (status === "done") conds.push(inArray(schema.projProjects.status, ["done", "cancelled"]));
     if (status === "delivered") conds.push(eq(schema.projProjects.status, "delivered"));
     if (q.data.lead) conds.push(eq(schema.projProjects.leadId, q.data.lead));
@@ -323,7 +329,9 @@ export const projRoutes = new Hono<AppEnv>()
   /** Who is told when a project is delivered (the picked people; none picked = the master administrators) */
   .get("/delivery-reviewers", requirePermission("proj.view"), async (c) => {
     const picked = await configuredReviewers();
-    return c.json({ userIds: picked, effective: await effectiveReviewers() });
+    const effective = await effectiveReviewers();
+    const a = auth(c);
+    return c.json({ userIds: picked, effective, mine: isManager(a) || effective.some((r) => r.id === a.user.id) });
   })
   .put("/delivery-reviewers", requirePermission("proj.manage"), async (c) => {
     const a = auth(c);

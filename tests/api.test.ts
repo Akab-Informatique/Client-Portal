@@ -13030,7 +13030,7 @@ describe("temporary check: archive projects' work to bill", () => {
     const [m1] = await db().insert(schema.projectMilestones).values({ projectId: old.id, name: "Jalon", position: 0 }).returning();
     const [type] = await db().select().from(schema.timesheetTypes).limit(1);
     const [entry] = await db().insert(schema.timesheetEntries).values({ userId: techUser.id, date: "2026-02-03", typeId: type.id, hoursX100: 200, projectId: old.id, milestoneId: m1.id, source: "project", billableX100: 200, ticketNumber: old.number, ticketTitle: old.name }).returning();
-    await db().insert(schema.billingItems).values({ clientId: client.id, kind: "milestone", source: "autotask", sourceId: `prtime:${entry.id}`, date: "2026-02-03", description: "jalon a facturer", quantityX100: 200, unitPriceCents: 10000, amountCents: 20000, status: "pending" });
+    await db().insert(schema.billingItems).values({ clientId: client.id, kind: "milestone", source: "autotask", sourceId: `prtime:${entry.id}`, date: "2026-02-03", description: "jalon a facturer", quantityX100: 200, unitPriceCents: 10000, amountCents: 20000, status: "approved", approvedBy: techUser.id });
 
     // administrators of the billing only
     expect((await tech.get("/api/billing/cleanup/projects")).status).toBe(403);
@@ -13044,7 +13044,7 @@ describe("temporary check: archive projects' work to bill", () => {
     expect(fixed.after.notImported.map((x: any) => x.number)).not.toContain("P-1877");
     expect(fixed.after.wrongKind).toBe(0);
     const [line] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `projtime:${entry.id}`));
-    expect(line).toMatchObject({ kind: "project", status: "pending" });
+    expect(line).toMatchObject({ kind: "project", status: "approved" });
   });
 });
 
@@ -13131,30 +13131,40 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     expect((await tech.patch(`/api/proj/${hourly.id}`, { billingMode: "contract", contractId: contract.id })).json.billing).toMatchObject({ mode: "contract", contractId: contract.id });
   });
 
-  it("project time is work to bill under Projets, at the project's rate (contract, special, hourly)", async () => {
+  it("a project is billed on its hours sold only: its time entries are never lines, no hours sold = nothing to bill", async () => {
     // other tests also log time today: start this one from an empty day (a person is capped at 24 h a day)
     await db().delete(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.userId, (await userOf("tech@akab.local")).id), eq(schema.timesheetEntries.date, qcToday())));
     const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
     await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
     (await import("../server/lib/localTickets.ts")).resetTicketMode();
     const [client] = await db().insert(schema.clients).values({ name: "Zz Proj time inc.", autotaskId: 9_100_903, portalEnabled: true }).returning();
     const [contract] = await db().insert(schema.clientContracts).values({ clientId: client.id, autotaskId: "local-zz-proj-time", name: "Soutien", billingMode: "hourly", hourlyRateCents: 9000, active: true }).returning();
     const underContract = (await tech.post("/api/proj", { name: "Sous contrat", clientId: client.id, billingMode: "contract", contractId: contract.id })).json;
     const special = (await tech.post("/api/proj", { name: "Taux special", clientId: client.id, billingMode: "special", hourlyRate: 125 })).json;
-    const hourly = (await tech.post("/api/proj", { name: "Horaire", clientId: client.id })).json;
-    for (const [p, h] of [[underContract, 2], [special, 1.5], [hourly, 1]] as const) expect((await tech.post(`/api/proj/${p.id}/time`, { date: qcToday(), hours: h, note: "Travail" })).status).toBe(201);
-    const items = (await localBilling()).filter((i) => i.id.startsWith("projtime:"));
-    const of = (n: string) => items.find((i) => i.ticketNumber === n)!;
-    expect(of(underContract.number)).toMatchObject({ kind: "project", quantity: 2, unitPriceCents: 9000, companyId: 9_100_903 });
-    expect(of(special.number)).toMatchObject({ kind: "project", quantity: 1.5, unitPriceCents: 12500 });
-    // hourly: no rate here, the client's default support contract (or the usual rate) prices it when copied
-    expect(of(hourly.number)).toMatchObject({ kind: "project", quantity: 1, unitPriceCents: null });
-    // copied into Approbation: the typed rate is kept, listed under the project tab
+    const hourly = (await tech.post("/api/proj", { name: "Horaire", clientId: client.id, soldHours: 4, billingMode: "special", hourlyRate: 100 })).json;
+    for (const [p, h] of [[underContract, 2], [special, 1.5], [hourly, 6]] as const) expect((await tech.post(`/api/proj/${p.id}/time`, { date: qcToday(), hours: h, note: "Travail", billable: true })).status).toBe(201);
+    // no line for any entry, whatever the mode
+    expect((await localBilling()).filter((i) => i.id.startsWith("projtime:"))).toHaveLength(0);
     const { syncBillables } = await import("../server/lib/billables.ts");
     await syncBillables();
-    const rows = await db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, "projtime:%"));
-    expect(rows.find((r) => r.ticketNumber === special.number)).toMatchObject({ kind: "project", status: "pending", unitPriceCents: 12500, amountCents: 18750 });
-    expect(rows.find((r) => r.ticketNumber === underContract.number)).toMatchObject({ unitPriceCents: 9000 });
+    expect((await db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, "projtime:%"))).filter((r) => [underContract, special, hourly].some((x) => x.number === r.ticketNumber))).toHaveLength(0);
+    // no hours sold: refused, with a clear code; delivery says so without billing
+    expect((await admin.post(`/api/proj/${special.id}/bill`, {})).json.error).toBe("project_not_sold");
+    expect((await tech.post(`/api/proj/${special.id}/deliver`, {})).json.billing.status).toBe("not_sold");
+    // hours sold: 4 h at 100 $ whatever was worked (6 h), once, when delivered
+    const d = await tech.post(`/api/proj/${hourly.id}/deliver`, {});
+    expect(d.json.billing.status).toBe("created");
+    const lines = await db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${hourly.id}%`));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ quantityX100: 400, amountCents: 40000 });
+    expect(lines[0].description).not.toContain("6");
+    expect((await admin.post(`/api/proj/${hourly.id}/bill`, {})).json.error).toBe("project_billed");
+    // nothing about worked hours reaches a client's contract view
+    const [bank] = await db().insert(schema.clientContracts).values({ clientId: client.id, autotaskId: "local-zz-proj-bank", name: "Banque projet", billingMode: "none", active: true, bankPrepaid: true, scopeProjId: hourly.id } as any).returning();
+    const { contractTerms } = await import("../server/lib/cardAutopay.ts");
+    expect(JSON.stringify(await contractTerms(bank))).not.toMatch(/used|left|worked|utilis/i);
   });
 
   it("files: uploaded first, sent with a note, listed on it, downloaded, never another project's", async () => {
@@ -13664,6 +13674,31 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     expect((await tech.get("/api/proj?status=open")).json.map((x: any) => x.id)).not.toContain(p.id);
     expect((await tech.get("/api/proj?status=delivered")).json.map((x: any) => x.id)).toContain(p.id);
     expect((await tech.get("/api/proj?status=all")).json.map((x: any) => x.id)).toContain(p.id);
+  });
+
+  it("the default list keeps delivered projects for the people who check and bill, not for the others", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+    const p = (await tech.post("/api/proj", { name: "Zz livre revue" })).json;
+    await tech.post(`/api/proj/${p.id}/deliver`, {});
+    const ids = async (c: typeof tech, q: string) => (await c.get(`/api/proj?${q}`)).json.map((x: any) => x.id);
+    // a reviewer (administrator) asking for the default list also gets it, with the delivery day
+    expect(await ids(admin, "status=open&withDelivered=1")).toContain(p.id);
+    expect((await admin.get("/api/proj?status=open&withDelivered=1")).json.find((x: any) => x.id === p.id).deliveredAt).toBeTruthy();
+    expect(await ids(admin, "status=open")).not.toContain(p.id);
+    // a technician who is not a reviewer never gets it, whatever the browser asks
+    expect(await ids(tech, "status=open&withDelivered=1")).not.toContain(p.id);
+    expect((await tech.get("/api/proj/delivery-reviewers")).json.mine).toBe(false);
+    expect((await admin.get("/api/proj/delivery-reviewers")).json.mine).toBe(true);
+    // picked as a reviewer, the technician gets it too
+    const techUser = await userOf("tech@akab.local");
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [techUser.id] });
+    expect(await ids(tech, "status=open&withDelivered=1")).toContain(p.id);
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+    // closed: gone from the default list
+    await admin.patch(`/api/proj/${p.id}`, { status: "done" });
+    expect(await ids(admin, "status=open&withDelivered=1")).not.toContain(p.id);
   });
 
   it("delivered: the master administrators are told (not the person who clicked), rights, undo", async () => {
