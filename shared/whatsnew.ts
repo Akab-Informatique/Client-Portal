@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-27.5",
+    date: "2026-11-27",
+    sections: [
+      {
+        fr: "Soumissions",
+        en: "Quotes",
+        items: [
+          { fr: "Quand une soumission devient un projet, son numéro (P-…) s'écrit dans la soumission : un badge dans l'éditeur et dans la liste ouvre le projet.", en: "When a quote becomes a project, its number (P-…) is written on the quote: a badge in the editor and in the list opens the project." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-27.4",
     date: "2026-11-27",
     sections: [

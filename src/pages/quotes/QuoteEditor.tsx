@@ -629,7 +629,11 @@ export function QuoteEditor() {
                   {save.isPending ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />} {t("quotes.editor.save")}
                 </Button>
               )}
-              {quote?.projectId ? (
+              {quote?.projId ? (
+                <a href={`/pipeline?section=tickets&pj=${quote.projId}`} className="flex items-center gap-2 rounded-lg border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-sm text-violet-300 hover:bg-violet-500/20">
+                  <FolderKanban className="size-4 shrink-0" /> {t("quotes.project.badge", { number: quote.projNumber })}
+                </a>
+              ) : quote?.projectId ? (
                 <a href={`/projects?project=${quote.projectId}&tab=overview`} className="flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300 hover:bg-emerald-500/20">
                   <FolderKanban className="size-4 shrink-0" /> {t("quotes.project.badge", { number: quote.projectNumber })}
                 </a>
@@ -651,7 +655,7 @@ export function QuoteEditor() {
                   <Receipt className="size-4 shrink-0" /> {t("quotes.deposit.badge", { pct: (quote.depositPercentX100 ?? 0) / 100, number: quote.depositNumber, total: money(quote.depositTotalCents ?? 0, i18n.language) })}
                 </a>
               )}
-              {quote && !isNew && (status === "accepted" || status === "sent") && quote.clientId && can("proj.edit") && can("quotes.view") && !quote.projectNumber && (
+              {quote && !isNew && (status === "accepted" || status === "sent") && quote.clientId && can("proj.edit") && can("quotes.view") && !quote.projectNumber && !quote.projId && (
                 <Button variant="outline" className="w-full" disabled={busy || makeProject.pending} onClick={() => void makeProject.fromQuote(quote.id)}>
                   <FolderKanban className="size-4" /> {t("projBill.fromQuote.button")}
                 </Button>

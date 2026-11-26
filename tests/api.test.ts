@@ -13332,6 +13332,11 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     expect(p.quote.number).toBe(q.number);
     expect((await db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${p.id}%`))).length).toBe(1);
     expect((await admin.post(`/api/proj/from-quote/${q.id}`, {})).json.error).toBe("quote_has_project");
+    // the quote says which project it became
+    const qd = (await admin.get(`/api/quotes/${q.id}`)).json;
+    expect(qd).toMatchObject({ projId: p.id, projNumber: p.number });
+    const ql = (await admin.get("/api/quotes")).json as Array<{ id: string; projId: string | null; projNumber: string | null }>;
+    expect(ql.find((x) => x.id === q.id)).toMatchObject({ projId: p.id, projNumber: p.number });
     // a quote for a prospect (no client) cannot
     const prospect = (await admin.post("/api/quotes", { prospectName: "Prospect inc.", title: "P", lines: [{ description: "x", quantityX100: 100, unitPriceCents: 100, recurrence: "once" }] })).json;
     expect((await admin.post(`/api/proj/from-quote/${prospect.id}`, {})).json.error).toBe("project_needs_client");

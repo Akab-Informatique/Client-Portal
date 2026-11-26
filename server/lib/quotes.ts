@@ -81,6 +81,8 @@ const quoteColumns = {
   opportunityId: schema.quotes.opportunityId,
   projectId: schema.quotes.projectId,
   projectNumber: sql<string | null>`(select ${schema.projects.number} from ${schema.projects} where ${schema.projects.id} = ${schema.quotes.projectId})`,
+  projId: sql<string | null>`(select ${schema.projProjects.id} from ${schema.projProjects} where ${schema.projProjects.quoteId} = ${schema.quotes.id} limit 1)`,
+  projNumber: sql<string | null>`(select ${schema.projProjects.number} from ${schema.projProjects} where ${schema.projProjects.quoteId} = ${schema.quotes.id} limit 1)`,
   depositInvoiceId: schema.quotes.depositInvoiceId,
   depositPercentX100: schema.quotes.depositPercentX100,
   depositLineIds: schema.quotes.depositLineIds,

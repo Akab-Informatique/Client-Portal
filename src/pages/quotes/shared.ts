@@ -30,6 +30,8 @@ export type QuoteListItem = {
   /** The project of Projets made from it */
   projectId: string | null;
   projectNumber: string | null;
+  projId: string | null;
+  projNumber: string | null;
   /** The deposit invoice made when it was accepted */
   depositInvoiceId: string | null;
   depositPercentX100: number | null;
