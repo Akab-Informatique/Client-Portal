@@ -13272,6 +13272,18 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     expect((await admin.post(`/api/proj/archive/${old.id}/import`, {})).json.error).toBe("already_imported");
     expect((await admin.get("/api/proj/archive")).json.find((r: any) => r.id === old.id)).toMatchObject({ imported: true, newId: p.id });
     expect((await db().select().from(schema.projectTasks).where(eq(schema.projectTasks.projectId, old.id))).length).toBe(2);
+
+    // deleted: it never comes back at start, nor in the window's list; a manual import on purpose still works
+    const { importArchiveAtStart } = await import("../server/lib/projBilling.ts");
+    expect((await admin.del(`/api/proj/${p.id}`)).status).toBe(200);
+    await importArchiveAtStart();
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.legacyId, old.id))).length).toBe(0);
+    expect((await admin.get("/api/proj/archive")).json.find((r: any) => r.id === old.id)).toBeUndefined();
+    const back = await admin.post(`/api/proj/archive/${old.id}/import`, {});
+    expect(back.status).toBe(201);
+    expect((await db().select().from(schema.projArchiveSkips)).find((r) => r.legacyId === old.id)).toBeUndefined();
+    await importArchiveAtStart();
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.legacyId, old.id))).length).toBe(1);
   });
 
   it("a ticket becomes a project (checklist, notes, files); the ticket is closed; a closed one is refused", async () => {

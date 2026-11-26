@@ -3924,6 +3924,13 @@ export const projTimers = pgTable(
 );
 
 /** The "no activity" reminder of tickets, tasks (to-do) and new-format projects: when the item was last opened or reset, and its own delay in working days (null: the default) */
+/** Archive projects whose new-format copy was deleted: the start-up import never brings them back (a manual import clears the mark) */
+export const projArchiveSkips = pgTable("proj_archive_skips", {
+  legacyId: uuid("legacy_id").primaryKey(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull().defaultNow(),
+  deletedBy: uuid("deleted_by").references(() => users.id, { onDelete: "set null" }),
+});
+
 export const watchState = pgTable(
   "watch_state",
   {

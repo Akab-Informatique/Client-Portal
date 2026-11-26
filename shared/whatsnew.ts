@@ -12,6 +12,13 @@ export const WHATS_NEW: WhatsNewEntry[] = [
     date: "2026-11-27",
     sections: [
       {
+        fr: "Projets",
+        en: "Projects",
+        items: [
+          { fr: "Un projet supprimé ne revient plus au redémarrage : l'archive ne le réimporte plus de lui-même.", en: "A deleted project no longer comes back at restart: the archive does not import it again by itself." },
+        ],
+      },
+      {
         fr: "Soumissions",
         en: "Quotes",
         items: [

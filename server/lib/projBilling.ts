@@ -120,6 +120,7 @@ export async function archiveProjects() {
   const d = db();
   const rows = await d.select().from(schema.projects).orderBy(asc(schema.projects.number));
   const done = new Map((await d.select({ legacy: schema.projProjects.legacyId, id: schema.projProjects.id }).from(schema.projProjects)).filter((r) => r.legacy).map((r) => [r.legacy!, r.id]));
+  const skipped = new Set((await d.select({ id: schema.projArchiveSkips.legacyId }).from(schema.projArchiveSkips)).map((r) => r.id));
   const [tasks, notes, taskNotes, phaseNotes, files, entries] = await Promise.all([
     d.select({ projectId: schema.projectTasks.projectId }).from(schema.projectTasks),
     d.select({ projectId: schema.projectNotes.projectId }).from(schema.projectNotes),
@@ -140,6 +141,7 @@ export async function archiveProjects() {
     files: count(files, p.id),
     entries: count(entries, p.id),
     imported: done.has(p.id),
+    skipped: skipped.has(p.id),
     newId: done.get(p.id) ?? null,
   }));
 }
@@ -157,6 +159,8 @@ export async function importArchiveProject(archiveId: string, actorId: string) {
   if (dup) throw new HTTPException(409, { message: "already_imported" });
   const [taken] = await d.select({ id: schema.projProjects.id }).from(schema.projProjects).where(eq(schema.projProjects.number, old.number));
   if (taken) throw new HTTPException(409, { message: "number_taken" });
+  // a manual import on purpose brings back one that was deleted
+  await d.delete(schema.projArchiveSkips).where(eq(schema.projArchiveSkips.legacyId, old.id));
   // on hold has no place in the new format: it waits as "active"
   const status = old.status === "on_hold" ? "active" : old.status;
   const [row] = await d
@@ -424,7 +428,7 @@ export async function projectFromTicket(ticketId: number, actorId: string) {
  */
 export async function importArchiveAtStart(): Promise<void> {
   try {
-    const todo = (await archiveProjects()).filter((p) => !p.imported);
+    const todo = (await archiveProjects()).filter((p) => !p.imported && !p.skipped);
     for (const p of todo) {
       try {
         await importArchiveProject(p.id, "00000000-0000-0000-0000-000000000000");

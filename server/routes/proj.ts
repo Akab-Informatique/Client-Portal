@@ -364,7 +364,7 @@ export const projRoutes = new Hono<AppEnv>()
   })
 
   /** The archive projects and whether each is already brought into this format (administrators) */
-  .get("/archive", requirePermission("proj.manage"), async (c) => c.json(await archiveProjects()))
+  .get("/archive", requirePermission("proj.manage"), async (c) => c.json((await archiveProjects()).filter((r) => !r.skipped)))
 
   /** Brings one archive project over (once): see importArchiveProject */
   .post("/archive/:id/import", requirePermission("proj.manage"), async (c) => {
@@ -678,6 +678,8 @@ export const projRoutes = new Hono<AppEnv>()
     // the charges go with it (cascade); their work to bill not yet approved goes too
     const own = await db().select({ id: schema.ticketCharges.id, externalId: schema.ticketCharges.externalId }).from(schema.ticketCharges).where(eq(schema.ticketCharges.projId, p.id));
     if (own.length) await db().delete(schema.billingItems).where(and(inArray(schema.billingItems.sourceId, own.map((x) => x.externalId ?? `pcharge:${x.id}`)), inArray(schema.billingItems.status, ["pending", "excluded"])));
+    // an archive project's copy that is deleted never comes back at the next start
+    if (p.legacyId) await db().insert(schema.projArchiveSkips).values({ legacyId: p.legacyId, deletedBy: a.user.id }).onConflictDoNothing();
     await db().delete(schema.projProjects).where(eq(schema.projProjects.id, p.id));
     await audit(a.user.id, "proj.deleted", p.id, { number: p.number, name: p.name });
     return c.json({ ok: true });
