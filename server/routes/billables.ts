@@ -33,6 +33,12 @@ const zDraft = z.object({
   qbTaxCodeId: z.string().trim().max(40).nullable().optional(),
   payOnline: z.boolean().nullable().optional(),
   applyCredit: z.boolean().optional(),
+  // a discount to correct an error: dollars or a percent, a reason shown on the invoice, optionally inside a project's section
+  discount: z
+    .object({ amount: z.number().positive().max(10_000_000).nullable().optional(), percent: z.number().positive().max(100).nullable().optional(), reason: z.string().trim().min(1).max(200), projectId: zUuid.nullable().optional() })
+    .refine((d) => (d.amount != null) !== (d.percent != null), { message: "discount_invalid" })
+    .nullable()
+    .optional(),
   // the time frame: only its work goes on the invoice
   from: zDay.nullable().optional(),
   to: zDay.nullable().optional(),
@@ -155,6 +161,7 @@ export const billablesRoutes = new Hono<AppEnv>()
     const p = await body(c, zDraft);
     const made = await drafted(() => createInvoice(a.user.id, p));
     await audit(a.user.id, "billing.invoice_created", made.id, { number: made.number, totalCents: made.totalCents });
+    if (p.discount) await audit(a.user.id, "billing.invoice_discount", made.id, { number: made.number, amount: p.discount.amount ?? null, percent: p.discount.percent ?? null, reason: p.discount.reason, projectId: p.discount.projectId ?? null });
     await autoSync("invoices", made.id);
     await autoSendInvoice(made.id, a.user.id);
     return c.json(made, 201);
@@ -169,7 +176,7 @@ export const billablesRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const p = await body(
       c,
-      zDraft.omit({ itemIds: true, kinds: true, from: true, to: true }).extend({
+      zDraft.omit({ itemIds: true, kinds: true, from: true, to: true, discount: true }).extend({
         lines: z.array(z.object({ description: z.string().trim().min(1).max(500), quantity: z.number().positive().max(100_000), unitPrice: z.number().min(-1_000_000).max(1_000_000), taxable: z.boolean().default(true) })).min(1).max(50),
         send: z.boolean().default(false),
       }),

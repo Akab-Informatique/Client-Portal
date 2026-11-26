@@ -195,8 +195,9 @@ type Draft = {
   poNumber: string | null;
   notes: string | null;
   poRequired: boolean;
+  projects?: { id: string; number: string; heading: string }[];
   exempt: boolean;
-  lines: { itemId: string; sectionName?: string | null; date?: string | null; contractName?: string | null; kind: Kind; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
+  lines: { itemId: string; sectionName?: string | null; sectionNote?: string | null; date?: string | null; contractName?: string | null; kind: Kind; description: string; quantity: number; unitPriceCents: number; amountCents: number; taxable: boolean }[];
   subtotalCents: number;
   gstCents: number;
   qstCents: number;
@@ -308,6 +309,10 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
   const itemIds = items.filter((i) => kinds.has(i.kind) && !left.has(i.id)).map((i) => i.id);
   // the client's credit on account (QuickBooks) comes off the invoice unless it is turned off here
   const [useCredit, setUseCredit] = useState(true);
+  // a discount to correct an error: dollars or a percent, with its reason (shown on the invoice), on the whole invoice or inside a project's section
+  const [dc, setDc] = useState({ mode: "amount" as "amount" | "percent", value: "", reason: "", projectId: "" });
+  const dcValue = Number(dc.value.replace(",", "."));
+  const discount = dc.value && dc.reason.trim() && dcValue > 0 ? { ...(dc.mode === "percent" ? { percent: dcValue } : { amount: dcValue }), reason: dc.reason.trim(), projectId: dc.projectId || null } : null;
   const draft = {
     clientId: ready.client.id,
     itemIds,
@@ -318,6 +323,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
     notes: f.notes || null,
     ...(pay !== null ? { payOnline: pay } : {}),
     ...(useCredit ? {} : { applyCredit: false }),
+    ...(discount ? { discount } : {}),
     // only the work of the time frame
     from: period.from,
     to: period.to,
@@ -335,7 +341,7 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
       void qc.invalidateQueries({ queryKey: ["crm"] });
       toast.success(t("approvals.invoice.created", { number: r.number }));
     },
-    onError: () => toast.error(t("common.error")),
+    onError: (e) => toast.error(e instanceof ApiError && e.code === "discount_too_big" ? t("approvals.invoice.discountTooBig") : t("common.error")),
   });
   const confirm = useConfirm();
   const unpostItems = useMutation({
@@ -485,6 +491,33 @@ function InvoiceEditor({ ready, lang, period }: { ready: Ready; lang: string; pe
             <span className="text-muted-foreground">{t("approvals.invoice.notes")}</span>
             <AiTextarea rows={3} value={f.notes} maxLength={2000} onChange={(e) => setF({ ...f, notes: e.target.value })} />
           </label>
+          {can("accounting.manage") && (
+            <div className="space-y-1.5 rounded-lg border p-3 text-xs sm:col-span-2">
+              <span className="font-medium">{t("approvals.invoice.discount")}</span>
+              <div className="grid gap-2 sm:grid-cols-[auto_8rem_1fr]">
+                <select value={dc.mode} onChange={(e) => setDc({ ...dc, mode: e.target.value as "amount" | "percent" })} className="h-9 rounded-md border bg-transparent px-2 text-sm">
+                  <option value="amount">{t("approvals.invoice.discountAmount")}</option>
+                  <option value="percent">{t("approvals.invoice.discountPercent")}</option>
+                </select>
+                <Input inputMode="decimal" value={dc.value} onChange={(e) => setDc({ ...dc, value: e.target.value })} placeholder={dc.mode === "percent" ? "10" : "0,00"} />
+                <Input value={dc.reason} maxLength={200} onChange={(e) => setDc({ ...dc, reason: e.target.value })} placeholder={t("approvals.invoice.discountReason")} />
+              </div>
+              {(pv?.projects?.length ?? 0) > 0 && (
+                <label className="flex items-center gap-2">
+                  <span className="text-muted-foreground">{t("approvals.invoice.discountApply")}</span>
+                  <select value={dc.projectId} onChange={(e) => setDc({ ...dc, projectId: e.target.value })} className="h-9 rounded-md border bg-transparent px-2 text-sm">
+                    <option value="">{t("approvals.invoice.discountWhole")}</option>
+                    {pv!.projects!.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.heading}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <p className="text-[10px] leading-snug text-muted-foreground">{t("approvals.invoice.discountHint")}</p>
+            </div>
+          )}
           {qbCodes?.connected && (
             <>
               <label className="space-y-1.5 text-xs">

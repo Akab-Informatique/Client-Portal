@@ -392,6 +392,8 @@ export const invoiceLines = pgTable(
     /** On an invoice with a parent company and its children: the company the line is for (the invoice's own client, or a child) */
     sectionClientId: uuid("section_client_id").references(() => clients.id, { onDelete: "set null" }),
     sectionName: text("section_name"),
+    /** A second line under the section's heading (a project section: the quote it came from, else its short description) */
+    sectionNote: text("section_note"),
     position: integer("position").notNull().default(0),
   },
   (t) => [index("invoice_lines_invoice_idx").on(t.invoiceId, t.position)],
@@ -3786,6 +3788,9 @@ export const projProjects = pgTable(
     bankExpiresOn: text("bank_expires_on"),
     /** When the price sold went to Approbation (once) */
     invoicedAt: timestamp("invoiced_at", { withTimezone: true }),
+    /** A deposit invoiced outside the portal (before it, in QuickBooks): taken off the project's invoice like a quote deposit. Before taxes. */
+    externalDepositCents: integer("external_deposit_cents"),
+    externalDepositNote: text("external_deposit_note"),
     /** The archive project (projects.id) this one was brought from: a project is brought once */
     legacyId: uuid("legacy_id").unique(),
     createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),

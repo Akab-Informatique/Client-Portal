@@ -14,7 +14,7 @@ export type SheetData = {
   poNumber: string | null;
   notes: string | null;
   client: { name: string; address: string | null; city: string | null; province: string | null; postalCode: string | null; email: string | null };
-  lines: { sectionName?: string | null; date?: string | null; description: string; contractName?: string | null; kind: string; quantity: number; unitPriceCents: number; amountCents: number }[];
+  lines: { sectionName?: string | null; sectionNote?: string | null; date?: string | null; description: string; contractName?: string | null; kind: string; quantity: number; unitPriceCents: number; amountCents: number }[];
   subtotalCents: number;
   gstCents: number;
   qstCents: number;
@@ -69,13 +69,13 @@ export function InvoiceSheet({ d, payToggle }: { d: SheetData; payToggle?: PayTo
   const place = [d.client.city, d.client.province].filter(Boolean).join(", ");
   const cell = "border border-black/70 px-1.5 py-1";
   // a parent company and its children: each company's charges in its own block, the parent first, with its subtotal
-  const sectioned = d.lines.some((l) => l.sectionName);
-  const groups: { name: string | null; lines: SheetData["lines"] }[] = [];
+  // (a new-format project is a section of its own too; a line with no section sits outside any heading)
+  const groups: { name: string | null; note: string | null; lines: SheetData["lines"] }[] = [];
   for (const l of d.lines) {
-    const name = sectioned ? (l.sectionName ?? "") : null;
+    const name = l.sectionName ?? null;
     const last = groups[groups.length - 1];
     if (last && last.name === name) last.lines.push(l);
-    else groups.push({ name, lines: [l] });
+    else groups.push({ name, note: l.sectionNote ?? null, lines: [l] });
   }
   return (
     <div className="rounded-2xl bg-white p-8 text-[11px] leading-snug text-black shadow-xl">
@@ -145,6 +145,7 @@ export function InvoiceSheet({ d, payToggle }: { d: SheetData; payToggle?: PayTo
                 <tr>
                   <td colSpan={6} className={`${cell} bg-black/5 font-semibold`}>
                     {g.name}
+                    {g.note && <span className="block text-[10px] font-normal text-black/60">{g.note}</span>}
                   </td>
                 </tr>
               )}

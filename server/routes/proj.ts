@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, like, sql } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "../db/index.ts";
 import { auth, requirePermission, requireStaff, type AppEnv } from "../lib/auth.ts";
@@ -12,7 +12,7 @@ import { rateLimit } from "../lib/http.ts";
 import { refreshAccrual } from "../lib/hr.ts";
 import { addDays, editable, sheetOf, todayQc, weekStartOf } from "../lib/timesheets.ts";
 import { listQuotes } from "../lib/quotes.ts";
-import { archiveProjects, billProj, importArchiveProject, MAX_FILE_BYTES, pendingFiles, ProjBillError, projBilling, projectFromQuote, projectFromTicket, takeFiles } from "../lib/projBilling.ts";
+import { archiveProjects, billProj, importArchiveProject, MAX_FILE_BYTES, pendingFiles, ProjBillError, projBilling, projectFromQuote, projectFromTicket, remakeProjLines, takeFiles } from "../lib/projBilling.ts";
 import { ticketSource } from "../lib/ticketSource.ts";
 import { ticketScopeOf } from "../lib/selfManaged.ts";
 import { resetWatch, setWatchDays } from "../lib/watch.ts";
@@ -105,6 +105,8 @@ const zProjectPatch = z.object({
   description: z.string().max(8000).optional(),
   salesNotes: z.string().max(8000).optional(),
   memberIds: zIds(30).optional(),
+  // a deposit invoiced outside the portal (null = none): before taxes, with a note / the invoice number
+  externalDeposit: z.object({ amount: z.number().positive().max(10_000_000), note: z.string().trim().max(300).optional() }).nullable().optional(),
 });
 
 const zTaskCreate = z.object({
@@ -591,7 +593,25 @@ export const projRoutes = new Hono<AppEnv>()
       };
       Object.assign(set, await billingColumns(next));
     }
+    let depositRemade: boolean | undefined;
+    if (p.externalDeposit !== undefined) {
+      if (!a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "forbidden" });
+      set.externalDepositCents = p.externalDeposit ? Math.round(p.externalDeposit.amount * 100) : null;
+      set.externalDepositNote = p.externalDeposit?.note?.trim() || null;
+      // the lines already in Approbation must still be pending (checked before anything is written)
+      const [{ n }] = await db().select({ n: sql<number>`count(*)::int` }).from(schema.billingItems).where(and(like(schema.billingItems.sourceId, `project:${cur.id}%`), sql`${schema.billingItems.status} <> 'pending'`));
+      if (n > 0) throw new HTTPException(409, { message: "project_billed" });
+    }
     await db().update(schema.projProjects).set(set).where(eq(schema.projProjects.id, cur.id));
+    if (p.externalDeposit !== undefined) {
+      try {
+        depositRemade = (await remakeProjLines(cur.id)).remade;
+      } catch (e) {
+        if (e instanceof ProjBillError) throw new HTTPException(409, { message: e.message });
+        throw e;
+      }
+      await audit(a.user.id, "proj.external_deposit", cur.id, { amount: p.externalDeposit?.amount ?? null, note: p.externalDeposit?.note ?? null, remade: depositRemade });
+    }
     // the team: the lead is always in it
     if (p.memberIds !== undefined) {
       const team = [...new Set([...p.memberIds, ...(leadId ? [leadId] : [])])];

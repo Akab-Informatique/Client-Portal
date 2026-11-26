@@ -34,6 +34,11 @@ export const fr = {
     billedLines: "Lignes d'approbation",
     saved: "Facturation enregistrée.",
     save: "Enregistrer",
+    deposit: "Dépôt déjà facturé hors portail",
+    depositNote: "Facture n° ou note (ex. facture QuickBooks 10120)",
+    depositHint: "Avant taxes. Il est retiré de la facture du projet comme un dépôt de soumission. Si la ligne du projet est déjà en attente à l'approbation, elle est refaite (jamais une ligne approuvée ou facturée).",
+    depositSave: "Enregistrer le dépôt",
+    depositSaved: "Dépôt enregistré.",
     locked: "Le prix vendu est déjà à l'approbation : on ne le change plus ici.",
     attach: {
       add: "Joindre un fichier",
@@ -111,6 +116,11 @@ export const en = {
     billedLines: "Approval lines",
     saved: "Billing saved.",
     save: "Save",
+    deposit: "Deposit already invoiced outside the portal",
+    depositNote: "Invoice no. or note (e.g. QuickBooks invoice 10120)",
+    depositHint: "Before taxes. It comes off the project's invoice like a quote deposit. If the project line is already pending in approval, it is made again (never an approved or invoiced line).",
+    depositSave: "Save the deposit",
+    depositSaved: "Deposit saved.",
     locked: "The price sold is already in approval: it is no longer changed here.",
     attach: {
       add: "Attach a file",

@@ -1741,7 +1741,7 @@ async function invoiceViews(rows: (typeof schema.clientInvoices.$inferSelect)[],
       payOwn: v.payOnline,
       payReady,
       taxFixCents: taxFix.get(v.id) ?? 0,
-      lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, sectionName: l.sectionName, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
+      lines: (lines.get(v.id) ?? []).map((l) => ({ id: l.id, kind: l.kind, sectionName: l.sectionName, sectionNote: l.sectionNote, description: l.description, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents, taxable: l.taxable })),
       quickbooks: v.quickbooksId || v.quickbooksError ? { id: v.quickbooksId, syncedAt: v.quickbooksSyncedAt, error: v.quickbooksError } : null,
       payments: mine.map((x) => ({ id: x.p.id, amountCents: x.p.amountCents, paidOn: x.p.paidOn, method: x.p.method, reference: x.p.reference, note: x.p.note, source: x.p.source, by: x.by })),
     };

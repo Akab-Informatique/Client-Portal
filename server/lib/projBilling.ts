@@ -49,7 +49,7 @@ export async function billProj(projectId: string) {
   const unit = Math.round((totalCents * 100) / qty);
   const day = todayQc();
   const now = new Date();
-  const name = `Projet ${p.number} — ${p.name}${hours > 0 ? ` — ${hours.toLocaleString("fr-CA")} h` : ""}`;
+  const name = `Projet ${p.number} — ${p.name}${hours > 0 ? ` — ${hours.toLocaleString("fr-CA")} h vendues` : ""}`;
   // a bank of hours is paid in full when sold; a fixed price takes off the deposit taken on the quote's hours
   const dep = p.billingMode !== "bank" ? await depositOfProject(p) : null;
   const values = [
@@ -72,10 +72,43 @@ export async function billProj(projectId: string) {
         edited: true,
       })),
   ];
+  if ((p.externalDepositCents ?? 0) > 0) {
+    // a deposit invoiced outside the portal comes off too, before taxes (it was taxable when it was invoiced)
+    values.push({
+      clientId: p.clientId,
+      kind: "project",
+      source: "portal",
+      sourceId: `project:${p.id}:deposit:ext`,
+      date: day,
+      description: `Dépôt déjà facturé${p.externalDepositNote?.trim() ? ` — ${p.externalDepositNote.trim()}` : ""}`.slice(0, 2000),
+      ticketNumber: p.number,
+      quantityX100: 100,
+      unitPriceCents: -p.externalDepositCents!,
+      amountCents: -p.externalDepositCents!,
+      taxable: true,
+      status: "pending",
+      edited: true,
+    });
+  }
   if (values.reduce((n, v) => n + v.amountCents, 0) <= 0) throw new ProjBillError("project_nothing_to_bill");
   await d.insert(schema.billingItems).values(values.map((v) => ({ ...v, syncedAt: now })));
   await d.update(schema.projProjects).set({ invoicedAt: now, updatedAt: now }).where(eq(schema.projProjects.id, p.id));
   return { lines: values.length, totalCents: values.reduce((n, v) => n + v.amountCents, 0), deposit: dep ? { number: dep.number, subtotalCents: dep.subtotalCents } : null };
+}
+
+/**
+ * The project's sale lines made again (its deposit changed): only while every line is still pending; one approved or
+ * invoiced is never touched (`project_billed`). Nothing to re-make when the project was never sent to Approbation.
+ */
+export async function remakeProjLines(projectId: string) {
+  const d = db();
+  const lines = await d.select({ id: schema.billingItems.id, status: schema.billingItems.status }).from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${projectId}%`));
+  if (!lines.length) return { remade: false };
+  if (lines.some((l) => l.status !== "pending")) throw new ProjBillError("project_billed");
+  await d.delete(schema.billingItems).where(inArray(schema.billingItems.id, lines.map((l) => l.id)));
+  await d.update(schema.projProjects).set({ invoicedAt: null }).where(eq(schema.projProjects.id, projectId));
+  await billProj(projectId);
+  return { remade: true };
 }
 
 /** What the project's sale stands at: its lines in Approbation / on an invoice */

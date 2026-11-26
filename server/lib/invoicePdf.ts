@@ -21,7 +21,7 @@ const dmy = (ymd: string) => {
   return y && m && d ? `${d}/${m}/${y}` : ymd;
 };
 
-type Line = { section: string | null; date: string | null; description: string; contractName: string | null; kind: string; quantity: number; unitPriceCents: number; amountCents: number };
+type Line = { section: string | null; sectionNote?: string | null; date: string | null; description: string; contractName: string | null; kind: string; quantity: number; unitPriceCents: number; amountCents: number };
 
 const text = {
   fr: { date: "Date", billTo: "Facturer à", invoiceNo: "# facture", terms: "Modalités", net: (d: number) => `Net ${d} jours`, receipt: "Payable sur réception", dueOn: "Paiement dû", lineDate: "Date", description: "Description", hours: "Heures facturables", quantity: "Quantité", rate: "Taux", amount: "Montant facturable", contract: (n: string) => `contrat : ${n}`, totalHours: "Total des heures facturables", totalBilled: "Montant total à facturer", taxes: "Total Taxes", exempt: "Client exempté de taxes", grandTotal: "Grand Total", credit: "Crédit au compte", balance: "Solde à payer", payOnline: "Payer en ligne", paid: "PAYÉE" },
@@ -49,7 +49,7 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
     .orderBy(asc(schema.invoiceLines.position));
   const subtotal = inv.totalCents - inv.taxCents;
   const lines: Line[] = rows.length
-    ? rows.map(({ l, date, contract }) => ({ section: l.sectionName, date: date ?? null, description: l.description, contractName: contract ?? null, kind: l.kind, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents }))
+    ? rows.map(({ l, date, contract }) => ({ section: l.sectionName, sectionNote: l.sectionNote, date: date ?? null, description: l.description, contractName: contract ?? null, kind: l.kind, quantity: l.quantityX100 / 100, unitPriceCents: l.unitPriceCents, amountCents: l.amountCents }))
     : [{ section: null, date: inv.issuedOn, description: `Facture ${inv.number}`, contractName: null, kind: "other", quantity: 1, unitPriceCents: subtotal, amountCents: subtotal }];
   const gstRate = s.taxes.gstRate;
   const qstRate = s.taxes.qstRate;
@@ -164,13 +164,21 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
   if (!sectioned) header();
   for (const l of lines) {
     if (sectioned && l.section !== current) {
-      if (current !== undefined) subtotalRow(current);
+      if (current) subtotalRow(current);
       if (y + 70 > BOTTOM - 20) {
         doc.addPage();
         y = 40;
       }
-      font(true, 11).fillColor("#000000").text(l.section ?? "", LEFT, y);
-      y = doc.y + 6;
+      // a line with no section (support time next to a project's section) sits under no heading
+      if (l.section) {
+        font(true, 11).fillColor("#000000").text(l.section, LEFT, y);
+        y = doc.y + (l.sectionNote ? 1 : 6);
+        if (l.sectionNote) {
+          font(false, 9).fillColor("#555555").text(l.sectionNote, LEFT, y);
+          doc.fillColor("#000000");
+          y = doc.y + 6;
+        }
+      }
       font();
       header();
       current = l.section;
@@ -192,7 +200,7 @@ export async function invoicePdf(invoiceId: string, payUrl: string | null = null
     });
     y += h;
   }
-  if (sectioned && current !== undefined) subtotalRow(current);
+  if (sectioned && current) subtotalRow(current);
 
   // ── payment instructions on the left, totals on the right
   y += 12;

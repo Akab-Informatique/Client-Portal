@@ -74,7 +74,7 @@ export type ProjDetail = ProjectRow & {
   members: PersonRef[];
   quote: QuoteSnapshot | null;
   quoteId: string | null;
-  billing: { mode: ProjBillingMode; contractId: string | null; hourlyRate: number | null; fixedPrice: number | null; bankExpiresOn: string | null; billedAt: string | null; status: "none" | "pending" | "approved" | "posted"; invoiceNumber?: string; previewRate: number | null; prepaid: boolean };
+  billing: { mode: ProjBillingMode; contractId: string | null; hourlyRate: number | null; fixedPrice: number | null; bankExpiresOn: string | null; billedAt: string | null; externalDeposit: { amount: number; note: string } | null; status: "none" | "pending" | "approved" | "posted"; invoiceNumber?: string; previewRate: number | null; prepaid: boolean };
   tasks: ProjTask[];
   notes: ProjNote[];
   worked: { hours: number; byPerson: { userId: string; name: string; hours: number }[] };

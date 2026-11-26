@@ -317,7 +317,7 @@ export async function editBillable(id: string, p: { quantity?: number; unitPrice
 }
 
 // ── invoicing: approved items → an invoice ──
-const ACCOUNT_OF: Record<BillableKind, keyof BillingSettings["accounts"]> = { labour: "labour", charge: "charges", expense: "charges", contract: "contracts", milestone: "contracts", project: "labour" };
+const ACCOUNT_OF: Record<string, keyof BillingSettings["accounts"]> = { discount: "labour", labour: "labour", charge: "charges", expense: "charges", contract: "contracts", milestone: "contracts", project: "labour" };
 
 /** The taxes of an invoice, line by line (the way QuickBooks rounds them) */
 function taxesOf(s: BillingSettings, taxableLinesCents: number[], exempt: boolean) {
@@ -366,6 +366,8 @@ export type InvoiceDraft = {
   /** Only the work of these days (an item outside makes the draft invalid) */
   from?: string | null;
   to?: string | null;
+  /** A discount to correct an error: dollars or a percent of what it applies to, with the reason shown on the invoice; `projectId` = inside that project's section, none = the whole invoice */
+  discount?: { amount?: number | null; percent?: number | null; reason: string; projectId?: string | null } | null;
 };
 
 export class DraftError extends Error {}
@@ -400,6 +402,48 @@ export async function recalcInvoiceTaxes(invoiceId: string): Promise<{ before: {
   return { before: { taxCents: inv.taxCents, totalCents: inv.totalCents }, after: { taxCents, totalCents } };
 }
 
+/**
+ * The new-format project each item belongs to, by what it is: the sale line `project:<id>`, its deposit lines
+ * `project:<id>:deposit:<n>` and the charges `pcharge:<id>` put on the project. Only the project's sold hours, never the hours worked.
+ * `order`: 0 the sale line, 1 a charge, 2 the deposit taken off.
+ */
+async function projectSectionsOf(items: Item[], lang: string) {
+  const en = lang === "en";
+  const out = new Map<string, { projectId: string; number: string; heading: string; note: string | null; order: number }>();
+  const d = db();
+  const found: { itemId: string; projectId: string; order: number }[] = [];
+  const chargeItems = new Map<string, string>();
+  for (const i of items) {
+    const m = /^project:([0-9a-f-]{36})(:deposit:(?:\d+|ext))?$/.exec(i.sourceId ?? "");
+    if (m) found.push({ itemId: i.id, projectId: m[1], order: m[2] ? 2 : 0 });
+    else if (i.sourceId?.startsWith("pcharge:")) chargeItems.set(i.sourceId.slice("pcharge:".length), i.id);
+  }
+  if (chargeItems.size) {
+    const rows = await d.select({ id: schema.ticketCharges.id, projId: schema.ticketCharges.projId }).from(schema.ticketCharges).where(inArray(schema.ticketCharges.id, [...chargeItems.keys()]));
+    for (const r of rows) if (r.projId) found.push({ itemId: chargeItems.get(r.id)!, projectId: r.projId, order: 1 });
+  }
+  if (!found.length) return out;
+  const projects = await d
+    .select({ id: schema.projProjects.id, number: schema.projProjects.number, name: schema.projProjects.name, description: schema.projProjects.description, quote: schema.quotes.number })
+    .from(schema.projProjects)
+    .leftJoin(schema.quotes, eq(schema.quotes.id, schema.projProjects.quoteId))
+    .where(inArray(schema.projProjects.id, [...new Set(found.map((f) => f.projectId))]));
+  const by = new Map(projects.map((p) => [p.id, p]));
+  for (const f of found) {
+    const p = by.get(f.projectId);
+    if (!p) continue; // an archive project: no section
+    const desc = p.description.trim().replace(/\s+/g, " ");
+    out.set(f.itemId, {
+      projectId: p.id,
+      number: p.number,
+      heading: `${en ? "Project" : "Projet"} ${p.number} — ${p.name}`,
+      note: p.quote ? `${en ? "Quote" : "Soumission"} ${p.quote}` : desc && desc.length <= 120 ? desc : null,
+      order: f.order,
+    });
+  }
+  return out;
+}
+
 /** The invoice the draft would make (nothing saved): its lines, taxes, dates, the number it would get. */
 export async function draftInvoice(p: InvoiceDraft) {
   const s = await billingSettings();
@@ -426,11 +470,27 @@ export async function draftInvoice(p: InvoiceDraft) {
   const companyIds = [...new Set(items.map((i) => i.clientId))];
   const names = new Map((await d.select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, companyIds))).map((c) => [c.id, c.name]));
   const grouped = items.some((i) => i.clientId !== client.id);
-  if (grouped) {
-    const rank = (i: Item) => (i.clientId === client.id ? "" : (names.get(i.clientId) ?? "").toLowerCase());
+  // the work of a new-format project (its sale line, its deposit lines, its charges) is one section of the invoice, inside its company's block
+  const projs = await projectSectionsOf(items, s.template.language);
+  if (grouped || projs.size) {
+    const rank = (i: Item) => (grouped && i.clientId !== client.id ? (names.get(i.clientId) ?? "").toLowerCase() : "");
+    const proj = (i: Item) => projs.get(i.id);
     items = items
       .map((i, n) => ({ i, n }))
-      .sort((x, y) => (rank(x.i) < rank(y.i) ? -1 : rank(x.i) > rank(y.i) ? 1 : x.n - y.n))
+      .sort((x, y) => {
+        const rx = rank(x.i);
+        const ry = rank(y.i);
+        if (rx !== ry) return rx < ry ? -1 : 1;
+        const px = proj(x.i);
+        const py = proj(y.i);
+        // the company's own lines first, then each project by number; in a project: the sale line, the charges, the deposit taken off
+        if (!px !== !py) return px ? 1 : -1;
+        if (px && py) {
+          if (px.number !== py.number) return px.number < py.number ? -1 : 1;
+          if (px.order !== py.order) return px.order - py.order;
+        }
+        return x.n - y.n;
+      })
       .map(({ i }) => i);
   }
   const issuedOn = p.issuedOn ?? todayQc();
@@ -438,9 +498,32 @@ export async function draftInvoice(p: InvoiceDraft) {
   let dueOn = p.dueOn;
   // counted from the day it is sent (an invoice goes out when it is made), not from the date written on it
   if (!dueOn) dueOn = dueAfterSent(todayQc(), termsDays);
-  const subtotal = items.reduce((x, i) => x + i.amountCents, 0);
+  // the discount (a correction): one negative line, split taxable / non-taxable in proportion to what it discounts so the taxes stay right
+  const discountLines: { afterItemId: string | null; sectionName: string | null; sectionNote: string | null; description: string; amountCents: number; taxable: boolean }[] = [];
+  if (p.discount) {
+    const dc = p.discount;
+    const reason = dc.reason.trim();
+    if (!reason) throw new DraftError("discount_reason_required");
+    const scope = items.filter((i) => !isFee(i) && (!dc.projectId || projs.get(i.id)?.projectId === dc.projectId));
+    if (!scope.length) throw new DraftError("discount_target_invalid");
+    const base = scope.reduce((x, i) => x + i.amountCents, 0);
+    const taxableBase = scope.filter((i) => i.taxable).reduce((x, i) => x + i.amountCents, 0);
+    const pct = dc.percent ?? null;
+    const amountCents = pct != null ? Math.round((base * pct) / 100) : Math.round((dc.amount ?? 0) * 100);
+    if (!(amountCents > 0)) throw new DraftError("discount_invalid");
+    if (amountCents > base) throw new DraftError("discount_too_big");
+    const taxablePart = base > 0 ? Math.round((amountCents * taxableBase) / base) : 0;
+    const head = pct != null ? `Rabais — ${reason} (${pct} %)` : `Rabais — ${reason}`;
+    const last = scope[scope.length - 1];
+    const sec = dc.projectId ? projs.get(last.id) : undefined;
+    const base0 = { afterItemId: last.id, sectionName: sec?.heading ?? null, sectionNote: sec?.note ?? null, description: head };
+    if (taxablePart > 0) discountLines.push({ ...base0, amountCents: taxablePart, taxable: true });
+    if (amountCents - taxablePart > 0) discountLines.push({ ...base0, amountCents: amountCents - taxablePart, taxable: false });
+  }
+  const discountTotal = discountLines.reduce((x, l) => x + l.amountCents, 0);
+  const subtotal = items.reduce((x, i) => x + i.amountCents, 0) - discountTotal;
   const exempt = client.invoice?.taxes === false;
-  const { gst, qst } = taxesOf(s, items.filter((i) => i.taxable).map((i) => i.amountCents), exempt);
+  const { gst, qst } = taxesOf(s, [...items.filter((i) => i.taxable).map((i) => i.amountCents), ...discountLines.filter((l) => l.taxable).map((l) => -l.amountCents)], exempt);
   const total = subtotal + gst + qst;
   // what the client has on account in QuickBooks: shown, and taken off the invoice (never more than it comes to)
   const credit = await creditOf(client.id);
@@ -458,10 +541,12 @@ export async function draftInvoice(p: InvoiceDraft) {
     exempt,
     items,
     grouped,
-    lines: items.map((i) => ({
-      itemId: i.id,
+    lines: items.flatMap((i) => [
+      {
+      itemId: i.id as string | null,
       sectionClientId: grouped ? i.clientId : null,
-      sectionName: grouped ? (names.get(i.clientId) ?? null) : null,
+      sectionName: projs.get(i.id)?.heading ?? (grouped ? (names.get(i.clientId) ?? null) : null),
+      sectionNote: projs.get(i.id)?.note ?? null,
       date: i.date,
       contractName: i.contractName ?? null,
       kind: i.kind,
@@ -472,7 +557,28 @@ export async function draftInvoice(p: InvoiceDraft) {
       taxable: i.taxable,
       qbItemId: i.qbItemId ?? null,
       qbTaxCodeId: i.qbTaxCodeId ?? null,
-    })),
+      },
+      ...discountLines
+        .filter((l) => l.afterItemId === i.id)
+        .map((l) => ({
+          itemId: null as string | null,
+          sectionClientId: null as string | null,
+          sectionName: l.sectionName,
+          sectionNote: l.sectionNote,
+          date: null as string | null,
+          contractName: null as string | null,
+          kind: "discount" as string,
+          description: l.description,
+          quantity: 1,
+          unitPriceCents: -l.amountCents,
+          amountCents: -l.amountCents,
+          taxable: l.taxable,
+          qbItemId: null as string | null,
+          qbTaxCodeId: null as string | null,
+        })),
+    ]),
+    discountCents: discountTotal,
+    projects: [...new Map([...projs.values()].map((x) => [x.projectId, { id: x.projectId, number: x.number, heading: x.heading }])).values()],
     subtotalCents: subtotal,
     gstCents: gst,
     qstCents: qst,
@@ -596,10 +702,11 @@ export function createInvoice(actorId: string | null, p: InvoiceDraft) {
           amountCents: l.amountCents,
           taxable: l.taxable,
           // its own pick, else its portal service or product, else the invoice's item (the default)
-          qbItemId: l.qbItemId || autoItems.get(l.itemId) || invoiceItem,
+          qbItemId: l.qbItemId || (l.itemId ? autoItems.get(l.itemId) : null) || invoiceItem,
           qbTaxCodeId: l.qbTaxCodeId || invoiceTax,
           sectionClientId: l.sectionClientId,
           sectionName: l.sectionName,
+          sectionNote: l.sectionNote,
           ledgerAccountId: s.accounts[ACCOUNT_OF[l.kind as BillableKind] ?? "labour"] ?? null,
           position: n,
         })),

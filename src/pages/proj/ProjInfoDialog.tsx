@@ -67,6 +67,19 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
     },
     onError: (e) => toast.error(projError(t, e)),
   });
+  // a deposit invoiced outside the portal: taken off the project's invoice like a quote deposit (pending lines are made again)
+  const [dep, setDep] = useState({ amount: b0.externalDeposit ? String(b0.externalDeposit.amount) : "", note: b0.externalDeposit?.note ?? "" });
+  const depNum = Number(dep.amount.replace(",", "."));
+  const canDeposit = can("proj.edit") && can("accounting.manage") && project.status !== "cancelled";
+  const saveDeposit = useMutation({
+    mutationFn: () => api.patch(`/proj/${project.id}`, { externalDeposit: dep.amount.trim() !== "" && depNum > 0 ? { amount: depNum, note: dep.note.trim() || undefined } : null }),
+    onSuccess: () => {
+      toast.success(t("projBill.depositSaved"));
+      void qc.invalidateQueries({ queryKey: ["proj"] });
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+    },
+    onError: (e) => toast.error(projError(t, e)),
+  });
   const sold = project.billing.mode === "fixed" || project.billing.mode === "bank" || (project.soldHours ?? 0) > 0;
 
   const save = useMutation({
@@ -153,6 +166,19 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
               </Button>
             )}
             {b0.billedAt && <p className="text-xs text-emerald-300">{t("projBill.billedAt")}</p>}
+            <div className="space-y-2 rounded-xl border p-3">
+              <span className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("projBill.deposit")}</span>
+              <div className="grid gap-2 sm:grid-cols-[8rem_1fr]">
+                <Input type="number" inputMode="decimal" min={0} step={0.01} value={dep.amount} disabled={!canDeposit} placeholder="0,00" onChange={(e) => setDep({ ...dep, amount: e.target.value })} />
+                <Input value={dep.note} maxLength={300} disabled={!canDeposit} placeholder={t("projBill.depositNote")} onChange={(e) => setDep({ ...dep, note: e.target.value })} />
+              </div>
+              <p className="text-[11px] text-muted-foreground">{t("projBill.depositHint")}</p>
+              {canDeposit && (
+                <Button type="button" size="sm" variant="outline" disabled={saveDeposit.isPending} onClick={() => saveDeposit.mutate()}>
+                  {t("projBill.depositSave")}
+                </Button>
+              )}
+            </div>
           </section>
 
           <section className="space-y-3">

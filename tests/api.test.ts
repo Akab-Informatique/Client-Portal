@@ -13355,6 +13355,117 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     expect((await admin.post("/api/proj/from-quote/00000000-0000-4000-8000-000000000000", {})).status).toBe(404);
   });
 
+  it("an invoice groups a project's sale line, charges and deposit in one section with a subtotal", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj facture inc.", autotaskId: 9_100_931, portalEnabled: true }).returning();
+    const p = (await tech.post("/api/proj", { name: "Migration serveur", clientId: client.id, description: "Remplacer le vieux serveur" })).json;
+    const c1 = (await tech.post(`/api/proj/${p.id}/charges`, { name: "Serveur Dell", quantity: 1, unitPrice: 1000, billable: true })).json;
+    const c2 = (await tech.post(`/api/proj/${p.id}/charges`, { name: "Licence", quantity: 2, unitPrice: 100, rebate: 10, billable: true })).json;
+    const chargeIds = c2.items.map((x: any) => x.id);
+    expect(chargeIds).toHaveLength(2);
+    const base = { clientId: client.id, source: "portal", date: "2026-11-20", quantityX100: 100, status: "approved", approvedAt: new Date(), ticketNumber: p.number, taxable: true };
+    // inserted out of order on purpose: the deposit first, then a support line, then the sale line
+    await db().insert(schema.billingItems).values([
+      { ...base, kind: "project", sourceId: `project:${p.id}:deposit:0`, description: "Moins le dépôt déjà facturé", unitPriceCents: -30000, amountCents: -30000 },
+      { ...base, kind: "labour", sourceId: "test:projinv:support", description: "Soutien", ticketNumber: null, unitPriceCents: 5000, amountCents: 5000 },
+      { ...base, kind: "project", sourceId: `project:${p.id}`, description: `Projet ${p.number} — Migration serveur — 10 h vendues`, unitPriceCents: 50000, amountCents: 50000 },
+    ] as any);
+    for (const [n, id] of chargeIds.entries()) {
+      await db().update(schema.billingItems).set({ status: "approved", approvedAt: new Date() }).where(eq(schema.billingItems.sourceId, `pcharge:${id}`));
+      expect(n).toBeLessThan(2);
+    }
+    const draft = (await admin.post("/api/billables/invoice/preview", { clientId: client.id })).json;
+    const heading = `Projet ${p.number} — Migration serveur`;
+    // the client's own lines first, then the project's section: sale line, charges, deposit
+    expect(draft.lines[0]).toMatchObject({ description: "Soutien", sectionName: null });
+    const sect = draft.lines.slice(1);
+    expect(sect.every((l: any) => l.sectionName === heading && l.sectionNote === "Remplacer le vieux serveur")).toBe(true);
+    expect(sect[0].description).toContain("h vendues");
+    expect(sect.slice(1, 3).map((l: any) => l.kind)).toEqual(["charge", "charge"]);
+    expect(sect[3].amountCents).toBe(-30000);
+    // the grouping changes no amount: 50 + 500 + 1000 + 180 - 300... as the plain sum of the lines
+    const sum = draft.lines.reduce((n: number, l: any) => n + l.amountCents, 0);
+    expect(draft.subtotalCents).toBe(sum);
+    expect(sect.reduce((n: number, l: any) => n + l.amountCents, 0)).toBe(sum - 5000);
+    const made = (await admin.post("/api/billables/invoice", { clientId: client.id })).json;
+    const inv = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((v: any) => v.id === made.id);
+    expect(inv.lines.map((l: any) => l.sectionName)).toEqual([null, heading, heading, heading, heading]);
+    expect(inv.lines[1].sectionNote).toBe("Remplacer le vieux serveur");
+    expect(inv.totalCents).toBe(made.totalCents);
+    expect((await admin.get(`/api/crm/invoices/${made.id}/pdf`)).status).toBe(200);
+    await db().delete(schema.billingItems).where(sql`${schema.billingItems.sourceId} like 'test:projinv:%'`);
+  });
+
+  it("a deposit invoiced outside the portal comes off the project's sale line, in its section", async () => {
+    const tech = await signIn("tech@akab.local");
+    const admin = await signIn("admin@akab.local");
+    await db().insert(schema.integrations).values({ provider: "tickets", enabled: true, config: { mode: "local" } }).onConflictDoUpdate({ target: schema.integrations.provider, set: { enabled: true, config: { mode: "local" } } });
+    (await import("../server/lib/localTickets.ts")).resetTicketMode();
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Depot externe inc.", autotaskId: 9_100_932, portalEnabled: true }).returning();
+    const p = (await tech.post("/api/proj", { name: "Reseau", clientId: client.id, billingMode: "fixed", fixedPrice: 4000, soldHours: 40 })).json;
+    const lines = async () => db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${p.id}%`));
+    // setting it needs accounting.manage as well (the tech has proj.edit only)
+    expect((await tech.patch(`/api/proj/${p.id}`, { externalDeposit: { amount: 2000, note: "x" } })).status).toBe(403);
+    // not in Approbation yet: only stored
+    expect((await admin.patch(`/api/proj/${p.id}`, { externalDeposit: { amount: 2000, note: "Facture QB 10120" } })).status).toBe(200);
+    expect((await admin.get(`/api/proj/${p.id}`)).json.billing.externalDeposit).toEqual({ amount: 2000, note: "Facture QB 10120" });
+    expect(await lines()).toHaveLength(0);
+    expect((await admin.post(`/api/proj/${p.id}/bill`, {})).status).toBe(200);
+    let l = (await lines()).sort((a, b) => a.sourceId!.localeCompare(b.sourceId!));
+    expect(l.map((x) => [x.sourceId, x.amountCents])).toEqual([[`project:${p.id}`, 400000], [`project:${p.id}:deposit:ext`, -200000]]);
+    expect(l[1].description).toBe("Dépôt déjà facturé — Facture QB 10120");
+    // the deposit changes while the lines are pending: they are made again
+    expect((await admin.patch(`/api/proj/${p.id}`, { externalDeposit: { amount: 1500, note: "Facture QB 10120" } })).status).toBe(200);
+    l = await lines();
+    expect(l.reduce((n, x) => n + x.amountCents, 0)).toBe(250000);
+    // approved: never touched
+    await db().update(schema.billingItems).set({ status: "approved", approvedAt: new Date() }).where(like(schema.billingItems.sourceId, `project:${p.id}%`));
+    expect((await admin.patch(`/api/proj/${p.id}`, { externalDeposit: null })).json.error).toBe("project_billed");
+    // the invoice: one section, the deposit last, a 10 % discount inside it
+    const draft = (await admin.post("/api/billables/invoice/preview", { clientId: client.id, discount: { percent: 10, reason: "Geste commercial", projectId: p.id } })).json;
+    expect(draft.lines.map((x: any) => x.amountCents)).toEqual([400000, -150000, -25000]);
+    expect(draft.lines.every((x: any) => x.sectionName === `Projet ${p.number} — Reseau`)).toBe(true);
+    expect(draft.lines[2].description).toBe("Rabais — Geste commercial (10 %)");
+    expect(draft.subtotalCents).toBe(225000);
+  });
+
+  it("a discount on an invoice: dollars or percent, split taxable / not, never above the subtotal", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Rabais facture inc.", autotaskId: 9_100_933, portalEnabled: true }).returning();
+    const it = (sourceId: string, cents: number, taxable: boolean) => ({ clientId: client.id, kind: "charge", source: "portal", sourceId, date: "2026-11-10", description: sourceId, quantityX100: 100, unitPriceCents: cents, amountCents: cents, taxable, status: "approved", approvedAt: new Date() });
+    await db().insert(schema.billingItems).values([it("test:disc:a", 100000, true), it("test:disc:b", 50000, false)] as any);
+    try {
+      const plain = (await admin.post("/api/billables/invoice/preview", { clientId: client.id })).json;
+      const byAmount = (await admin.post("/api/billables/invoice/preview", { clientId: client.id, discount: { amount: 150, reason: "Dépôt déjà payé" } })).json;
+      const byPercent = (await admin.post("/api/billables/invoice/preview", { clientId: client.id, discount: { percent: 10, reason: "Dépôt déjà payé" } })).json;
+      // 150 $ over 1000 taxable + 500 not: 100 $ taxable and 50 $ not
+      for (const d of [byAmount, byPercent]) {
+        const disc = d.lines.filter((l: any) => l.kind === "discount");
+        expect(disc.map((l: any) => [l.amountCents, l.taxable])).toEqual([[-10000, true], [-5000, false]]);
+        expect(disc[0].description).toContain("Rabais — Dépôt déjà payé");
+        expect(d.subtotalCents).toBe(plain.subtotalCents - 15000);
+        // the taxes are those of the taxable base after the discount (900 $)
+        expect(d.gstCents + d.qstCents).toBeLessThan(plain.gstCents + plain.qstCents);
+        expect(d.totalCents).toBe(d.subtotalCents + d.gstCents + d.qstCents);
+      }
+      expect((await admin.post("/api/billables/invoice/preview", { clientId: client.id, discount: { amount: 99999, reason: "x" } })).json.error).toBe("discount_too_big");
+      expect((await admin.post("/api/billables/invoice/preview", { clientId: client.id, discount: { amount: 5, reason: "  " } })).status).toBe(400);
+      // only with accounting.manage
+      expect((await tech.post("/api/billables/invoice", { clientId: client.id, discount: { amount: 5, reason: "x" } })).status).toBe(403);
+      const made = (await admin.post("/api/billables/invoice", { clientId: client.id, discount: { amount: 150, reason: "Dépôt déjà payé" } })).json;
+      const inv = (await admin.get(`/api/crm/clients/${client.id}/invoices`)).json.items.find((v: any) => v.id === made.id);
+      expect(inv.lines.filter((l: any) => l.kind === "discount")).toHaveLength(2);
+      expect(inv.totalCents).toBe(byAmount.totalCents);
+      expect((await admin.get(`/api/crm/invoices/${made.id}/pdf`)).status).toBe(200);
+    } finally {
+      await db().delete(schema.billingItems).where(sql`${schema.billingItems.sourceId} like 'test:disc:%'`);
+    }
+  });
+
   it("charges on a project: the equipment sold is work to bill at once; supply, delete, rights; made from a quote", async () => {
     const tech = await signIn("tech@akab.local");
     const admin = await signIn("admin@akab.local");

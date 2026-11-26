@@ -8,6 +8,21 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-27.7",
+    date: "2026-11-27",
+    sections: [
+      {
+        fr: "Facturation",
+        en: "Invoicing",
+        items: [
+          { fr: "Une facture qui contient le travail d'un projet le regroupe dans une section « Projet P-… — nom » : la ligne du projet (heures vendues), ses frais, le dépôt déjà facturé, puis le sous-total du projet. Le soutien et les contrats restent hors de la section, et le total ne change pas.", en: "An invoice holding a project's work now groups it in a \"Project P-… — name\" section: the project line (hours sold), its charges, the deposit already invoiced, then the project's subtotal. Support and contracts stay outside the section, and the total does not change." },
+          { fr: "Rabais sur la facture (Éléments à facturer) : un montant en $ ou un pourcentage, avec une raison affichée sur la facture, pour corriger une erreur. Il devient une ligne négative répartie entre lignes taxables et non taxables (taxes justes), sur toute la facture ou dans la section d'un projet.", en: "Discount on the invoice (Éléments à facturer): an amount in $ or a percent, with a reason shown on the invoice, to correct an error. It becomes a negative line split between taxable and non-taxable lines (right taxes), on the whole invoice or inside a project's section." },
+          { fr: "Projets : un dépôt déjà facturé hors du portail (Info du projet) est retiré de la facture du projet comme un dépôt de soumission, et apparaît dans sa section.", en: "Projects: a deposit already invoiced outside the portal (Project info) comes off the project's invoice like a quote deposit, and shows in its section." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-27.6",
     date: "2026-11-27",
     sections: [

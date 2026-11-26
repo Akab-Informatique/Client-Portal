@@ -406,6 +406,7 @@ export async function detailOf(p: ProjRow, me: string, canManage: boolean, opts:
       fixedPrice: p.fixedPriceCents == null ? null : p.fixedPriceCents / 100,
       bankExpiresOn: p.bankExpiresOn,
       billedAt: p.invoicedAt ? p.invoicedAt.toISOString() : null,
+      externalDeposit: p.externalDepositCents ? { amount: p.externalDepositCents / 100, note: p.externalDepositNote ?? "" } : null,
       ...bill,
     },
     tasks: await taskViews(taskRows),
