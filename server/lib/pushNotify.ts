@@ -30,6 +30,7 @@ const TITLES: Record<NotificationType, { fr: string; en: string }> = {
   "proj.assigned": { fr: "Tâche de projet pour vous", en: "Project task for you" },
   "proj.notify": { fr: "On vous signale un projet", en: "A project for you" },
   "proj.overrun": { fr: "Heures vendues dépassées", en: "Hours sold exceeded" },
+  "proj.done": { fr: "Projet terminé : à facturer", en: "Project finished: to bill" },
   "proj.delivered": { fr: "Projet livré : à vérifier et facturer", en: "Project delivered: to check and bill" },
   "opp.new": { fr: "Nouvelle opportunité", en: "New opportunity" },
   "opp.assigned": { fr: "Opportunité assignée à vous", en: "Opportunity assigned to you" },
@@ -64,6 +65,7 @@ export function pushText(type: NotificationType, data: Record<string, unknown>, 
     case "ticket.notify":
     case "proj.notify":
     case "proj.delivered":
+    case "proj.done":
     case "proj.overrun":
     case "ticket.client":
     case "ticket.help":

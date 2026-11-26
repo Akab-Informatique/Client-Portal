@@ -80,8 +80,9 @@ function useView(n: Notification): { icon: LucideIcon; title: string; body: stri
       return { icon: Workflow, title: t(n.data.notice ? "notifications.pipelineNotice" : n.data.comment ? "notifications.pipelineComment" : "notifications.pipelineAssigned", { by: n.data.by ?? "" }), body: [n.data.title, n.data.message].filter(Boolean).join(" — "), tone: "gold" };
     case "proj.notify":
       return { icon: Workflow, title: t("projDeliver.bell.notify", { from: n.data.from ?? "" }), body: [n.data.number, n.data.title, n.data.company, n.data.message].filter(Boolean).join(" · "), tone: "gold" };
+    case "proj.done":
     case "proj.delivered":
-      return { icon: Workflow, title: t("projDeliver.bell.delivered"), body: [n.data.number, n.data.title, n.data.company, n.data.from].filter(Boolean).join(" · "), tone: "gold" };
+      return { icon: Workflow, title: t(n.type === "proj.done" ? "projDeliver.bell.done" : "projDeliver.bell.delivered"), body: [n.data.number, n.data.title, n.data.company, n.data.from].filter(Boolean).join(" · "), tone: "gold" };
     case "proj.overrun":
       return { icon: Workflow, title: t("projOverrun.bell"), body: [n.data.number, n.data.title, n.data.company, n.data.message].filter(Boolean).join(" · "), tone: "gold" };
     case "proj.kickoff":

@@ -65,6 +65,55 @@ function ApprovalsLink({ go }: { go?: () => void }) {
   );
 }
 
+/** Setting a project to "Terminé": it goes to Approbation like a delivery, so it needs hours sold (asked here when it has none) */
+export function useFinishProject(project: ProjDetail) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const [ask, setAsk] = useState(false);
+  const [hours, setHours] = useState("");
+  const needHours = !((project.soldHours ?? 0) > 0) && !project.billing.prepaid;
+  const mutation = useMutation({
+    mutationFn: (soldHours?: number) => api.patch<{ billing?: { status: string } }>(`/proj/${project.id}`, soldHours != null ? { status: "done", soldHours } : { status: "done" }),
+    onSuccess: (r) => {
+      setAsk(false);
+      toast.success(t("projDeliver.done.done"));
+      if (r.billing) {
+        toast.info(
+          <span>
+            {t(`projDeliver.deliver.billing.${r.billing.status}`)} {(r.billing.status === "created" || r.billing.status === "already") && <ApprovalsLink go={() => navigate(APPROVALS_LINK)} />}
+          </span>,
+        );
+      }
+      void qc.invalidateQueries({ queryKey: ["billables"] });
+      void qc.invalidateQueries({ queryKey: ["proj"] });
+    },
+    onError: (e) => toast.error(err(t, e)),
+  });
+  const finish = () => (needHours ? setAsk(true) : mutation.mutate(undefined));
+  const dialog = ask ? (
+    <Dialog open onOpenChange={(o) => !o && setAsk(false)}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("projDeliver.done.title")}</DialogTitle>
+          <DialogDescription>{t("projDeliver.done.text")}</DialogDescription>
+        </DialogHeader>
+        <p className="text-sm text-amber-200">{t("projDeliver.sold.needed")}</p>
+        <SoldHoursField project={project} value={hours} onChange={setHours} />
+        <div className="flex justify-end gap-2">
+          <Button variant="ghost" onClick={() => setAsk(false)}>
+            {t("common.cancel")}
+          </Button>
+          <Button disabled={mutation.isPending || !(parseHours(hours) > 0)} onClick={() => mutation.mutate(parseHours(hours))}>
+            {t("projDeliver.done.confirm")}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  ) : null;
+  return { finish, dialog, pending: mutation.isPending };
+}
+
 /** Bell button of the project header: tell colleagues about this project (like a ticket's) */
 export function ProjNotifyButton({ project }: { project: ProjDetail }) {
   const { t } = useTranslation();
@@ -194,14 +243,7 @@ export function DeliveredActions({ project }: { project: ProjDetail }) {
     },
     onError: (e) => toast.error(projError(t, e)),
   });
-  const close = useMutation({
-    mutationFn: () => api.patch(`/proj/${project.id}`, { status: "done" }),
-    onSuccess: () => {
-      toast.success(t("projDeliver.deliver.closed"));
-      void qc.invalidateQueries({ queryKey: ["proj"] });
-    },
-    onError: (e) => toast.error(projError(t, e)),
-  });
+  const close = useFinishProject(project);
   const noLine = project.billing.status === "none" && !project.billing.billedAt;
   const showBill = can("accounting.manage") && noLine;
   const where = project.billing.status !== "none" ? t(`projDeliver.deliver.where.${project.billing.status}`, { number: project.billing.invoiceNumber ?? "" }) : null;
@@ -228,14 +270,15 @@ export function DeliveredActions({ project }: { project: ProjDetail }) {
           type="button"
           size="sm"
           variant="outline"
-          disabled={close.isPending}
+          disabled={close.pending}
           onClick={async () => {
-            if (await confirm({ title: t("projDeliver.deliver.closeTitle"), description: t("projDeliver.deliver.closeText"), confirmLabel: t("projDeliver.deliver.closeBilled") })) close.mutate();
+            if (await confirm({ title: t("projDeliver.deliver.closeTitle"), description: t("projDeliver.deliver.closeText"), confirmLabel: t("projDeliver.deliver.closeBilled") })) close.finish();
           }}
         >
           {t("projDeliver.deliver.closeBilled")}
         </Button>
       )}
+      {close.dialog}
     </span>
   );
 }

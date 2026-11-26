@@ -12893,7 +12893,7 @@ describe("new-format projects (proj)", () => {
     expect((await tech.patch(`/api/proj/${p.id}/tasks/${t1.json.id}`, { status: "todo" })).json.doneAt).toBeNull();
 
     // a closed project takes no new task; reopened, it does
-    expect((await tech.patch(`/api/proj/${p.id}`, { status: "done" })).json.status).toBe("done");
+    expect((await tech.patch(`/api/proj/${p.id}`, { status: "done", soldHours: 1 })).json.status).toBe("done");
     expect((await tech.post(`/api/proj/${p.id}/tasks`, { title: "Trop tard" })).json.error).toBe("project_closed");
     expect((await tech.patch(`/api/proj/${p.id}`, { status: "active" })).json.status).toBe("active");
     expect((await tech.post(`/api/proj/${p.id}/tasks`, { title: "Encore" })).status).toBe(201);
@@ -13534,7 +13534,7 @@ describe("a new-format project on my day", () => {
     expect((await tech.del(`/api/pipeline/day/pprojects/${p.id}`)).json.added).toBe(false);
     expect((await tech.get("/api/pipeline/day")).json.items.some((i: any) => i.key === `pproject:${p.id}`)).toBe(false);
     // a closed project cannot be added
-    await tech.patch(`/api/proj/${p.id}`, { status: "done" });
+    await tech.patch(`/api/proj/${p.id}`, { status: "done", soldHours: 1 });
     expect((await tech.put(`/api/pipeline/day/pprojects/${p.id}`, { time: null })).json.error).toBe("project_closed");
   });
 });
@@ -13773,6 +13773,30 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     await admin.post(`/api/proj/${q2.id}/deliver`, {});
     expect((await bellsOf(adminUser.id, "proj.delivered", q2.id)).length).toBe(1);
     await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+  });
+
+  it("a project set to done goes to Approbation, with hours sold, once", async () => {
+    const admin = await signIn("admin@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj done inc.", autotaskId: 9_100_954, portalEnabled: true }).returning();
+    const lines = async (id: string) => db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${id}%`));
+    const p = (await admin.post("/api/proj", { name: "Terminé sans heures", clientId: client.id, billingMode: "special", hourlyRate: 100 })).json;
+    const no = await admin.patch(`/api/proj/${p.id}`, { status: "done" });
+    expect(no.json.error).toBe("project_not_sold");
+    expect((await admin.get(`/api/proj/${p.id}`)).json.status).not.toBe("done");
+    expect(await lines(p.id)).toHaveLength(0);
+    const ok = await admin.patch(`/api/proj/${p.id}`, { status: "done", soldHours: 8 });
+    expect(ok.status).toBe(200);
+    expect(ok.json.status).toBe("done");
+    expect(ok.json.billing.status).toBe("created");
+    const l = await lines(p.id);
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({ status: "pending", amountCents: 80000 });
+    // delivered then done: still one line
+    const q = (await admin.post("/api/proj", { name: "Livré puis terminé", clientId: client.id, billingMode: "special", hourlyRate: 100, soldHours: 2 })).json;
+    await admin.post(`/api/proj/${q.id}/deliver`, {});
+    expect(await lines(q.id)).toHaveLength(1);
+    expect((await admin.patch(`/api/proj/${q.id}`, { status: "done" })).json.billing.status).toBe("already");
+    expect(await lines(q.id)).toHaveLength(1);
   });
 
   it("delivered: the project goes to Approbation once, undo removes a pending line only", async () => {

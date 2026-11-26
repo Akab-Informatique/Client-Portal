@@ -44,6 +44,12 @@ export const fr = {
         posted: "Facturé (facture n° {{number}})",
       },
     },
+    done: {
+      title: "Marquer ce projet comme terminé ?",
+      text: "Un projet terminé est envoyé à l'approbation pour facturation.",
+      confirm: "Terminer le projet",
+      done: "Projet terminé.",
+    },
     sold: {
       label: "Heures vendues",
       needed: "Ce projet n'a pas d'heures vendues : inscrivez-les pour qu'il soit envoyé à l'approbation.",
@@ -69,6 +75,7 @@ export const fr = {
     bell: {
       notify: "{{from}} vous signale un projet",
       delivered: "Projet livré : à vérifier et facturer",
+      done: "Projet terminé : à facturer",
     },
     quickProject: "Nouveau projet",
   },
@@ -123,6 +130,12 @@ export const en = {
         posted: "Invoiced (invoice no. {{number}})",
       },
     },
+    done: {
+      title: "Mark this project as finished?",
+      text: "A finished project is sent to approval for billing.",
+      confirm: "Finish the project",
+      done: "Project finished.",
+    },
     sold: {
       label: "Hours sold",
       needed: "This project has no hours sold: enter them so it can be sent to approval.",
@@ -148,6 +161,7 @@ export const en = {
     bell: {
       notify: "{{from}} flagged a project for you",
       delivered: "Project delivered: to check and bill",
+      done: "Project finished: to bill",
     },
     quickProject: "New project",
   },

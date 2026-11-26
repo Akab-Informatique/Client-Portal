@@ -556,6 +556,12 @@ export const projRoutes = new Hono<AppEnv>()
     const leadId = p.leadId !== undefined ? p.leadId : cur.leadId;
     if (p.leadId) await activeStaff([p.leadId]);
     const now = new Date();
+    // a project becoming "done" always lands in Approbation: it needs hours sold (sent with the change when it has none), except under a prepaid hours bank
+    const becomesDone = p.status === "done" && cur.status !== "done";
+    if (becomesDone) {
+      const soldNow = p.soldHours !== undefined ? (p.soldHours ?? 0) : (cur.soldHoursX100 ?? 0) / 100;
+      if (!(soldNow > 0) && !(await prepaidBank(cur))) throw new HTTPException(409, { message: "project_not_sold" });
+    }
     const set: Partial<typeof schema.projProjects.$inferInsert> = { updatedAt: now, clientId, contactId, leadId, startDate, dueDate };
     if (p.name !== undefined) set.name = p.name;
     if (p.status !== undefined) {
@@ -597,8 +603,31 @@ export const projRoutes = new Hono<AppEnv>()
     }
     if (p.soldHours !== undefined) await checkOverrun(cur.id);
     await audit(a.user.id, "proj.updated", cur.id, { fields: Object.keys(p) });
+    // done = to Approbation (same line as a delivery; never twice), outside any transaction
+    let billing: Awaited<ReturnType<typeof billOnDelivery>> | undefined;
+    let notified = 0;
+    if (becomesDone) {
+      billing = await billOnDelivery(cur.id);
+      // reviewers are told unless the delivery already did
+      if (cur.status !== "delivered") {
+        const client = await clientNameOf(clientId);
+        const reviewers = (await effectiveReviewers()).map((x) => x.id);
+        const told = reviewers.length
+          ? await notifyTechs(
+              { id: 0, number: cur.number, title: cur.name, company: { name: client }, link: `/pipeline?section=tickets&pj=${cur.id}`, headFull: `Projet ${cur.number} — ${p.name ?? cur.name}${client ? ` (${client})` : ""} terminé par ${a.realUser.name} : à facturer`, bellType: "proj.done" },
+              { id: "", name: a.realUser.name },
+              reviewers,
+              "",
+              { email: true, sms: false, teams: false, bell: true },
+            ).catch(() => [])
+          : [];
+        notified = told.length;
+      }
+      await audit(a.user.id, "proj.done_billed", cur.id, { number: cur.number, billing: billing.status });
+    }
     const fresh = await loadProj(cur.id);
-    return c.json(await viewFor(fresh, a));
+    const view = await viewFor(fresh, a);
+    return c.json(becomesDone ? { ...view, notified, billing } : view);
   })
 
 

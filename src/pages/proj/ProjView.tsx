@@ -22,7 +22,7 @@ import { ProjComposer } from "./ProjComposer";
 import { ProjTimerChip } from "./ProjTimerChip";
 import { ProjNotes } from "./ProjNotes";
 import { WatchReminder, useWatchOnOpen } from "@/components/WatchReminder";
-import { DeliveredActions, DeliverButton, DeliveryReviewersButton, ProjNotifyButton } from "./ProjDelivery";
+import { DeliveredActions, DeliverButton, useFinishProject, DeliveryReviewersButton, ProjNotifyButton } from "./ProjDelivery";
 import { ProjCalendar } from "./ProjCalendar";
 import { ProjSide } from "./ProjSide";
 import { ProjGauge } from "./ProjGauge";
@@ -208,6 +208,8 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
     onError: (e) => toast.error(projError(t, e)),
   });
 
+  const finishProject = useFinishProject(d ?? ({ id, billing: { prepaid: true }, soldHours: 1 } as unknown as ProjDetail));
+
   const remove = useMutation({
     mutationFn: () => api.del<{ deleted: boolean }>(`/proj/${id}`),
     onSuccess: () => {
@@ -295,7 +297,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                   <div className="flex flex-wrap items-end gap-3">
                     <label className="space-y-1">
                       <span className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("proj.status")}</span>
-                      <select className={inputCls} value={d.status} disabled={!canEdit || (d.status === "delivered" && !d.canManage)} onChange={(e) => save.mutate({ status: e.target.value })}>
+                      <select className={inputCls} value={d.status} disabled={!canEdit || (d.status === "delivered" && !d.canManage)} onChange={(e) => (e.target.value === "done" && d.status !== "done" ? finishProject.finish() : save.mutate({ status: e.target.value }))}>
                         {(d.status === "delivered" ? [...STATUSES.slice(0, 4), "delivered" as ProjStatus, "done" as ProjStatus] : STATUSES).map((s) => (
                           <option key={s} value={s}>
                             {t(`proj.statusValue.${s}`)}
@@ -303,6 +305,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
                         ))}
                       </select>
                     </label>
+                    {finishProject.dialog}
                     <label className="space-y-1">
                       <span className="block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("proj.due")}</span>
                       <input

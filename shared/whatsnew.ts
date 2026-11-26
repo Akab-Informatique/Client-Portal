@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-27.6",
+    date: "2026-11-27",
+    sections: [
+      {
+        fr: "Projets",
+        en: "Projects",
+        items: [
+          { fr: "Un projet mis à « Terminé » va maintenant dans Approbation pour facturation, comme un projet livré (jamais deux fois). Sans heures vendues, la fenêtre les demande d'abord.", en: "A project set to \"Done\" now goes to Approbation for billing, like a delivered one (never twice). With no hours sold, the window asks for them first." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-27.5",
     date: "2026-11-27",
     sections: [
