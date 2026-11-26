@@ -342,9 +342,37 @@ export async function entriesOf(projectId: string, opts: { userId?: string; from
     .limit(opts.limit);
 }
 
-/** The full opened project (the Detail shape), as seen by `me` */
-export async function detailOf(p: ProjRow, me: string, canManage: boolean) {
+/** Where the project's own line stands in Approbation, the rate its hours would bill at, and whether a prepaid hours bank pays it */
+async function billStateOf(p: ProjRow, seeInvoice: boolean) {
   const d = db();
+  const [line] = await d
+    .select({ status: schema.billingItems.status, number: schema.clientInvoices.number })
+    .from(schema.billingItems)
+    .leftJoin(schema.clientInvoices, eq(schema.clientInvoices.id, schema.billingItems.invoiceId))
+    .where(eq(schema.billingItems.sourceId, `project:${p.id}`));
+  const status = (!line ? "none" : line.status === "posted" ? "posted" : line.status === "approved" ? "approved" : "pending") as "none" | "pending" | "approved" | "posted";
+  let rate: number | null = p.hourlyRateCents == null ? null : p.hourlyRateCents / 100;
+  let prepaid = false;
+  if (p.billingMode === "contract" && p.contractId) {
+    const [k] = await d.select().from(schema.clientContracts).where(eq(schema.clientContracts.id, p.contractId));
+    if (k) {
+      prepaid = Boolean(k.bankPrepaid);
+      const { billingSettings } = await import("./billing.ts");
+      const { hourlyRateOf } = await import("./contracts.ts");
+      const r = hourlyRateOf(k, (await billingSettings()).rates.hourly);
+      rate = r == null ? null : r / 100;
+    }
+  } else if (rate == null) {
+    const { billingSettings } = await import("./billing.ts");
+    rate = (await billingSettings()).rates.hourly;
+  }
+  return { status, ...(seeInvoice && line?.number ? { invoiceNumber: line.number } : {}), previewRate: rate, prepaid };
+}
+
+/** The full opened project (the Detail shape), as seen by `me` */
+export async function detailOf(p: ProjRow, me: string, canManage: boolean, opts: { seeInvoice?: boolean } = {}) {
+  const d = db();
+  const bill = await billStateOf(p, opts.seeInvoice === true);
   const [view] = await projectViews([p]);
   const [contact, members, taskRows, noteRows, byPerson, timer] = await Promise.all([
     p.contactId
@@ -378,6 +406,7 @@ export async function detailOf(p: ProjRow, me: string, canManage: boolean) {
       fixedPrice: p.fixedPriceCents == null ? null : p.fixedPriceCents / 100,
       bankExpiresOn: p.bankExpiresOn,
       billedAt: p.invoicedAt ? p.invoicedAt.toISOString() : null,
+      ...bill,
     },
     tasks: await taskViews(taskRows),
     notes: await noteViews(noteRows),

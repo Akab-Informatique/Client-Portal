@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-27.3",
+    date: "2026-11-27",
+    sections: [
+      {
+        fr: "Projets livrés",
+        en: "Delivered projects",
+        items: [
+          { fr: "Marquer un projet comme livré demande maintenant les heures vendues s'il n'en a pas (avec le montant que cela donne), pour qu'il arrive toujours dans Approbation. Un projet livré sans ligne propose d'inscrire les heures et « Envoyer à l'approbation », et dit où en est sa ligne avec un lien « Voir dans Approbation ».", en: "Marking a project delivered now asks for the hours sold when it has none (with the amount that comes to), so it always reaches Approbation. A delivered project with no line offers to enter the hours and \"Send to approval\", and says where its line stands with a \"See in Approbation\" link." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-27.2",
     date: "2026-11-27",
     sections: [

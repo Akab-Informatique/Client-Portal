@@ -165,8 +165,15 @@ const isManager = (a: ReturnType<typeof auth>) => a.permissions.includes("proj.m
 /** Logging time needs the timesheet right as well as the project's */
 /** A project as the caller may see it: the quote's prices only with the right to see quotes */
 async function viewFor(row: Parameters<typeof detailOf>[0], a: ReturnType<typeof auth>) {
-  const d = await detailOf(row, a.user.id, isManager(a));
+  const d = await detailOf(row, a.user.id, isManager(a), { seeInvoice: a.permissions.includes("accounting.view") });
   return a.permissions.includes("quotes.view") ? d : { ...d, quote: null };
+}
+
+/** A project paid by a prepaid hours bank makes no line of its own */
+async function prepaidBank(p: { billingMode: string; contractId: string | null }) {
+  if (p.billingMode !== "contract" || !p.contractId) return false;
+  const [k] = await db().select({ prepaid: schema.clientContracts.bankPrepaid }).from(schema.clientContracts).where(eq(schema.clientContracts.id, p.contractId));
+  return Boolean(k?.prepaid);
 }
 
 function needTimesheets(a: ReturnType<typeof auth>) {
@@ -627,11 +634,19 @@ export const projRoutes = new Hono<AppEnv>()
     const p = await loadProj(c.req.param("id"));
     if (isClosed(p)) throw new HTTPException(409, { message: "project_closed" });
     if (p.status === "delivered") throw new HTTPException(409, { message: "already_delivered" });
+    // a delivered project always lands in Approbation: it needs hours sold (typed here when it has none), except under a prepaid hours bank
+    const body = z.object({ soldHours: z.number().min(0).max(100000).nullable().optional() }).safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) throw new HTTPException(400, { message: "invalid" });
+    if (!((p.soldHoursX100 ?? 0) > 0) && !(await prepaidBank(p))) {
+      if (!((body.data.soldHours ?? 0) > 0)) throw new HTTPException(409, { message: "project_not_sold" });
+      await db().update(schema.projProjects).set({ soldHoursX100: x100Of(body.data.soldHours) }).where(eq(schema.projProjects.id, p.id));
+    }
     const now = new Date();
     await db().update(schema.projProjects).set({ status: "delivered", deliveredAt: now, deliveredBy: a.user.id, updatedAt: now }).where(eq(schema.projProjects.id, p.id));
     const client = await clientNameOf(p.clientId);
     const reviewers = (await effectiveReviewers()).map((x) => x.id);
     const billing = await billOnDelivery(p.id);
+    if (!((p.soldHoursX100 ?? 0) > 0) && body.data.soldHours) await checkOverrun(p.id);
     const told = reviewers.length
       ? await notifyTechs(
           { id: 0, number: p.number, title: p.name, company: { name: client }, link: `/pipeline?section=tickets&pj=${p.id}`, headFull: `Projet ${p.number} — ${p.name}${client ? ` (${client})` : ""} livré par ${a.realUser.name} : à vérifier et facturer`, bellType: "proj.delivered" },
@@ -941,6 +956,13 @@ export const projRoutes = new Hono<AppEnv>()
     const a = auth(c);
     if (!a.permissions.includes("accounting.manage")) throw new HTTPException(403, { message: "forbidden" });
     const p = await loadProj(c.req.param("id"));
+    // the hours sold typed in the delivered banner are saved first (a project with none cannot be billed)
+    const body = z.object({ soldHours: z.number().min(0).max(100000).nullable().optional() }).safeParse(await c.req.json().catch(() => ({})));
+    if (!body.success) throw new HTTPException(400, { message: "invalid" });
+    if (body.data.soldHours != null && body.data.soldHours > 0 && !p.invoicedAt) {
+      await db().update(schema.projProjects).set({ soldHoursX100: x100Of(body.data.soldHours), updatedAt: new Date() }).where(eq(schema.projProjects.id, p.id));
+      await checkOverrun(p.id);
+    }
     try {
       const r = await billProj(p.id);
       await syncBillablesNow();

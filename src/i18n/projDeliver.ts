@@ -37,6 +37,19 @@ export const fr = {
       closeText: "Le projet passe à « Terminé » et quitte la liste des projets livrés.",
       closed: "Projet fermé.",
       bannerBy: "Livré par {{name}} le {{date}} : à vérifier et facturer.",
+      seeApproval: "Voir dans Approbation",
+      where: {
+        pending: "Dans Approbation › Projets : à approuver",
+        approved: "Dans Approbation › Projets : approuvé",
+        posted: "Facturé (facture n° {{number}})",
+      },
+    },
+    sold: {
+      label: "Heures vendues",
+      needed: "Ce projet n'a pas d'heures vendues : inscrivez-les pour qu'il soit envoyé à l'approbation.",
+      preview: "= {{hours}} h × {{rate}} = {{total}}",
+      fixed: "Prix vendu : {{price}}",
+      noRate: "Aucun taux horaire pour calculer le montant.",
     },
     reviewers: {
       button: "Qui est avisé des livraisons",
@@ -103,6 +116,19 @@ export const en = {
       closeText: "The project becomes \"Done\" and leaves the delivered list.",
       closed: "Project closed.",
       bannerBy: "Delivered by {{name}} on {{date}}: to check and bill.",
+      seeApproval: "See in Approbation",
+      where: {
+        pending: "In Approbation › Projects: to approve",
+        approved: "In Approbation › Projects: approved",
+        posted: "Invoiced (invoice no. {{number}})",
+      },
+    },
+    sold: {
+      label: "Hours sold",
+      needed: "This project has no hours sold: enter them so it can be sent to approval.",
+      preview: "= {{hours}} h × {{rate}} = {{total}}",
+      fixed: "Price sold: {{price}}",
+      noRate: "No hourly rate to work out the amount.",
     },
     reviewers: {
       button: "Who is told about deliveries",

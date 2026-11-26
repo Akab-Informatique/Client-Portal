@@ -13152,7 +13152,9 @@ describe("new-format projects: billing, files, the archive brought over, made fr
     expect((await db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, "projtime:%"))).filter((r) => [underContract, special, hourly].some((x) => x.number === r.ticketNumber))).toHaveLength(0);
     // no hours sold: refused, with a clear code; delivery says so without billing
     expect((await admin.post(`/api/proj/${special.id}/bill`, {})).json.error).toBe("project_not_sold");
-    expect((await tech.post(`/api/proj/${special.id}/deliver`, {})).json.billing.status).toBe("not_sold");
+    const refused = await tech.post(`/api/proj/${special.id}/deliver`, {});
+    expect(refused.json.error).toBe("project_not_sold");
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.id, special.id)))[0].status).not.toBe("delivered");
     // hours sold: 4 h at 100 $ whatever was worked (6 h), once, when delivered
     const d = await tech.post(`/api/proj/${hourly.id}/deliver`, {});
     expect(d.json.billing.status).toBe("created");
@@ -13669,7 +13671,7 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
 
   it("the list: delivered projects are not open work but have their own filter", async () => {
     const tech = await signIn("tech@akab.local");
-    const p = (await tech.post("/api/proj", { name: "Zz livrable filtre" })).json;
+    const p = (await tech.post("/api/proj", { name: "Zz livrable filtre", soldHours: 1 })).json;
     expect((await tech.post(`/api/proj/${p.id}/deliver`, {})).json).toMatchObject({ status: "delivered" });
     expect((await tech.get("/api/proj?status=open")).json.map((x: any) => x.id)).not.toContain(p.id);
     expect((await tech.get("/api/proj?status=delivered")).json.map((x: any) => x.id)).toContain(p.id);
@@ -13680,7 +13682,7 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     const tech = await signIn("tech@akab.local");
     const admin = await signIn("admin@akab.local");
     await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
-    const p = (await tech.post("/api/proj", { name: "Zz livre revue" })).json;
+    const p = (await tech.post("/api/proj", { name: "Zz livre revue", soldHours: 1 })).json;
     await tech.post(`/api/proj/${p.id}/deliver`, {});
     const ids = async (c: typeof tech, q: string) => (await c.get(`/api/proj?${q}`)).json.map((x: any) => x.id);
     // a reviewer (administrator) asking for the default list also gets it, with the delivery day
@@ -13707,7 +13709,7 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     const adminUser = await userOf("admin@akab.local");
     const techUser = await userOf("tech@akab.local");
     await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
-    const p = (await tech.post("/api/proj", { name: "Livraison" })).json;
+    const p = (await tech.post("/api/proj", { name: "Livraison", soldHours: 1 })).json;
     const r = await tech.post(`/api/proj/${p.id}/deliver`, {});
     expect(r.status).toBe(200);
     expect(r.json.status).toBe("delivered");
@@ -13730,13 +13732,13 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     // the setting: who is told changes (manager only); the clicker is never told
     expect((await tech.put("/api/proj/delivery-reviewers", { userIds: [techUser.id] })).status).toBe(403);
     expect((await admin.put("/api/proj/delivery-reviewers", { userIds: [techUser.id, adminUser.id] })).status).toBe(200);
-    const q = (await admin.post("/api/proj", { name: "Livraison 2" })).json;
+    const q = (await admin.post("/api/proj", { name: "Livraison 2", soldHours: 1 })).json;
     await admin.post(`/api/proj/${q.id}/deliver`, {});
     expect((await bellsOf(techUser.id, "proj.delivered", q.id)).length).toBe(1);
     expect((await bellsOf(adminUser.id, "proj.delivered", q.id)).length).toBe(1);
     // a stale id in the setting falls back to the master administrators
     await db().update(schema.integrations).set({ config: { deliveryReviewers: ["00000000-0000-0000-0000-000000000000"] } }).where(eq(schema.integrations.provider, "proj"));
-    const q2 = (await admin.post("/api/proj", { name: "Livraison 3" })).json;
+    const q2 = (await admin.post("/api/proj", { name: "Livraison 3", soldHours: 1 })).json;
     await admin.post(`/api/proj/${q2.id}/deliver`, {});
     expect((await bellsOf(adminUser.id, "proj.delivered", q2.id)).length).toBe(1);
     await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
@@ -13767,6 +13769,30 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     expect(await lines(p.id)).toHaveLength(1);
     expect((await admin.post(`/api/proj/${p.id}/deliver`, {})).json.billing.status).toBe("already");
     expect(await lines(p.id)).toHaveLength(1);
+  });
+
+  it("delivering a project with no hours sold asks for them, and always lands in Approbation", async () => {
+    const admin = await signIn("admin@akab.local");
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj sold ask inc.", autotaskId: 9_100_953, portalEnabled: true }).returning();
+    const p = (await admin.post("/api/proj", { name: "Sans heures vendues", clientId: client.id, billingMode: "special", hourlyRate: 100 })).json;
+    const lines = async () => db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${p.id}%`));
+    // refused, nothing changes
+    const no = await admin.post(`/api/proj/${p.id}/deliver`, {});
+    expect(no.json.error).toBe("project_not_sold");
+    expect((await admin.post(`/api/proj/${p.id}/deliver`, { soldHours: 0 })).json.error).toBe("project_not_sold");
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.id, p.id)))[0].status).not.toBe("delivered");
+    expect(await lines()).toHaveLength(0);
+    expect((await admin.get(`/api/proj/${p.id}`)).json.billing).toMatchObject({ status: "none", previewRate: 100 });
+    // with the hours: delivered, saved, one pending line of 12 h
+    const ok = await admin.post(`/api/proj/${p.id}/deliver`, { soldHours: 12 });
+    expect(ok.json.status).toBe("delivered");
+    expect(ok.json.billing.status).toBe("created");
+    expect(ok.json.soldHours).toBe(12);
+    const l = await lines();
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({ status: "pending", quantityX100: 1200, amountCents: 120000 });
+    expect((await admin.get(`/api/proj/${p.id}`)).json.billing.status).toBe("pending");
   });
 
   it("notify a colleague from a project, and from an internal note", async () => {

@@ -2,8 +2,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Link, useNavigate } from "react-router-dom";
 import { BellRing, PackageCheck, Settings2, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -14,10 +16,53 @@ import { useCan } from "@/lib/session";
 import { projError } from "./ProjComposer";
 import type { ProjDetail } from "./shared";
 
-const KNOWN = ["project_delivered", "already_delivered", "not_delivered", "no_recipient", "project_closed"];
+const KNOWN = ["project_not_sold", "project_no_client", "project_delivered", "already_delivered", "not_delivered", "no_recipient", "project_closed"];
 function err(t: (k: string, o?: Record<string, unknown>) => string, e: unknown) {
-  if (e instanceof ApiError && KNOWN.includes(e.code)) return t(e.code === "project_closed" ? "projWork.errors.project_closed" : `projDeliver.errors.${e.code}`);
+  if (e instanceof ApiError && KNOWN.includes(e.code)) return t(e.code === "project_closed" || e.code === "project_not_sold" || e.code === "project_no_client" ?`projWork.errors.${e.code}` : `projDeliver.errors.${e.code}`);
   return t("projWork.error");
+}
+
+const APPROVALS_LINK = "/accounting/approvals?tab=project";
+
+/** What billing the hours sold comes to, written out ("= 12 h × 115 $ = 1 380 $") */
+function soldPreview(t: (k: string, o?: Record<string, unknown>) => string, project: ProjDetail, hours: number): string | null {
+  if (!(hours > 0)) return null;
+  const money = (n: number) => new Intl.NumberFormat("fr-CA", { style: "currency", currency: "CAD" }).format(n);
+  const mode = project.billing.mode;
+  if ((mode === "fixed" || mode === "bank") && project.billing.fixedPrice) return t("projDeliver.sold.fixed", { price: money(project.billing.fixedPrice) });
+  const rate = project.billing.previewRate;
+  if (!rate || rate <= 0) return t("projDeliver.sold.noRate");
+  return t("projDeliver.sold.preview", { hours: hours.toLocaleString("fr-CA"), rate: money(rate), total: money(Math.round(hours * rate * 100) / 100) });
+}
+
+const parseHours = (v: string) => Number(v.replace(",", "."));
+
+function SoldHoursField({ project, value, onChange }: { project: ProjDetail; value: string; onChange: (v: string) => void }) {
+  const { t } = useTranslation();
+  const preview = soldPreview(t, project, parseHours(value));
+  return (
+    <label className="block space-y-1 text-left">
+      <span className="text-sm font-medium">{t("projDeliver.sold.label")}</span>
+      <Input type="number" inputMode="decimal" min={0} max={100000} step={0.25} required value={value} onChange={(e) => onChange(e.target.value)} />
+      {preview && <span className="block text-xs text-muted-foreground">{preview}</span>}
+    </label>
+  );
+}
+
+/** In a toast (drawn outside the router) a <Link> crashes the page: there it is a button calling `go`. */
+function ApprovalsLink({ go }: { go?: () => void }) {
+  const { t } = useTranslation();
+  if (go)
+    return (
+      <button type="button" onClick={go} className="underline underline-offset-2">
+        {t("projDeliver.deliver.seeApproval")}
+      </button>
+    );
+  return (
+    <Link to={APPROVALS_LINK} className="underline underline-offset-2">
+      {t("projDeliver.deliver.seeApproval")}
+    </Link>
+  );
 }
 
 /** Bell button of the project header: tell colleagues about this project (like a ticket's) */
@@ -39,14 +84,25 @@ export function ProjNotifyButton({ project }: { project: ProjDetail }) {
 export function DeliverButton({ project, canEdit }: { project: ProjDetail; canEdit: boolean }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const confirm = useConfirm();
   const delivered = project.status === "delivered";
-  const done = () => void qc.invalidateQueries({ queryKey: ["proj"] });
+  const [ask, setAsk] = useState(false);
+  const [hours, setHours] = useState("");
+  const needHours = !((project.soldHours ?? 0) > 0) && !project.billing.prepaid;
+  const done =() => void qc.invalidateQueries({ queryKey: ["proj"] });
   const deliver = useMutation({
-    mutationFn: () => api.post<{ notified: number; billing?: { status: string } }>(`/proj/${project.id}/deliver`, {}),
+    mutationFn: (soldHours?: number) => api.post<{ notified: number; billing?: { status: string } }>(`/proj/${project.id}/deliver`, soldHours != null ? { soldHours } : {}),
     onSuccess: (r) => {
+      setAsk(false);
       toast.success(r.notified ? t("projDeliver.deliver.done", { count: r.notified }) : t("projDeliver.deliver.doneNobody"));
-      if (r.billing) toast.info(t(`projDeliver.deliver.billing.${r.billing.status}`));
+      if (r.billing) {
+        toast.info(
+          <span>
+            {t(`projDeliver.deliver.billing.${r.billing.status}`)} {(r.billing.status === "created" || r.billing.status === "already") && <ApprovalsLink go={() => navigate(APPROVALS_LINK)} />}
+          </span>,
+        );
+      }
       void qc.invalidateQueries({ queryKey: ["billables"] });
       done();
     },
@@ -79,18 +135,41 @@ export function DeliverButton({ project, canEdit }: { project: ProjDetail; canEd
   }
   if (!canEdit) return null;
   return (
-    <Button
-      type="button"
-      size="sm"
-      variant="outline"
-      className="border-teal-400/50 text-teal-200 hover:bg-teal-500/10"
-      disabled={deliver.isPending}
-      onClick={async () => {
-        if (await confirm({ title: t("projDeliver.deliver.title"), description: t("projDeliver.deliver.text"), confirmLabel: t("projDeliver.deliver.confirm") })) deliver.mutate();
-      }}
-    >
-      <PackageCheck className="size-4" aria-hidden /> {t("projDeliver.deliver.button")}
-    </Button>
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="border-teal-400/50 text-teal-200 hover:bg-teal-500/10"
+        disabled={deliver.isPending}
+        onClick={async () => {
+          if (needHours) return setAsk(true);
+          if (await confirm({ title: t("projDeliver.deliver.title"), description: t("projDeliver.deliver.text"), confirmLabel: t("projDeliver.deliver.confirm") })) deliver.mutate(undefined);
+        }}
+      >
+        <PackageCheck className="size-4" aria-hidden /> {t("projDeliver.deliver.button")}
+      </Button>
+      {ask && (
+        <Dialog open onOpenChange={(o) => !o && setAsk(false)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t("projDeliver.deliver.title")}</DialogTitle>
+              <DialogDescription>{t("projDeliver.deliver.text")}</DialogDescription>
+            </DialogHeader>
+            <p className="text-sm text-amber-200">{t("projDeliver.sold.needed")}</p>
+            <SoldHoursField project={project} value={hours} onChange={setHours} />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => setAsk(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button disabled={deliver.isPending || !(parseHours(hours) > 0)} onClick={() => deliver.mutate(parseHours(hours))}>
+                {t("projDeliver.deliver.confirm")}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
   );
 }
 
@@ -98,12 +177,18 @@ export function DeliverButton({ project, canEdit }: { project: ProjDetail; canEd
 export function DeliveredActions({ project }: { project: ProjDetail }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const confirm = useConfirm();
   const can = useCan();
+  const [hours, setHours] = useState(project.soldHours ? String(project.soldHours) : "");
   const bill = useMutation({
-    mutationFn: () => api.post(`/proj/${project.id}/bill`, {}),
+    mutationFn: () => api.post(`/proj/${project.id}/bill`, parseHours(hours) > 0 ? { soldHours: parseHours(hours) } : {}),
     onSuccess: () => {
-      toast.success(t("projDeliver.deliver.sentApproval"));
+      toast.success(
+        <span>
+          {t("projDeliver.deliver.sentApproval")} <ApprovalsLink go={() => navigate(APPROVALS_LINK)} />
+        </span>,
+      );
       void qc.invalidateQueries({ queryKey: ["proj"] });
       void qc.invalidateQueries({ queryKey: ["billables"] });
     },
@@ -117,12 +202,24 @@ export function DeliveredActions({ project }: { project: ProjDetail }) {
     },
     onError: (e) => toast.error(projError(t, e)),
   });
-  const showBill = can("accounting.manage") && !project.billing.billedAt;
-  if (!showBill && !project.canManage) return null;
+  const noLine = project.billing.status === "none" && !project.billing.billedAt;
+  const showBill = can("accounting.manage") && noLine;
+  const where = project.billing.status !== "none" ? t(`projDeliver.deliver.where.${project.billing.status}`, { number: project.billing.invoiceNumber ?? "" }) : null;
+  if (!showBill && !project.canManage && !where) return null;
   return (
-    <span className="ml-auto flex flex-wrap gap-2">
+    <span className="ml-auto flex flex-wrap items-center gap-2">
+      {where && (
+        <span className="text-xs">
+          {where} · <ApprovalsLink />
+        </span>
+      )}
+      {showBill && !project.billing.prepaid && (
+        <span className="w-56">
+          <SoldHoursField project={project} value={hours} onChange={setHours} />
+        </span>
+      )}
       {showBill && (
-        <Button type="button" size="sm" variant="outline" disabled={bill.isPending} onClick={() => bill.mutate()}>
+        <Button type="button" size="sm" variant="outline" disabled={bill.isPending || (!(parseHours(hours) > 0) && !((project.soldHours ?? 0) > 0))} onClick={() => bill.mutate()}>
           {t("projDeliver.deliver.sendApproval")}
         </Button>
       )}
