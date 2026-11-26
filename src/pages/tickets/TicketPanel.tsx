@@ -398,7 +398,7 @@ function TicketBody({
       {/* Header: what the ticket is, where it stands, and the tools */}
       <div className="glass relative z-10 rounded-none border-x-0 border-t-0 border-b">
         <div className="w-full px-4 pb-3 pt-3 lg:px-6">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <span className={"rounded-md border border-[color:var(--gold)]/30 bg-[color:var(--gold)]/10 px-2 py-0.5 font-mono text-xs text-primary"}>
               {tk.number}
             </span>

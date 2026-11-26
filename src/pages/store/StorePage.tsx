@@ -123,7 +123,7 @@ export function StorePage() {
           </h1>
           <p className="text-sm text-muted-foreground">{t("store.subtitle")}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" className="h-9" disabled={shown.length === 0} onClick={() => setDialog({ kind: "labels" })}>
             <Tag className="size-4" /> {t("store.label.bulkButton")}
           </Button>

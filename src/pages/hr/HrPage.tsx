@@ -65,8 +65,8 @@ export function HrPage() {
       </div>
       {isLoading && <Loader2 className="mx-auto my-10 size-6 animate-spin text-muted-foreground" />}
       {data && (
-        <div className="glass overflow-hidden rounded-2xl border">
-          <table className="w-full text-sm">
+        <div className="glass overflow-x-auto rounded-2xl border">
+          <table className="w-full min-w-[640px] text-sm">
             <thead>
               <tr className="border-b text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                 <th className="px-4 py-2 font-medium">{t("hr.employee")}</th>

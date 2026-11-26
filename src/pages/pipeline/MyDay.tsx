@@ -382,14 +382,14 @@ function Reevaluate({ items, onOpen }: { items: DayItem[]; onOpen: (i: DayItem) 
       {shown && (
         <>
           <p className="mt-1 text-xs text-muted-foreground">{t("pipeline.day.reevaluate.text")}</p>
-          <ul className="mt-2 grid gap-1 md:grid-cols-2">
+          <ul className="mt-2 grid grid-cols-1 gap-1 md:grid-cols-2">
             {items.map((i) => (
-              <li key={i.key}>
-                <button type="button" onClick={() => onOpen(i)} className="flex w-full items-center gap-2 rounded-lg border border-orange-400/20 bg-background/40 px-2.5 py-1.5 text-left text-sm hover:bg-foreground/[0.05]">
+              <li key={i.key} className="min-w-0">
+                <button type="button" onClick={() => onOpen(i)} className="flex w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border border-orange-400/20 bg-background/40 px-2.5 py-1.5 text-left text-sm hover:bg-foreground/[0.05]">
                   <span className={cn("size-2 shrink-0 rounded-full", i.kind === "ticket" ? "bg-[color:var(--gold)]" : i.kind === "ptask" ? "bg-teal-400" : "bg-violet-400")} />
                   {i.ticketNumber && <span className="shrink-0 font-mono text-xs text-primary">{i.ticketNumber}</span>}
                   <span className="min-w-0 flex-1 truncate">{i.title}</span>
-                  <span className="shrink-0 text-[11px] text-orange-300">{t("pipeline.day.reevaluate.since", { date: (i.due ?? "").slice(0, 10) })}</span>
+                  <span className="shrink-0 pl-4 text-[11px] text-orange-300 sm:pl-0">{t("pipeline.day.reevaluate.since", { date: (i.due ?? "").slice(0, 10) })}</span>
                 </button>
               </li>
             ))}

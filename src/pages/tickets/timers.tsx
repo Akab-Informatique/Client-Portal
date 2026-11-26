@@ -385,11 +385,11 @@ function TimerCloseDialog({ timer, total, onEnter, onLater }: { timer: Timer; to
           <span className="font-mono text-primary">{timer.ticketNumber}</span> · {timer.ticketTitle} — {t("tickets.timer.closeText", { time: clock(timer.elapsedMs) })}
         </DialogDescription>
         <div className="flex flex-col gap-2">
-          <Button onClick={onEnter}>{t("tickets.timer.closeEnter")}</Button>
-          <Button variant="outline" onClick={onLater}>
+          <Button className="h-auto whitespace-normal py-2" onClick={onEnter}>{t("tickets.timer.closeEnter")}</Button>
+          <Button variant="outline" className="h-auto whitespace-normal py-2" onClick={onLater}>
             {t("tickets.timer.closeLater")}
           </Button>
-          <Button variant="ghost" className="text-red-300 hover:text-red-200" disabled={discard.isPending} onClick={noTime}>
+          <Button variant="ghost" className="h-auto whitespace-normal py-2 text-red-300 hover:text-red-200" disabled={discard.isPending} onClick={noTime}>
             <Trash2 className="size-4" /> {t("tickets.timer.closeNoTime")}
           </Button>
         </div>

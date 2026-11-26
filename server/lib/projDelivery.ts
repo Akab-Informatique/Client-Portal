@@ -7,8 +7,8 @@ import { notifyTechs } from "./techNotify.ts";
 
 /**
  * Who checks and bills a project when a technician marks it delivered: the people picked in the setting
- * (`integrations` provider `proj`, config `deliveryReviewers`), else the master administrators. Active staff only,
- * never the person who clicked.
+ * (`integrations` provider `proj`, config `deliveryReviewers`), else the master administrators (also when the picked ones are gone).
+ * Active staff only; the person who clicked is told too when they are a reviewer.
  */
 export const PROJ_PROVIDER = "proj";
 
@@ -46,7 +46,48 @@ export async function effectiveReviewers(): Promise<{ id: string; name: string }
     .where(and(eq(schema.users.roleId, role.id), eq(schema.users.kind, "staff"), eq(schema.users.active, true)));
 }
 
-const fmtH = (n: number) => n.toLocaleString("fr-CA", { maximumFractionDigits: 2 });
+export type DeliveryBilling = { status: "created" | "already" | "time_lines" | "nothing"; reason?: string };
+
+/** Delivered = to Approbation: the project's single line (hours sold / price sold), else its time lines are copied. Never throws, never bills twice. */
+export async function billOnDelivery(projectId: string): Promise<DeliveryBilling> {
+  try {
+    const { billProj, ProjBillError } = await import("./projBilling.ts");
+    try {
+      await billProj(projectId);
+      const { syncBillablesNow } = await import("./billables.ts");
+      await syncBillablesNow();
+      return { status: "created" };
+    } catch (e) {
+      if (!(e instanceof ProjBillError)) throw e;
+      if (e.message === "project_billed") return { status: "already" };
+      if (e.message === "project_not_sold") {
+        // an hourly project with no hours sold: its time is emitted entry by entry, just copy it
+        const { syncBillablesNow } = await import("./billables.ts");
+        await syncBillablesNow();
+        return { status: "time_lines" };
+      }
+      return { status: "nothing", reason: e.message };
+    }
+  } catch (e) {
+    console.warn("[proj] billing on delivery failed", e);
+    return { status: "nothing", reason: "failed" };
+  }
+}
+
+/** Undo: the line the delivery made is removed while it is still all pending; an approved / invoiced one stays. */
+export async function unbillOnDelivery(projectId: string, deliveredAt: Date | null): Promise<{ removed: boolean; kept?: boolean }> {
+  const d = db();
+  const [p] = await d.select().from(schema.projProjects).where(eq(schema.projProjects.id, projectId));
+  if (!p?.invoicedAt || (deliveredAt && p.invoicedAt < deliveredAt)) return { removed: false };
+  const lines = await d.select({ id: schema.billingItems.id, status: schema.billingItems.status }).from(schema.billingItems).where(sql`${schema.billingItems.sourceId} like ${`project:${projectId}%`}`);
+  if (!lines.length) return { removed: false };
+  if (lines.some((l) => l.status !== "pending")) return { removed: false, kept: true };
+  await d.delete(schema.billingItems).where(inArray(schema.billingItems.id, lines.map((l) => l.id)));
+  await d.update(schema.projProjects).set({ invoicedAt: null }).where(eq(schema.projProjects.id, projectId));
+  return { removed: true };
+}
+
+const fmtH =(n: number) => n.toLocaleString("fr-CA", { maximumFractionDigits: 2 });
 
 /**
  * Called after time is added to or removed from a project, or its hours sold change: when the hours worked pass the hours sold the

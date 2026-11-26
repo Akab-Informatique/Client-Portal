@@ -37,6 +37,8 @@ export type ClientInvoiceSettings = {
   hourlyRate?: number | null;
   /** Kinds of work approved automatically when imported (labour, charge, contract, milestone, project) */
   autoApprove?: string[];
+  /** When the client is billed: start of the month (default) or end of the month. A label and a grouping only. */
+  billingTiming?: "start" | "end";
   notes?: string;
 };
 

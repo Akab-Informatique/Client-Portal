@@ -74,6 +74,12 @@ export type Item = {
   contractId?: string | null;
   qbItemId?: string | null;
   qbTaxCodeId?: string | null;
+  billingTiming?: Timing;
+};
+type Timing = "start" | "end";
+const TIMING_STYLE: Record<Timing, string> = {
+  start: "border-sky-400/40 bg-sky-500/10 text-sky-300",
+  end: "border-orange-400/40 bg-orange-500/10 text-orange-300",
 };
 type Summary = {
   state: { at: string | null; counts: Partial<Record<Kind, number>>; errors: Partial<Record<Kind, string>>; skipped: number };
@@ -164,6 +170,16 @@ export function ApprovalsPage() {
     onError: () => toast.error(t("approvals.importFailed")),
   });
   const errors = Object.entries(summary?.state.errors ?? {});
+  const timing: Timing | null = params.get("timing") === "start" ? "start" : params.get("timing") === "end" ? "end" : null;
+  const setTiming = (v: Timing | null) =>
+    setParams(
+      (p) => {
+        if (v) p.set("timing", v);
+        else p.delete("timing");
+        return p;
+      },
+      { replace: true },
+    );
   return (
     <div className="relative isolate space-y-5">
       <GlassBackdrop className="-inset-x-8 -top-6" />
@@ -240,7 +256,7 @@ export function ApprovalsPage() {
               </TabsList>
               {tabs.map((k) => (
                 <TabsContent key={k} value={k} className="mt-4">
-                  <KindTab kind={k} counts={(s) => count(k, s)} lang={i18n.language} pq={pq} />
+                  <KindTab kind={k} counts={(s) => count(k, s)} lang={i18n.language} pq={pq} timing={timing} setTiming={setTiming} />
                 </TabsContent>
               ))}
             </Tabs>
@@ -251,8 +267,8 @@ export function ApprovalsPage() {
   );
 }
 
-function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) => number; lang: string; pq: string }) {
-  const { t } = useTranslation();
+function KindTab({ kind, counts, lang, pq, timing, setTiming }: { kind: Kind; counts: (s: Status) => number; lang: string; pq: string; timing: Timing | null; setTiming: (v: Timing | null) => void }) {
+  const { t, i18n } = useTranslation();
   const can = useCan();
   const qc = useQueryClient();
   const [status, setStatus] = useState<Status>("pending");
@@ -269,9 +285,18 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
       saveOpened(next);
       return next;
     });
-  const { data: items = [], isLoading } = useQuery({
+  const { data: allItems = [], isLoading } = useQuery({
     queryKey: [...KEY, kind, status, pq],
     queryFn: () => api.get<Item[]>(`/billables?kind=${kind}&status=${status}&${pq}`),
+  });
+  const items = useMemo(() => (timing ? allItems.filter((i) => (i.billingTiming ?? "start") === timing) : allItems), [allItems, timing]);
+  const setClientTiming = useMutation({
+    mutationFn: (p: { clientId: string; billingTiming: Timing }) => api.put(`/crm/clients/${p.clientId}/invoice`, { billingTiming: p.billingTiming }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEY });
+      toast.success(t("billTiming.saved"));
+    },
+    onError: () => toast.error(t("approvals.importFailed")),
   });
   // a section per month (the newest first), and in it a folder per client
   const months = useMemo(() => {
@@ -280,12 +305,12 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
     return [...byMonth.entries()]
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([ym, list]) => {
-        const m = new Map<string, { name: string; items: Item[] }>();
+        const m = new Map<string, { name: string; items: Item[]; clientId: string; timing: Timing }>();
         // the project time: inside the month, one folder per project (number · client), the time to approve under it
         for (const i of list) {
           const key = kind === "project" ? (i.ticketNumber ?? i.clientId) : i.clientId;
           const name = kind === "project" ? [i.ticketNumber, i.clientName].filter(Boolean).join(" · ") : i.clientName;
-          m.set(key, { name, items: [...(m.get(key)?.items ?? []), i] });
+          m.set(key, { name, clientId: i.clientId, timing: i.billingTiming ?? "start", items: [...(m.get(key)?.items ?? []), i] });
         }
         return { ym, items: list, groups: [...m.entries()] };
       });
@@ -303,6 +328,18 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
     const name = new Date(`${ym}-01T12:00:00`).toLocaleDateString(lang === "en" ? "en-CA" : "fr-CA", { month: "long", year: "numeric" });
     return name.charAt(0).toUpperCase() + name.slice(1);
   };
+  const dayText = (d: Date) => {
+    const s = d.toLocaleDateString(lang === "en" ? "en-CA" : "fr-CA", { day: "numeric", month: "long" });
+    return lang !== "en" && d.getDate() === 1 ? s.replace(/^1\s/, "1er ") : s;
+  };
+  const timingTitle = (tm: Timing, ym: string) => {
+    const [y, mo] = ym.split("-").map(Number);
+    const first = new Date(y, mo - 1, 1, 12);
+    const last = new Date(y, mo, 0, 12);
+    if (tm === "end") return t("billTiming.groupEnd", { bill: dayText(last), from: dayText(first), to: dayText(last) });
+    return t("billTiming.groupStart", { bill: dayText(first), month: ((m) => (i18n.language.startsWith("fr") ? m.toLowerCase() : m))(monthName(ym).replace(/\s+\d{4}$/, "")) });
+  };
+  const canTiming = can("crm.billing");
   const manage = can("accounting.manage") && status !== "posted";
   const setMany = (ids: string[], on: boolean) => setSel((s) => (on ? new Set([...s, ...ids]) : new Set([...s].filter((x) => !ids.includes(x)))));
   const move = useMutation({
@@ -435,6 +472,22 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             {t(`approvals.status.${s}`)} <span className="font-mono text-[10px] text-muted-foreground">{counts(s)}</span>
           </button>
         ))}
+        <span className="ml-2 flex gap-1" role="group" aria-label={t("billTiming.label")}>
+          {([null, "start", "end"] as const).map((v) => (
+            <button
+              key={v ?? "all"}
+              type="button"
+              aria-pressed={timing === v}
+              onClick={() => setTiming(v)}
+              className={cn(
+                "h-8 rounded-lg border px-2.5 text-xs transition-colors",
+                timing === v ? "border-[color:var(--gold)]/50 bg-[color:var(--gold)]/10 font-medium text-foreground" : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+              )}
+            >
+              {v ? t(`billTiming.${v}`) : t("billTiming.filterAll")}
+            </button>
+          ))}
+        </span>
         {items.length > 1 && (
           <span className="ml-2 flex gap-1">
             <Button
@@ -528,7 +581,26 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             </div>
             {monthOpen && (
               <div className="space-y-3">
-          {mo.groups.map(([clientId0, g]) => {
+          {(["end", "start"] as const).map((tm) => {
+            const tg = mo.groups.filter(([, g]) => g.timing === tm);
+            if (!tg.length) return null;
+            const tItems = tg.flatMap(([, g]) => g.items);
+            const tIds = tItems.map((i) => i.id);
+            return (
+              <div key={tm} className="space-y-2">
+                <div className={cn("flex items-center gap-3 rounded-lg border px-3 py-1.5", TIMING_STYLE[tm])}>
+                  {manage && (
+                    <Checkbox
+                      checked={tIds.every((x) => sel.has(x)) ? true : tIds.some((x) => sel.has(x)) ? "indeterminate" : false}
+                      onCheckedChange={(v) => setMany(tIds, Boolean(v))}
+                      aria-label={timingTitle(tm, mo.ym)}
+                    />
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-xs font-semibold">{timingTitle(tm, mo.ym)}</span>
+                  <span className="shrink-0 text-xs opacity-80">{t("approvals.items", { count: tItems.length })}</span>
+                  <span className="shrink-0 font-mono text-xs font-semibold">{m(tItems.reduce((x, i) => x + i.amountCents, 0))}</span>
+                </div>
+          {tg.map(([clientId0, g]) => {
         const clientId = `${mo.ym}|${clientId0}`;
         const ids = g.items.map((i) => i.id);
         const sub = g.items.reduce((x, i) => x + i.amountCents, 0);
@@ -559,6 +631,19 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
                 )}
                 <span className="ml-auto shrink-0 text-xs text-muted-foreground">{t("approvals.items", { count: g.items.length })}</span>
               </button>
+              {canTiming ? (
+                <button
+                  type="button"
+                  disabled={setClientTiming.isPending}
+                  onClick={() => setClientTiming.mutate({ clientId: g.clientId, billingTiming: g.timing === "end" ? "start" : "end" })}
+                  title={`${t("billTiming.label")} — ${t(g.timing === "end" ? "billTiming.endHint" : "billTiming.startHint")}`}
+                  className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium", TIMING_STYLE[g.timing])}
+                >
+                  {t(`billTiming.${g.timing}`)}
+                </button>
+              ) : (
+                <span className={cn("shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium", TIMING_STYLE[g.timing])}>{t(`billTiming.${g.timing}`)}</span>
+              )}
               <span className="font-mono text-sm">{m(sub)}</span>
             </div>
             {!closed && (
@@ -607,6 +692,9 @@ function KindTab({ kind, counts, lang, pq }: { kind: Kind; counts: (s: Status) =
             )}
           </section>
         );
+          })}
+              </div>
+            );
           })}
               </div>
             )}

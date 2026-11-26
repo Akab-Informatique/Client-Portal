@@ -22,7 +22,7 @@ import { billingSettings } from "../lib/billing.ts";
 import { hourlyRateOf } from "../lib/contracts.ts";
 import { chargesOfProj } from "../lib/projCharges.ts";
 import { notifyTechs } from "../lib/techNotify.ts";
-import { checkOverrun, configuredReviewers, effectiveReviewers, setReviewers } from "../lib/projDelivery.ts";
+import { billOnDelivery, checkOverrun, configuredReviewers, unbillOnDelivery, effectiveReviewers, setReviewers } from "../lib/projDelivery.ts";
 import { bpsOfPercent } from "../../shared/rebate.ts";
 import { body, zEmail, zUuid } from "../lib/validate.ts";
 import {
@@ -615,18 +615,19 @@ export const projRoutes = new Hono<AppEnv>()
     const now = new Date();
     await db().update(schema.projProjects).set({ status: "delivered", deliveredAt: now, deliveredBy: a.user.id, updatedAt: now }).where(eq(schema.projProjects.id, p.id));
     const client = await clientNameOf(p.clientId);
-    const reviewers = (await effectiveReviewers()).map((x) => x.id).filter((id) => id !== a.user.id);
+    const reviewers = (await effectiveReviewers()).map((x) => x.id);
+    const billing = await billOnDelivery(p.id);
     const told = reviewers.length
       ? await notifyTechs(
           { id: 0, number: p.number, title: p.name, company: { name: client }, link: `/pipeline?section=tickets&pj=${p.id}`, headFull: `Projet ${p.number} — ${p.name}${client ? ` (${client})` : ""} livré par ${a.realUser.name} : à vérifier et facturer`, bellType: "proj.delivered" },
-          { id: a.user.id, name: a.realUser.name },
+          { id: "", name: a.realUser.name },
           reviewers,
           "",
           { email: true, sms: false, teams: false, bell: true },
         ).catch(() => [])
       : [];
-    await audit(a.user.id, "proj.delivered", p.id, { number: p.number, notified: told.map((x) => x.id) });
-    return c.json({ ...(await viewFor(await loadProj(p.id), a)), notified: told.length });
+    await audit(a.user.id, "proj.delivered", p.id, { number: p.number, notified: told.map((x) => x.id), billing: billing.status });
+    return c.json({ ...(await viewFor(await loadProj(p.id), a)), notified: told.length, billing });
   })
 
   /** Back to work: whoever manages projects takes a delivered project back to active */
@@ -634,9 +635,10 @@ export const projRoutes = new Hono<AppEnv>()
     const a = auth(c);
     const p = await loadProj(c.req.param("id"));
     if (p.status !== "delivered") throw new HTTPException(409, { message: "not_delivered" });
+    const billing = await unbillOnDelivery(p.id, p.deliveredAt ?? null);
     await db().update(schema.projProjects).set({ status: "active", deliveredAt: null, deliveredBy: null, updatedAt: new Date() }).where(eq(schema.projProjects.id, p.id));
-    await audit(a.user.id, "proj.undelivered", p.id, { number: p.number });
-    return c.json(await viewFor(await loadProj(p.id), a));
+    await audit(a.user.id, "proj.undelivered", p.id, { number: p.number, billing });
+    return c.json({ ...(await viewFor(await loadProj(p.id), a)), billing });
   })
 
   /** Deleting a project (administrators): its tasks, notes and timers go; the time stays on the timesheets */

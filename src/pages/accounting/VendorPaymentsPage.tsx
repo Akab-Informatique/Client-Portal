@@ -136,7 +136,7 @@ export function VendorPaymentsPage() {
               <Button size="icon" variant="ghost" onClick={() => shift(-1)} aria-label={t("vendorBills.prev")}>
                 <ChevronLeft className="size-4" />
               </Button>
-              <h2 className="min-w-40 text-center text-lg font-semibold capitalize">{monthLabel}</h2>
+              <h2 className="min-w-32 text-center sm:min-w-40 text-lg font-semibold capitalize">{monthLabel}</h2>
               <Button size="icon" variant="ghost" onClick={() => shift(1)} aria-label={t("vendorBills.next")}>
                 <ChevronRight className="size-4" />
               </Button>
@@ -149,9 +149,9 @@ export function VendorPaymentsPage() {
           {bills.isLoading ? (
             <Skeleton className="h-96" />
           ) : (
-            <div className="grid grid-cols-7 gap-px overflow-hidden rounded-xl border bg-border">
+            <div className="grid grid-cols-[repeat(7,minmax(0,1fr))] gap-px overflow-hidden rounded-xl border bg-border">
               {weekdays.map((w) => (
-                <div key={w} className="bg-background/60 p-1.5 text-center text-[11px] font-medium uppercase text-muted-foreground">
+                <div key={w} className="bg-background/60 p-0.5 text-center text-[9px] font-medium uppercase sm:p-1.5 sm:text-[11px] text-muted-foreground">
                   {w}
                 </div>
               ))}
@@ -167,14 +167,14 @@ export function VendorPaymentsPage() {
                     type="button"
                     onClick={() => setPicked(picked === key ? null : key)}
                     className={cn(
-                      "min-h-20 bg-background/60 p-1.5 text-left align-top transition hover:bg-background/80",
+                      "min-h-20 min-w-0 overflow-hidden bg-background/60 p-0.5 text-left align-top sm:p-1.5 transition hover:bg-background/80",
                       key === today && "ring-1 ring-inset ring-[color:var(--gold)]",
                       picked === key && "bg-[color:var(--gold)]/10",
                     )}
                   >
                     <span className={cn("text-xs", key === today ? "font-bold text-primary" : "text-muted-foreground")}>{d}</span>
                     {list.length > 0 && (
-                      <span className={cn("mt-1 block rounded-md px-1 py-0.5 text-[11px] font-semibold tabular-nums", isLate ? "bg-red-500/20 text-red-300" : "bg-[color:var(--gold)]/15 text-primary")}>
+                      <span className={cn("mt-1 block rounded-md px-0.5 py-0.5 text-[9px] sm:px-1 sm:text-[11px] font-semibold tabular-nums", isLate ? "bg-red-500/20 text-red-300" : "bg-[color:var(--gold)]/15 text-primary")}>
                         {money(total, lang)}
                         <span className="block font-normal opacity-80">{t("vendorBills.count", { count: list.length })}</span>
                       </span>

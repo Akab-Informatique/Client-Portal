@@ -8,6 +8,33 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-26.2",
+    date: "2026-11-26",
+    sections: [
+      {
+        fr: "Utilisation sur téléphone",
+        en: "Using it on a phone",
+        items: [
+          { fr: "Le portail a été vérifié page par page sur un téléphone : les pages plus larges que l'écran s'ajustent maintenant (fenêtres de billet et de projet, Ma journée, Inventaire, RH, Rencontre hebdomadaire, Paiements fournisseurs, Ventes).", en: "The portal was checked page by page on a phone: pages that were wider than the screen now fit (ticket and project windows, Ma journée, Inventory, HR, Weekly meeting, Vendor payments, Sales)." },
+        ],
+      },
+      {
+        fr: "Facturation",
+        en: "Billing",
+        items: [
+          { fr: "Approbation sépare les clients facturés en fin de mois (le 30 pour la période du 1er au 30) de ceux facturés en début de mois (le 1er pour le mois à venir), avec un filtre. Le moment se règle dans les paramètres de facturation du client, ou d'un clic sur l'étiquette du client dans Approbation.", en: "Approbation separates the clients billed at the end of the month (on the 30th for the 1st–30th) from those billed at the start (on the 1st for the month ahead), with a filter. The timing is set in the client's invoice settings, or with one click on the client's badge in Approbation." },
+        ],
+      },
+      {
+        fr: "Projets",
+        en: "Projects",
+        items: [
+          { fr: "« Marquer comme livré » avise maintenant aussi la personne qui clique quand c'est elle qui vérifie et facture, et envoie le projet dans Approbation pour qu'il soit facturé. « Remettre en cours » retire la ligne si elle n'a pas encore été approuvée.", en: "\"Mark as delivered\" now also tells the person who clicks when they are the one who checks and bills, and sends the project to Approbation to be billed. \"Back in progress\" removes the line if it was not approved yet." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-26.1",
     date: "2026-11-26",
     sections: [

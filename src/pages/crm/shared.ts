@@ -32,6 +32,7 @@ export type InvoiceSettings = {
   taxNumber?: string;
   poRequired?: boolean;
   payOnline?: boolean | null;
+  billingTiming?: "start" | "end";
   consumer?: boolean;
   hourlyRate?: number | null;
   notes?: string;

@@ -143,7 +143,7 @@ export function StaffLayout() {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onMenu={() => setMobileOpen(true)} />
         <TodoBar />
-        <main className="relative flex-1">
+        <main className="relative flex-1 max-sm:overflow-x-clip">
           <div className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-grid opacity-60 [mask-image:linear-gradient(to_bottom,black,transparent)]" />
           {/* The new page appears right away (no exit animation to wait for) */}
           <motion.div

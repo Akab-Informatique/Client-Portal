@@ -82,7 +82,7 @@ export function ClientLayout() {
           <ViewAsBanner />
           <TopBar onMenu={() => setMobileOpen(true)} />
         </div>
-        <main className="relative flex-1">
+        <main className="relative flex-1 max-sm:overflow-x-clip">
           <motion.div
             key={location.pathname}
             initial={{ opacity: 0, y: 6 }}

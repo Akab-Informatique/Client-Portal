@@ -1340,6 +1340,7 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
     taxNumber: s?.taxNumber ?? "",
     poRequired: s?.poRequired ?? false,
     payOnline: s?.payOnline ?? null,
+    billingTiming: s?.billingTiming ?? ("start" as "start" | "end"),
     consumer: s?.consumer ?? false,
     hourlyRate: s?.hourlyRate ?? null,
     notes: s?.notes ?? "",
@@ -1412,6 +1413,17 @@ function InvoiceTab({ client }: { client: CrmDetail }) {
                 <SelectItem value="default">{t("crm.invoice.payOnlineDefault")}</SelectItem>
                 <SelectItem value="yes">{t("crm.invoice.payOnlineYes")}</SelectItem>
                 <SelectItem value="no">{t("crm.invoice.payOnlineNo")}</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label={t("billTiming.label")}>
+            <Select value={f.billingTiming} onValueChange={(v) => setF({ ...f, billingTiming: v === "end" ? "end" : "start" })}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="start">{t("billTiming.start")} — {t("billTiming.startHint")}</SelectItem>
+                <SelectItem value="end">{t("billTiming.end")} — {t("billTiming.endHint")}</SelectItem>
               </SelectContent>
             </Select>
           </Field>

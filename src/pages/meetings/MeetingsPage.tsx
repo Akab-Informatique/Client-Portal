@@ -120,7 +120,7 @@ export function MeetingsPage() {
       </div>
 
       {/* first row: the points to discuss and the week; second row: the week ahead, written for the meeting */}
-      <div className="grid items-start gap-6 xl:grid-cols-2">
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
         <PointsSection />
         <WeekSection />
       </div>
@@ -135,7 +135,7 @@ export function MeetingsPage() {
           {data && <QueuesPicker queues={data.queues} />}
         </div>
         {isLoading ? (
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4">
             {[0, 1, 2, 3].map((i) => (
               <Skeleton key={i} className="h-[22rem] rounded-2xl" />
             ))}
@@ -143,7 +143,7 @@ export function MeetingsPage() {
         ) : isError || !data ? (
           <p className="py-16 text-center text-muted-foreground">{t("common.error")}</p>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 2xl:grid-cols-4">
             <GaugeCard
               title={t("meetings.overdue.gaugeLate")}
               total={data.total}
@@ -507,7 +507,7 @@ function TicketsDialog({
         {tickets.length === 0 ? (
           <p className="py-6 text-center text-sm text-emerald-400">{t("meetings.overdue.emptyList")}</p>
         ) : (
-          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
           <button
             type="button"
             onClick={go}

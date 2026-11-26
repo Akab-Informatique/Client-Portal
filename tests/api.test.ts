@@ -9518,6 +9518,27 @@ describe("contracts: services when made, charges, activity, stop instead of dele
     resetTicketMode();
   });
 
+  it("approval: a client is billed at the start or the end of the month (a label and a grouping)", async () => {
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Fin de mois inc.", autotaskId: 987654399 }).returning();
+    const [item] = await db()
+      .insert(schema.billingItems)
+      .values({ clientId: client!.id, kind: "charge", source: "portal", sourceId: "timing-test-1", date: "2026-11-15", description: "Test", quantityX100: 100, unitPriceCents: 1000, amountCents: 1000 })
+      .returning();
+    const timing = async () => (await admin.get(`/api/billables?clientId=${client!.id}`)).json.find((i: any) => i.id === item!.id)?.billingTiming;
+    // everyone starts at the start of the month
+    expect(await timing()).toBe("start");
+    expect((await tech.put(`/api/crm/clients/${client!.id}/invoice`, { billingTiming: "end" })).status).toBe(403);
+    expect(await timing()).toBe("start");
+    expect((await admin.put(`/api/crm/clients/${client!.id}/invoice`, { billingTiming: "bogus" })).status).toBe(400);
+    expect((await admin.put(`/api/crm/clients/${client!.id}/invoice`, { billingTiming: "end" })).json.billingTiming).toBe("end");
+    expect(await timing()).toBe("end");
+    expect((await admin.get(`/api/crm/clients/${client!.id}`)).json.invoice).toMatchObject({ billingTiming: "end" });
+    // the line itself is untouched
+    expect((await admin.get(`/api/billables?clientId=${client!.id}`)).json.find((i: any) => i.id === item!.id)).toMatchObject({ date: "2026-11-15", amountCents: 1000 });
+  });
+
   it("approval: the recurring charges of a contract are lines to approve — quantity × unit price, one group per contract; old unapproved imports go", async () => {
     const admin = await signIn("admin@akab.local");
     const { contractBillables } = await import("../server/lib/contractBills.ts");
@@ -13677,8 +13698,40 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     const q = (await admin.post("/api/proj", { name: "Livraison 2" })).json;
     await admin.post(`/api/proj/${q.id}/deliver`, {});
     expect((await bellsOf(techUser.id, "proj.delivered", q.id)).length).toBe(1);
-    expect((await bellsOf(adminUser.id, "proj.delivered", q.id)).length).toBe(0);
+    expect((await bellsOf(adminUser.id, "proj.delivered", q.id)).length).toBe(1);
+    // a stale id in the setting falls back to the master administrators
+    await db().update(schema.integrations).set({ config: { deliveryReviewers: ["00000000-0000-0000-0000-000000000000"] } }).where(eq(schema.integrations.provider, "proj"));
+    const q2 = (await admin.post("/api/proj", { name: "Livraison 3" })).json;
+    await admin.post(`/api/proj/${q2.id}/deliver`, {});
+    expect((await bellsOf(adminUser.id, "proj.delivered", q2.id)).length).toBe(1);
     await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+  });
+
+  it("delivered: the project goes to Approbation once, undo removes a pending line only", async () => {
+    const admin = await signIn("admin@akab.local");
+    const adminUser = await userOf("admin@akab.local");
+    await admin.put("/api/proj/delivery-reviewers", { userIds: [] });
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Proj deliver inc.", autotaskId: 9_100_952, portalEnabled: true }).returning();
+    const lines = async (id: string) => db().select().from(schema.billingItems).where(like(schema.billingItems.sourceId, `project:${id}%`));
+    const p = (await admin.post("/api/proj", { name: "Livré vendu", clientId: client.id, billingMode: "special", hourlyRate: 100, soldHours: 10 })).json;
+    const r = await admin.post(`/api/proj/${p.id}/deliver`, {});
+    expect(r.json.billing.status).toBe("created");
+    expect((await bellsOf(adminUser.id, "proj.delivered", p.id)).length).toBe(1);
+    const l = await lines(p.id);
+    expect(l).toHaveLength(1);
+    expect(l[0]).toMatchObject({ status: "pending", amountCents: 100000 });
+    // undo removes the pending line; delivering again makes it again, never twice
+    const u = await admin.post(`/api/proj/${p.id}/undeliver`, {});
+    expect(u.json.billing.removed).toBe(true);
+    expect(await lines(p.id)).toHaveLength(0);
+    expect((await admin.post(`/api/proj/${p.id}/deliver`, {})).json.billing.status).toBe("created");
+    expect(await lines(p.id)).toHaveLength(1);
+    // an approved line stays after undo; delivering again says already
+    await db().update(schema.billingItems).set({ status: "approved" }).where(like(schema.billingItems.sourceId, `project:${p.id}%`));
+    expect((await admin.post(`/api/proj/${p.id}/undeliver`, {})).json.billing.kept).toBe(true);
+    expect(await lines(p.id)).toHaveLength(1);
+    expect((await admin.post(`/api/proj/${p.id}/deliver`, {})).json.billing.status).toBe("already");
+    expect(await lines(p.id)).toHaveLength(1);
   });
 
   it("notify a colleague from a project, and from an internal note", async () => {

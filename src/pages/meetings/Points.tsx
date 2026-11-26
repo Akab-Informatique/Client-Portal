@@ -152,7 +152,7 @@ export function PointsSection() {
         <h2 className="flex items-center gap-2 text-lg font-semibold">
           <MessageSquareText className="size-5 text-primary" /> {t("meetings.points.title")}
         </h2>
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           {view === "open" && later.length > 0 && <LaterList points={later} manage={manage} />}
           <div className="flex rounded-lg border bg-card/60 p-0.5" role="tablist">
             {(

@@ -327,7 +327,7 @@ export function ProjView({ id, onClose }: { id: string; onClose: () => void }) {
 
                 <WatchReminder kind="proj" id={d.id} info={d} canEdit={canEdit} compact />
 
-                <div className="ml-auto flex items-center gap-1">
+                <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-1">
                   <DeliverButton project={d} canEdit={canEdit} />
                   {canEdit && <ProjNotifyButton project={d} />}
                   {d.canManage && <DeliveryReviewersButton />}

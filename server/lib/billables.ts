@@ -195,7 +195,7 @@ const inPeriod = (p?: Period) =>
 /** The items of a kind (and status), with their client. */
 export async function listBillables(kind: BillableKind | null, status: string | null, clientId?: string | null, period?: Period) {
   const rows = await db()
-    .select({ b: schema.billingItems, client: schema.clients.name, invoice: schema.clientInvoices.number, auto: schema.clientContracts.autoApprove })
+    .select({ b: schema.billingItems, client: schema.clients.name, invoice: schema.clientInvoices.number, auto: schema.clientContracts.autoApprove, clientInvoice: schema.clients.invoice })
     .from(schema.billingItems)
     .innerJoin(schema.clients, eq(schema.clients.id, schema.billingItems.clientId))
     .leftJoin(schema.clientInvoices, eq(schema.clientInvoices.id, schema.billingItems.invoiceId))
@@ -213,7 +213,7 @@ export async function listBillables(kind: BillableKind | null, status: string | 
   const payers = new Map((payerIds.length ? await db().select({ id: schema.clients.id, name: schema.clients.name }).from(schema.clients).where(inArray(schema.clients.id, payerIds)) : []).map((p) => [p.id, p.name]));
   const projNums = [...new Set(rows.filter((r) => r.b.kind === "project" && r.b.ticketNumber).map((r) => r.b.ticketNumber as string))];
   const projStatus = new Map((projNums.length ? await db().select({ number: schema.projProjects.number, status: schema.projProjects.status }).from(schema.projProjects) : []).map((p) => [p.number, p.status]));
-  return rows.map(({ b, client, invoice }) => ({ ...b, projectStatus: b.kind === "project" && b.ticketNumber ? (projStatus.get(b.ticketNumber) ?? null) : null, clientName: client, payerName: b.payerClientId ? (payers.get(b.payerClientId) ?? null) : null, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
+  return rows.map(({ b, client, invoice, clientInvoice }) => ({ ...b, billingTiming: (clientInvoice?.billingTiming === "end" ? "end" : "start") as "start" | "end", projectStatus: b.kind === "project" && b.ticketNumber ? (projStatus.get(b.ticketNumber) ?? null) : null, clientName: client, payerName: b.payerClientId ? (payers.get(b.payerClientId) ?? null) : null, invoiceNumber: invoice, autoApproved: b.status !== "pending" && b.approvedAt != null && !b.approvedBy && b.status !== "excluded" }));
 }
 
 /**

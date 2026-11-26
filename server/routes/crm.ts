@@ -332,6 +332,7 @@ export const crmRoutes = new Hono<AppEnv>()
         consumer: z.boolean().optional(),
         hourlyRate: z.number().min(0).max(10_000).nullable().optional(),
         notes: z.string().trim().max(2000).optional(),
+        billingTiming: z.enum(["start", "end"]).optional(),
         autoApprove: z.array(z.enum(["labour", "charge", "contract", "milestone", "project"])).optional(),
       }),
     );

@@ -41,9 +41,11 @@ export function DeliverButton({ project, canEdit }: { project: ProjDetail; canEd
   const delivered = project.status === "delivered";
   const done = () => void qc.invalidateQueries({ queryKey: ["proj"] });
   const deliver = useMutation({
-    mutationFn: () => api.post<{ notified: number }>(`/proj/${project.id}/deliver`, {}),
+    mutationFn: () => api.post<{ notified: number; billing?: { status: string } }>(`/proj/${project.id}/deliver`, {}),
     onSuccess: (r) => {
       toast.success(r.notified ? t("projDeliver.deliver.done", { count: r.notified }) : t("projDeliver.deliver.doneNobody"));
+      if (r.billing) toast.info(t(`projDeliver.deliver.billing.${r.billing.status}`));
+      void qc.invalidateQueries({ queryKey: ["billables"] });
       done();
     },
     onError: (e) => toast.error(err(t, e)),

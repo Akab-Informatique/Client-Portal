@@ -137,7 +137,7 @@ export function WeekSection() {
         </div>
       </div>
       <div className="overflow-hidden rounded-2xl border bg-card/80">
-        <div className="grid grid-cols-7 divide-x border-b">
+        <div className="grid grid-cols-[repeat(7,minmax(0,1fr))] divide-x border-b">
           {days.map((d) => {
             const key = ymd(d);
             const x = on(key);

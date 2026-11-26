@@ -75,14 +75,14 @@ export function SalesPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
-        <div role="tablist" className="glass inline-flex rounded-xl border p-1">
+        <div role="tablist" className="glass inline-flex max-w-full overflow-x-auto rounded-xl border p-1">
           {tabs.map((x) => (
             <button
               key={x.key}
               role="tab"
               aria-selected={tab === x.key}
               onClick={() => set({ tab: x.key === "dashboard" ? null : x.key })}
-              className={cn("flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm transition-colors", tab === x.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
+              className={cn("flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm transition-colors sm:gap-2 sm:px-3", tab === x.key ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground")}
             >
               <x.icon className="size-4" /> {x.label}
             </button>
