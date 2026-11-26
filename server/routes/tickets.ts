@@ -639,7 +639,9 @@ export const ticketRoutes = new Hono<AppEnv>()
       const assignee = list(q.assignee);
       const text = (q.q ?? "").trim().toLowerCase();
       return all
-      .filter(views[view])
+      // "mine" here is every ticket of mine: the next line keeps only the open ones unless a status filter asks for others
+      // (Mes billets + "Complété" used to show nothing: the view itself dropped the completed tickets)
+      .filter(view === "mine" ? isMine : views[view])
       // Completed tickets only when asked for (a status filter) or in "all" — and not when a team member is picked: all of their open tickets
       .filter((t) => (status.length || statusKinds.length ? true : (view === "all" && !assignee.length && !picked.length) || open(t)))
       .filter((t) => !picked.length || picked.includes(t.company.id))

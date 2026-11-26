@@ -8,6 +8,19 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-27.4",
+    date: "2026-11-27",
+    sections: [
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Dans « Mes billets », le filtre de statut « Complété » montre maintenant vos billets complétés (il n'en montrait aucun).", en: "In \"My tickets\", the \"Complete\" status filter now shows your completed tickets (it showed none)." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-27.3",
     date: "2026-11-27",
     sections: [

@@ -1197,6 +1197,12 @@ describe("tickets (sample data)", () => {
     expect(mine.every((t: any) => isMine(t) && t.statusKind !== "complete")).toBe(true);
     // secondary tickets count as mine too
     expect(mine.some((t: any) => t.assignee?.id !== techRow.id)).toBe(true);
+    // My tickets + the "complete" status filter shows my completed tickets (it used to show none)
+    const everything = (await tech.get("/api/tickets?view=all&statusKind=complete")).json.items.filter(isMine);
+    const mineDone = (await tech.get("/api/tickets?view=mine&statusKind=complete")).json.items;
+    expect(everything.length).toBeGreaterThan(0);
+    const idsOf = (items: any[]) => items.map((x: any) => x.id).sort();
+    expect(idsOf(mineDone)).toEqual(idsOf(everything));
 
     const target = all.items[0];
     expect((await tech.put(`/api/tickets/${target.id}/start-date`, { startDate: "2026-11-02" })).status).toBe(200);
