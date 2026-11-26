@@ -8,6 +8,27 @@ export type WhatsNewEntry = { id: string; date: string; sections: WhatsNewSectio
 
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
+    id: "2026-11-27.1",
+    date: "2026-11-27",
+    sections: [
+      {
+        fr: "Banques d'heures prépayées",
+        en: "Prepaid hours banks",
+        items: [
+          { fr: "On peut vendre une banque d'heures dans une soumission (ligne « Banque d'heures », créée quand la soumission est acceptée), dans Factures › Éléments à facturer ou dans l'onglet Contrats du client. Elle s'ajoute au client et le temps travaillé s'en déduit jusqu'à ce qu'il n'en reste plus.", en: "An hours bank can be sold in a quote (a \"Hours bank\" line, made when the quote is accepted), in Invoices › Items to invoice or in the client's Contracts tab. It is added to the client and the time worked is taken off it until none is left." },
+          { fr: "Une banque peut être liée à un billet ou à un projet précis : un client peut avoir plusieurs banques, une par projet. Le reste d'heures s'affiche dans le choix du contrat du billet et du projet.", en: "A bank can be tied to one ticket or one project: a client can have several banks, one per project. The hours left show in the ticket's and the project's contract choice." },
+        ],
+      },
+      {
+        fr: "Billets",
+        en: "Tickets",
+        items: [
+          { fr: "Fermer un billet dont le minuteur a moins de 3 minutes jette le temps sans rien demander.", en: "Closing a ticket whose timer is under 3 minutes throws the time away without asking." },
+        ],
+      },
+    ],
+  },
+  {
     id: "2026-11-26.2",
     date: "2026-11-26",
     sections: [

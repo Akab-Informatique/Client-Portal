@@ -13798,3 +13798,188 @@ describe("new-format projects: all projects, notify, delivered, hours sold", () 
     expect((await admin.post(`/api/proj/${q.id}/bill`, {})).json).toMatchObject({ lines: 1 });
   });
 });
+
+describe("prepaid hours banks", () => {
+  const userOf = async (email: string) => (await db().select().from(schema.users).where(eq(schema.users.email, email)))[0];
+  const clearToday = async () => db().delete(schema.timesheetEntries).where(and(eq(schema.timesheetEntries.userId, (await userOf("tech@akab.local")).id), eq(schema.timesheetEntries.date, qcToday())));
+
+  it("is sold from the client (no billing item) or from invoicing (an approved item), never makes recurring lines", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Banque prépayée inc.", autotaskId: 9_300_971 }).returning();
+    // given, or paid elsewhere: the bank only
+    const given = await admin.post("/api/hour-banks", { clientId: client.id, hours: 10, rate: 90, invoice: false });
+    expect(given.status).toBe(201);
+    const [k] = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.id, given.json.id));
+    expect(k).toMatchObject({ bankPrepaid: true, billingMode: "banked", bankedHoursX100: 1000, bankRateCents: 9000, bundlePriceCents: null, supportDefault: false, isDefault: false, scopeTicketId: null, scopeProjId: null });
+    expect(given.json.billingItemId).toBeNull();
+    // bought once: the balance is simple, no month table, and no recurring line is ever made
+    const detail = (await admin.get(`/api/crm/clients/${client.id}/contracts/${k.id}`)).json;
+    expect(detail.bank).toMatchObject({ prepaid: true, hours: 10, available: 10, used: 0, left: 10, over: 0, expiresOn: null });
+    expect(detail.bankMonths).toEqual([]);
+    expect(detail.summary.perPeriodCents).toBe(0);
+    const { contractBillables } = await import("../server/lib/contractBills.ts");
+    expect((await contractBillables("2000-01-01")).filter((b) => b.id.startsWith(`contract:${k.id}`))).toEqual([]);
+    // the client's contracts say so in the list
+    expect((await admin.get(`/api/crm/clients/${client.id}/contracts`)).json.find((x: any) => x.id === k.id).bank).toMatchObject({ prepaid: true, left: 10 });
+    // a prepaid bank is never the client's default support contract, even when it is the only contract
+    const { defaultSupport } = await import("../server/lib/contracts.ts");
+    expect(defaultSupport({ id: client.id, parentId: null, supportContractId: null }, [{ ...k, active: true }])).toBeNull();
+
+    // from invoicing: the bank and ONE approved item, ready to invoice
+    const sold = await admin.post("/api/hour-banks", { clientId: client.id, hours: 20, rate: 85, invoice: true, expiresOn: "2099-06-30" });
+    expect(sold.status).toBe(201);
+    const [item] = await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `hourbank:${sold.json.id}`));
+    expect(item).toMatchObject({ clientId: client.id, kind: "charge", status: "approved", quantityX100: 2000, unitPriceCents: 8500, amountCents: 170000, taxable: true });
+    expect((await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.id, sold.json.id)))[0]!.endDate).toBe("2099-06-30");
+    // a technician cannot sell one (no accounting, no contract right)
+    expect((await tech.post("/api/hour-banks", { clientId: client.id, hours: 1, rate: 100, invoice: true })).status).toBe(403);
+    // an expiry in the past, no hours: refused
+    expect((await admin.post("/api/hour-banks", { clientId: client.id, hours: 5, rate: 90, invoice: false, expiresOn: "2001-01-01" })).json.error).toBe("bank_expiry_invalid");
+    expect((await admin.post("/api/hour-banks", { clientId: client.id, hours: 0, rate: 90, invoice: false })).status).toBe(400);
+  });
+
+  it("a bank tied to a ticket is that ticket's contract and is offered only there; time draws it down; no debt", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [t0] = (await tech.get("/api/tickets?view=all")).json.items;
+    const clients = (await admin.get("/api/crm/clients")).json;
+    const client = (clients.items ?? clients).find((x: any) => x.autotaskId === t0.company.id);
+    const [other] = await db().insert(schema.clients).values({ name: "Zz Banque autre inc.", autotaskId: 9_300_972 }).returning();
+    // a ticket of another client is refused; both scopes at once too
+    expect((await admin.post("/api/hour-banks", { clientId: other.id, hours: 5, rate: 90, invoice: false, ticketId: t0.id })).json.error).toBe("bank_scope_invalid");
+    expect((await admin.post("/api/hour-banks", { clientId: client.id, hours: 5, rate: 90, invoice: false, ticketId: t0.id, projId: crypto.randomUUID() })).json.error).toBe("bank_scope_both");
+    const made = await admin.post("/api/hour-banks", { clientId: client.id, hours: 1, rate: 90, invoice: false, ticketId: t0.id });
+    expect(made.status).toBe(201);
+    const bankId = made.json.id as string;
+    // the ticket's contract, offered there; not offered on another ticket of the client
+    const { contractOfTicket } = await import("../server/lib/contracts.ts");
+    const here = await contractOfTicket(t0.id, t0.company.id);
+    expect(here.contract?.id).toBe(bankId);
+    expect(here.contracts.some((k) => k.id === bankId)).toBe(true);
+    const elsewhere = await contractOfTicket(t0.id + 1_000_000, t0.company.id);
+    expect(elsewhere.contracts.some((k) => k.id === bankId)).toBe(false);
+    expect(elsewhere.contract?.id).not.toBe(bankId);
+    // time on the ticket draws the bank; past it the choice is asked, and a prepaid bank has no next month to take from
+    await tech.post(`/api/tickets/${t0.id}/timer/start`);
+    const timer = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === t0.id);
+    await tech.post(`/api/tickets/${t0.id}/timer/stop`);
+    const pending = (await tech.get("/api/tickets/timers")).json.find((x: any) => x.ticketId === t0.id) ?? timer;
+    const entry = { hours: 3, summary: "Dépasse la banque prépayée", contractId: bankId };
+    expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, entry)).json.error).toBe("bank_over_choice_required");
+    expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, { ...entry, overage: "debt" })).json.error).toBe("bank_over_no_debt");
+    expect((await tech.post(`/api/tickets/timers/${pending.id}/submit`, { ...entry, overage: "free" })).status).toBe(201);
+    // the hours of the entry that went through (the demo ticket source keeps them in memory): put on the ticket's time in the database
+    const [bankRow] = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.id, bankId));
+    await db().insert(schema.tickets).values({ id: 987_654_321, number: "T-PREPAID-1", title: "Banque prépayée", companyId: t0.company.id, status: "new", priority: "medium", dueAt: new Date() }).onConflictDoNothing();
+    await db().insert(schema.ticketTimeEntries).values({ ticketId: 987_654_321, userId: (await userOf("tech@akab.local")).id, author: "Tech", startedAt: new Date(), minutes: 60, summary: "Heures sur la banque", contractId: bankRow!.autotaskId });
+    const bank = (await admin.get(`/api/crm/clients/${client.id}/contracts/${bankId}`)).json.bank;
+    expect(bank).toMatchObject({ prepaid: true, available: 1, left: 0 });
+    // another bank can be tied to a ticket later (crm.billing only), and untied
+    const second = (await admin.post("/api/hour-banks", { clientId: client.id, hours: 4, rate: 90, invoice: false })).json.id as string;
+    expect((await tech.put(`/api/hour-banks/${second}/link`, { ticketId: t0.id })).status).toBe(403);
+    expect((await admin.put(`/api/hour-banks/${second}/link`, { ticketId: t0.id })).json).toMatchObject({ scopeTicketId: t0.id, scopeProjId: null });
+    expect((await admin.put(`/api/hour-banks/${second}/link`, { ticketId: null, projId: null })).json).toMatchObject({ scopeTicketId: null });
+  });
+
+  it("a bank tied to a project makes that project bill under it; two banks of one client draw only their own project's time", async () => {
+    resetRateLimit("login:ip:unknown");
+    await clearToday();
+    const admin = await signIn("admin@akab.local");
+    const tech = await signIn("tech@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Banque projets inc.", autotaskId: 9_300_973 }).returning();
+    const p1 = (await tech.post("/api/proj", { name: "Projet un", clientId: client.id })).json;
+    const p2 = (await tech.post("/api/proj", { name: "Projet deux", clientId: client.id })).json;
+    const fixed = (await tech.post("/api/proj", { name: "Prix fixe", clientId: client.id, billingMode: "fixed", fixedPrice: 1000 })).json;
+    // a project sold another way bills its own way
+    expect((await admin.post("/api/hour-banks", { clientId: client.id, hours: 5, rate: 100, invoice: false, projId: fixed.id })).json.error).toBe("bank_project_billing");
+    const b1 = (await admin.post("/api/hour-banks", { clientId: client.id, hours: 5, rate: 100, invoice: true, projId: p1.id })).json.id as string;
+    const b2 = (await admin.post("/api/hour-banks", { clientId: client.id, hours: 8, rate: 100, invoice: true, projId: p2.id })).json.id as string;
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.id, p1.id)))[0]).toMatchObject({ billingMode: "contract", contractId: b1 });
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.id, p2.id)))[0]).toMatchObject({ billingMode: "contract", contractId: b2 });
+    // each is offered only on its own project
+    const list = async (pid: string) => (await tech.get(`/api/proj/client-contracts/${client.id}?project=${pid}`)).json.map((k: any) => k.id);
+    expect(await list(p1.id)).toContain(b1);
+    expect(await list(p1.id)).not.toContain(b2);
+    expect(await list(p2.id)).not.toContain(b1);
+    expect((await tech.patch(`/api/proj/${fixed.id}`, { billingMode: "contract", contractId: b1 })).json.error).toBe("contract_invalid");
+    // time on a project draws its own bank only, and is not billed one by one
+    expect((await tech.post(`/api/proj/${p1.id}/time`, { date: qcToday(), hours: 1.5, note: "Travail" })).status).toBe(201);
+    expect((await tech.post(`/api/proj/${p2.id}/time`, { date: qcToday(), hours: 2, note: "Travail" })).status).toBe(201);
+    const bankOf = async (id: string) => (await admin.get(`/api/crm/clients/${client.id}/contracts/${id}`)).json.bank;
+    expect(await bankOf(b1)).toMatchObject({ used: 1.5, left: 3.5, over: 0 });
+    expect(await bankOf(b2)).toMatchObject({ used: 2, left: 6 });
+    const { localTicketSource } = await import("../server/lib/localTickets.ts");
+    const { localBase } = await import("../server/lib/localBase.ts");
+    const items = (await localTicketSource(localBase).billables("2020-01-01")).items.filter((i) => i.id.startsWith("projtime:") && (i.ticketNumber === p1.number || i.ticketNumber === p2.number));
+    expect(items).toEqual([]);
+    // past the bank: nothing is billed by itself, the screen says by how much
+    expect((await tech.post(`/api/proj/${p1.id}/time`, { date: qcToday(), hours: 5, note: "Encore" })).status).toBe(201);
+    expect(await bankOf(b1)).toMatchObject({ used: 6.5, left: 0, over: 1.5 });
+    // untied later: the project goes back to the client's usual rule
+    expect((await admin.put(`/api/hour-banks/${b1}/link`, { projId: null })).json).toMatchObject({ scopeProjId: null });
+    expect((await db().select().from(schema.projProjects).where(eq(schema.projProjects.id, p1.id)))[0]).toMatchObject({ billingMode: "hourly", contractId: null });
+  });
+
+  it("a quote sells a bank on an accepted line, once; the bank line is out of the deposit", async () => {
+    resetRateLimit("login:ip:unknown");
+    const admin = await signIn("admin@akab.local");
+    const [client] = await db().insert(schema.clients).values({ name: "Zz Banque soumission inc.", autotaskId: 9_300_974 }).returning();
+    const [billingRow] = await db().select().from(schema.integrations).where(eq(schema.integrations.provider, "billing"));
+    try {
+      const lines = [
+        { description: "Serveur", quantityX100: 100, unitPriceCents: 200000, sku: "SRV-1" },
+        { description: "Banque d'heures", sku: "BANQUE-HEURES", quantityX100: 1000, unitPriceCents: 8500, bankExpiresOn: "2099-12-31" },
+      ];
+      // a prospect quote cannot make a bank (it is kept on a CRM client)
+      const prospect = (await admin.post("/api/quotes", { prospectName: "Zz Prospect banque", lines })).json;
+      await admin.post(`/api/quotes/${prospect.id}/status`, { status: "sent" });
+      expect((await admin.post(`/api/quotes/${prospect.id}/status`, { status: "accepted" })).json.error).toBe("bank_needs_client");
+      const q = (await admin.post("/api/quotes", { clientId: client.id, title: "Serveur + banque", lines })).json;
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" });
+      const ok = await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" });
+      expect(ok.json).toMatchObject({ status: "accepted", banksMade: 1 });
+      const banks = await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.quoteId, q.id));
+      expect(banks).toHaveLength(1);
+      expect(banks[0]).toMatchObject({ bankPrepaid: true, bankedHoursX100: 1000, bankRateCents: 8500, endDate: "2099-12-31", clientId: client.id });
+      const items = await db().select().from(schema.billingItems).where(eq(schema.billingItems.sourceId, `hourbank:${banks[0]!.id}`));
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({ status: "approved", amountCents: 85000, quantityX100: 1000 });
+      // back to a draft, the lines saved as the editor sends them: the line keeps its bank, and accepting again never doubles it
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "draft" });
+      const cur = (await admin.get(`/api/quotes/${q.id}`)).json;
+      const bankLine = cur.lines.find((l: any) => l.sku === "BANQUE-HEURES");
+      expect(bankLine.bankContractId).toBe(banks[0]!.id);
+      const saved = await admin.put(`/api/quotes/${q.id}`, { ...cur, lines: cur.lines });
+      expect(saved.status).toBe(200);
+      expect(saved.json.lines.find((l: any) => l.sku === "BANQUE-HEURES").bankContractId).toBe(banks[0]!.id);
+      // a bank this quote did not make is never kept on a line
+      const foreign = (await admin.post("/api/hour-banks", { clientId: client.id, hours: 1, rate: 1, invoice: false })).json.id;
+      const forged = await admin.put(`/api/quotes/${q.id}`, { ...cur, lines: cur.lines.map((l: any) => (l.sku === "BANQUE-HEURES" ? { ...l, bankContractId: foreign } : l)) });
+      expect(forged.json.lines.find((l: any) => l.sku === "BANQUE-HEURES").bankContractId).toBeNull();
+      await admin.put(`/api/quotes/${q.id}`, { ...cur, lines: cur.lines });
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "sent" });
+      await admin.post(`/api/quotes/${q.id}/status`, { status: "accepted" });
+      expect(await db().select().from(schema.clientContracts).where(eq(schema.clientContracts.quoteId, q.id))).toHaveLength(1);
+      // the deposit takes the equipment only: 50 % of the server, nothing of the bank
+      const dep = await admin.post(`/api/quotes/${q.id}/deposit`, { percent: 50, send: false });
+      expect(dep.status).toBe(201);
+      const dl = await db().select().from(schema.invoiceLines).where(eq(schema.invoiceLines.invoiceId, dep.json.invoice.id));
+      expect(dl.reduce((n, l) => n + l.amountCents, 0)).toBe(100000);
+      // a quote with only the bank line has nothing to take a deposit on
+      const only = (await admin.post("/api/quotes", { clientId: client.id, lines: [lines[1]] })).json;
+      await admin.post(`/api/quotes/${only.id}/status`, { status: "sent" });
+      await admin.post(`/api/quotes/${only.id}/status`, { status: "accepted" });
+      expect((await admin.post(`/api/quotes/${only.id}/deposit`, { percent: 50, send: false })).json.error).toBe("deposit_nothing");
+      // a bank tied to a project that is not the client's is refused when the quote is accepted
+      const wrong = (await admin.post("/api/quotes", { clientId: client.id, lines: [{ ...lines[1], bankScopeProjId: crypto.randomUUID() }] })).json;
+      await admin.post(`/api/quotes/${wrong.id}/status`, { status: "sent" });
+      expect((await admin.post(`/api/quotes/${wrong.id}/status`, { status: "accepted" })).json.error).toBe("bank_scope_invalid");
+      expect((await admin.get(`/api/quotes/${wrong.id}`)).json.status).toBe("sent");
+    } finally {
+      if (billingRow) await db().update(schema.integrations).set({ config: billingRow.config }).where(eq(schema.integrations.provider, "billing"));
+    }
+  });
+});

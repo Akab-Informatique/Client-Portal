@@ -127,7 +127,9 @@ export type TicketContract = {
   bankedHours?: number | null;
   usedHours?: number;
   /** Hours bank: where it stands this month (hours available incl. carried, used, left) and what an hour of it costs */
-  bank?: { hours: number; rateCents: number | null; rollover: "lose" | "carry" | "topup"; available: number; used: number; left: number; over: number } | null;
+  bank?: { hours: number; rateCents: number | null; rollover: "lose" | "carry" | "topup"; available: number; used: number; left: number; over: number; prepaid?: boolean; expired?: boolean; expiresOn?: string | null } | null;
+  /** A prepaid hours bank (bought once) */
+  prepaid?: boolean;
   fixedPriceCents?: number | null;
   /** The rate typed on the contract (null: the usual rate applies) */
   hourlyRateCents: number | null;

@@ -46,6 +46,8 @@ export type Timer = {
 type Timers = { at: number; list: Timer[] };
 
 const KEY = ["ticket-timers"];
+/** A timer under this when its ticket is closed is thrown away, no question asked. */
+const SHORT_TIMER_MS = 3 * 60_000;
 const BEAT_MS = 30_000;
 
 export function useTimers() {
@@ -189,7 +191,13 @@ export function useTicketTimerAuto() {
       starting.current.delete(id);
       // Always ask the server (the list here may not be loaded yet); no timer → 404
       try {
-        put(await api.post<Timer[]>(`/tickets/${id}/timer/stop`));
+        const list = await api.post<Timer[]>(`/tickets/${id}/timer/stop`);
+        // under 3 minutes (a ticket only looked at): the time is thrown away without asking
+        const short = list.find((x) => x.ticketId === id && x.state === "pending" && x.elapsedMs < SHORT_TIMER_MS);
+        if (!short) return put(list);
+        put(list.filter((x) => x.id !== short.id));
+        await api.del(`/tickets/timers/${short.id}`).catch(() => undefined);
+        void qc.invalidateQueries({ queryKey: KEY });
       } catch {
         void qc.invalidateQueries({ queryKey: KEY });
       }
@@ -581,6 +589,7 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
                       {k.name}
                       {k.shared && k.ownerName ? ` (${k.ownerName})` : ""}
                       {k.isDefault ? ` · ${t("tickets.contractBilling.default")}` : ""}
+                      {k.prepaid ? ` · ${t("hourBank.prepaid")}${k.bank ? ` (${t("hourBank.project.left", { left: k.bank.left })})` : ""}` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -589,13 +598,14 @@ function TimeEntryDialog({ timer, position, onLater }: { timer: Timer; position:
               {contract?.mode === "banked" && contract.bank && (
                 <div className="space-y-1.5 rounded-lg border border-sky-500/30 bg-sky-500/[0.06] p-2.5 text-xs">
                   <p>
-                    {t("tickets.bank.left", { left: contract.bank.left, available: contract.bank.available })}
+                    {contract.bank.prepaid ? t("hourBank.ticket.left", { left: contract.bank.left, available: contract.bank.available }) : t("tickets.bank.left", { left: contract.bank.left, available: contract.bank.available })}
+                    {contract.bank.prepaid && contract.bank.expired ? <span className="ml-1 text-amber-300">{t("hourBank.ticket.expired")}</span> : contract.bank.prepaid && contract.bank.expiresOn ? <span className="ml-1 text-muted-foreground">{t("hourBank.ticket.expires", { date: contract.bank.expiresOn })}</span> : null}
                     {overHours > 0 ? <span className="ml-1 font-semibold text-amber-300">{t("tickets.bank.over", { over: overHours })}</span> : <span className="ml-1 text-muted-foreground">{t("tickets.bank.after", { after: Math.round((contract.bank.left - h) * 100) / 100 })}</span>}
                   </p>
                   {overHours > 0 && (
                     <fieldset className="space-y-1">
                       <legend className="text-[11px] text-amber-300">{t("tickets.bank.choose")}</legend>
-                      {(["bill", "extra", "free", "debt"] as const).map((o) => (
+                      {(contract.bank.prepaid ? (["bill", "extra", "free"] as const) : (["bill", "extra", "free", "debt"] as const)).map((o) => (
                         <label key={o} className="flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5 has-[:checked]:border-[color:var(--gold)]/50 has-[:checked]:bg-[color:var(--gold)]/[0.06]">
                           <input type="radio" name="bank-over" checked={overage === o} onChange={() => setOverage(o)} className="mt-0.5 accent-[color:var(--gold)]" />
                           <span>

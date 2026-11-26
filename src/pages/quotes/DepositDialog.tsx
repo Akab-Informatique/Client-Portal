@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
-import { depositOf, isHourLine, lineAmount, recurrenceOf } from "@shared/quotes";
+import { depositOf, isBankLine, isHourLine, lineAmount, recurrenceOf } from "@shared/quotes";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useCan } from "@/lib/session";
 import { useQuoteClients, type Quote } from "./shared";
@@ -53,7 +53,7 @@ export function DepositDialog({ quote, onClose, onDone }: { quote: Quote; onClos
   const percent = Number(pct.replace(",", "."));
   const valid = Number.isFinite(percent) && percent >= 1 && percent <= 100;
   // the one-time lines the deposit is taken on (all by default; e.g. the equipment only, the rest invoiced at delivery)
-  const once = quote.lines.filter((l) => !l.optional && recurrenceOf(l) === "once");
+  const once = quote.lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !isBankLine(l));
   const [picked, setPicked] = useState<string[]>(() => once.map((l) => l.id));
   const pickOnly = (keep: (l: (typeof once)[number]) => boolean) => setPicked(once.filter(keep).map((l) => l.id));
   const dep = depositOf(quote.lines, valid ? Math.round(percent * 100) : 0, picked);

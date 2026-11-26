@@ -22,6 +22,7 @@ import * as devicesTexts from "./devicesPage";
 import * as termTexts from "./term";
 import * as oppsTexts from "./opps";
 import * as billTimingTexts from "./billTiming";
+import * as hourBankTexts from "./hourBank";
 
 export type Locale = "fr" | "en";
 
@@ -54,7 +55,7 @@ function applyLocale(lng: string) {
   document.title = TITLE[l];
 }
 // the self-managed clients feature keeps its texts in their own files
-for (const lng of ["fr", "en"] as const) for (const m of [smStaff, smClient, smDelegate, listTexts, reportTexts, assistantTexts, projTexts, projListTexts, projWorkTexts, projDeliverTexts, projBillTexts, watchTexts, devicesTexts, termTexts, oppsTexts, billTimingTexts, unifiTexts, nocTexts, vaultTexts, equipLabelTexts]) i18n.addResourceBundle(lng, "translation", m[lng], true, false);
+for (const lng of ["fr", "en"] as const) for (const m of [smStaff, smClient, smDelegate, listTexts, reportTexts, assistantTexts, projTexts, projListTexts, projWorkTexts, projDeliverTexts, projBillTexts, watchTexts, devicesTexts, termTexts, oppsTexts, billTimingTexts, hourBankTexts, unifiTexts, nocTexts, vaultTexts, equipLabelTexts]) i18n.addResourceBundle(lng, "translation", m[lng], true, false);
 
 applyLocale(i18n.language);
 i18n.on("languageChanged", applyLocale);

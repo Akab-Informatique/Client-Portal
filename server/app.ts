@@ -65,6 +65,7 @@ import { microsoftRoutes } from "./routes/microsoft.ts";
 import { meetingRoutes } from "./routes/meetings.ts";
 import { breakroomRoutes } from "./routes/breakroom.ts";
 import { crmRoutes } from "./routes/crm.ts";
+import { hourBankRoutes } from "./routes/hourBanks.ts";
 import { billingRoutes, stripeHookRoutes } from "./routes/billing.ts";
 import { billablesRoutes } from "./routes/billables.ts";
 import { timeRoutes } from "./routes/time.ts";
@@ -189,6 +190,7 @@ export function createApp() {
   api.route("/meetings", meetingRoutes);
   api.route("/breakroom", breakroomRoutes);
   api.route("/crm", crmRoutes);
+  api.route("/hour-banks", hourBankRoutes);
   // Stripe calls this one (signed, no session)
   api.route("/stripe/hook", stripeHookRoutes);
   // the "Pay online" link of an invoice email (signed, no session)

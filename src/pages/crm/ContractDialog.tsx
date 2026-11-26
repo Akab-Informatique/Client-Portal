@@ -23,6 +23,7 @@ import { bankBundle, withTopupCharges, type BankMonth, type BankRollover } from 
 import { shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { MapItcloudDialog, NewServiceDialog, type Unmapped } from "./ContractServices";
 import { money, useContractTypes, type CrmContract, type CrmDetail } from "./shared";
+import { ScopePicker, bankErrorText, scopeBody, type BankScope } from "./SellBankDialog";
 
 /**
  * A contract in its own window: made (with its services) or viewed in tabs — overview, services, charges (what is
@@ -614,7 +615,19 @@ function BankTab({ client, k, editable, onChanged }: { client: CrmDetail; k: Det
   const byCompany = [...(k.bankUsage ?? []).reduce((m, u) => m.set(u.company, { company: u.company, now: (m.get(u.company)?.now ?? 0) + (u.month === thisMonth ? u.hours : 0), total: (m.get(u.company)?.total ?? 0) + u.hours }), new Map<string, { company: string; now: number; total: number }>()).values()].sort((x, y) => y.total - x.total);
   return (
     <div className="space-y-3">
-      {k.bank ? (
+      {k.bank?.prepaid ? (
+        <div className="space-y-1">
+          <div className="grid gap-2 sm:grid-cols-4">
+            <Kpi icon={<CalendarDays className="size-3.5" />} label={t("hourBank.tab.bought")} value={h(k.bank.hours)} hint={`${money(k.bank.rateCents ?? 0, i18n.language)} / h`} />
+            <Kpi icon={<Receipt className="size-3.5" />} label={t("hourBank.tab.adjusted")} value={h(Math.round((k.bank.available - k.bank.hours) * 100) / 100)} />
+            <Kpi icon={<Minus className="size-3.5" />} label={t("hourBank.tab.used")} value={h(k.bank.used)} tone="sky" />
+            <Kpi icon={<TrendingUp className="size-3.5" />} label={t("hourBank.tab.left")} value={h(k.bank.left)} tone={k.bank.left > 0 ? "gold" : "amber"} hint={k.bank.over > 0 ? t("hourBank.tab.over", { over: k.bank.over }) : undefined} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {t("hourBank.tab.hint")} {k.bank.expired ? <span className="font-medium text-amber-300">{t("hourBank.tab.expired")}</span> : k.bank.expiresOn ? `${t("hourBank.tab.expires")} ${k.bank.expiresOn}.` : t("hourBank.tab.expiresNone")}
+          </p>
+        </div>
+      ) : k.bank ? (
         <div className="grid gap-2 sm:grid-cols-4">
           <Kpi icon={<CalendarDays className="size-3.5" />} label={t("crm.contracts.bank.monthHours")} value={h(k.bank.hours)} hint={`${money(k.bank.rateCents ?? 0, i18n.language)} / h`} />
           <Kpi icon={<Receipt className="size-3.5" />} label={t("crm.contracts.bank.availableNow")} value={h(k.bank.available)} />
@@ -624,7 +637,8 @@ function BankTab({ client, k, editable, onChanged }: { client: CrmDetail; k: Det
       ) : (
         <p className="text-sm text-muted-foreground">{t("crm.contracts.bank.notSet")}</p>
       )}
-      <p className="text-xs text-muted-foreground">{t(`crm.contracts.bank.${k.bankRollover ?? "lose"}Hint`)}</p>
+      {!k.bank?.prepaid && <p className="text-xs text-muted-foreground">{t(`crm.contracts.bank.${k.bankRollover ?? "lose"}Hint`)}</p>}
+      {k.bank?.prepaid && editable && can("crm.billing") && <BankLink client={client} k={k} onChanged={onChanged} />}
       {editable && can("crm.billing") && (
         <div className="space-y-2 rounded-xl border bg-background/30 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("crm.contracts.bank.adjustTitle")}</p>
@@ -661,7 +675,7 @@ function BankTab({ client, k, editable, onChanged }: { client: CrmDetail; k: Det
           ))}
         </ul>
       )}
-      {byCompany.length > 1 && (
+      {(byCompany.length > 1 || (k.bank?.prepaid && byCompany.length > 0)) && (
         <div className="space-y-1.5 rounded-xl border bg-background/30 p-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("crm.contracts.bank.whoUsed")}</p>
           <table className="w-full text-sm">
@@ -709,6 +723,35 @@ function BankTab({ client, k, editable, onChanged }: { client: CrmDetail; k: Det
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+/** A prepaid bank: the ticket or project it is tied to (or none), changed here */
+function BankLink({ client, k, onChanged }: { client: CrmDetail; k: Detail; onChanged: () => void }) {
+  const { t } = useTranslation();
+  const initial: BankScope = k.scopeTicketId ? { kind: "ticket", id: String(k.scopeTicketId) } : k.scopeProjId ? { kind: "project", id: k.scopeProjId } : { kind: "none", id: "" };
+  const [scope, setScope] = useState<BankScope>(initial);
+  const qc = useQueryClient();
+  const save = useMutation({
+    mutationFn: () => api.put(`/hour-banks/${k.id}/link`, scope.kind === "none" ? { ticketId: null, projId: null } : scopeBody(scope)),
+    onSuccess: () => {
+      toast.success(t("hourBank.tab.linked"));
+      void qc.invalidateQueries({ queryKey: ["crm"] });
+      onChanged();
+    },
+    onError: (e) => toast.error(bankErrorText(t, e)),
+  });
+  const changed = scope.kind !== initial.kind || scope.id !== initial.id;
+  return (
+    <div className="space-y-2 rounded-xl border bg-background/30 p-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t("hourBank.tab.linkTitle")}</p>
+      <ScopePicker clientId={client.id} value={scope} onChange={setScope} />
+      {changed && (scope.kind === "none" || scope.id) && (
+        <Button type="button" size="sm" disabled={save.isPending} onClick={() => save.mutate()}>
+          {save.isPending && <Loader2 className="size-3.5 animate-spin" />} {t("hourBank.tab.linkSave")}
+        </Button>
       )}
     </div>
   );
@@ -1251,7 +1294,7 @@ function OverviewTab({ client, k, editable, onChanged, onClose }: { client: CrmD
           <RebateInput regular={isBank ? (toCents(bankRate) ?? 0) / 100 : k.billingMode === "hourly" ? Number(rate.replace(",", ".")) || 0 : null} percent={rebate} onPercent={setRebate} unit={isBank || k.billingMode === "hourly" ? "/ h" : undefined} />
         </div>
       )}
-      {isBank && <RolloverPicker value={rollover} onChange={setRollover} disabled={!editable} />}
+      {isBank && !k.bankPrepaid && <RolloverPicker value={rollover} onChange={setRollover} disabled={!editable} />}
       {k.billingMode === "monthly" && (
         <div className="space-y-3 rounded-xl border bg-background/30 p-3">
           <label className="flex items-center gap-2 text-sm font-medium">

@@ -15,7 +15,9 @@ import { autoSync } from "../lib/quickbooks.ts";
 import { sendInvoiceMail } from "../lib/invoiceMail.ts";
 import { stripePayReady } from "../lib/payLink.ts";
 import { getQuote, listQuotes, nextQuoteNumber, saveLines, todayQc } from "../lib/quotes.ts";
-import { QUOTE_KINDS, QUOTE_RECURRENCES, QUOTE_STATUSES, recurrenceOf } from "../../shared/quotes.ts";
+import { QUOTE_KINDS, QUOTE_RECURRENCES, QUOTE_STATUSES, isBankLine, recurrenceOf } from "../../shared/quotes.ts";
+import { makeQuoteBanks } from "../lib/hourBanks.ts";
+import { ticketScopeOf } from "../lib/selfManaged.ts";
 
 /** Lower case, no accents, punctuation as spaces: "Exchange Online (Plan 1)" → "exchange online plan 1" */
 const fold = (s: string) =>
@@ -52,6 +54,11 @@ const zLine = z.object({
   taxable: z.boolean().default(true),
   optional: z.boolean().default(false),
   recurrence: z.enum(QUOTE_RECURRENCES).default("once"),
+  /** A prepaid hours bank (sku BANQUE-HEURES): tied to one ticket or one project of the client, an expiry day, and the bank already made */
+  bankScopeTicketId: z.number().int().positive().nullable().default(null),
+  bankScopeProjId: zUuid.nullable().default(null),
+  bankExpiresOn: zDate.nullable().default(null),
+  bankContractId: zUuid.nullable().default(null),
 });
 
 const zQuote = z.object({
@@ -297,6 +304,10 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     const cur = await getQuote(id);
     if (!cur) throw new HTTPException(404, { message: "not_found" });
     if ((status === "sent" || status === "accepted") && cur.lineCount === 0) throw new HTTPException(409, { message: "quote_empty" });
+    // a prepaid hours bank sold on a line needs a CRM client (the bank is kept on it)
+    if (status === "accepted" && !cur.clientId && (cur.lines ?? []).some((l) => !l.optional && isBankLine(l) && !l.bankContractId)) throw new HTTPException(409, { message: "bank_needs_client" });
+    // accepted: each prepaid hours bank on its lines is made (once), with its billing item — waiting for approval without the accounting right
+    const banks = status === "accepted" ? await makeQuoteBanks(a.user.id, id, a.permissions.includes("accounting.manage"), ticketScopeOf(c)) : 0;
     const now = new Date();
     await db()
       .update(schema.quotes)
@@ -309,7 +320,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
       .where(eq(schema.quotes.id, id));
     await audit(a.user.id, "quote.status", id, { number: cur.number, from: cur.status, to: status });
     await syncQuoteToPipeline(id, a.user.id);
-    return c.json(await getQuote(id));
+    return c.json({ ...(await getQuote(id)), banksMade: banks });
   })
 
   /**
@@ -338,7 +349,7 @@ await audit(a.user.id, "quote.updated", id, { number: cur.number, lines: p.lines
     if (q.saleType === "hourly") throw new HTTPException(409, { message: "deposit_not_allowed" });
     const percentX100 = q.saleType === "bank" ? 10_000 : Math.round(p.percent * 100);
     // only the lines ticked (e.g. the equipment); none given: every one-time line
-    const onceLines = (q.lines ?? []).filter((l) => !l.optional && recurrenceOf(l) === "once");
+    const onceLines = (q.lines ?? []).filter((l) => !l.optional && recurrenceOf(l) === "once" && !isBankLine(l));
     if (p.lineIds?.some((lid) => !onceLines.some((l) => l.id === lid))) throw new HTTPException(400, { message: "deposit_lines_invalid" });
     const lineIds = p.lineIds && p.lineIds.length < onceLines.length ? [...new Set(p.lineIds)] : null;
     const dep = depositOf(q.lines ?? [], percentX100, lineIds);

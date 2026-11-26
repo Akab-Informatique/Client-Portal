@@ -1523,6 +1523,8 @@ export const ticketRoutes = new Hono<AppEnv>()
       const overHours = Math.max(0, Math.round((p.hours - contract.bank.left) * 100) / 100);
       if (overHours > 0) {
         if (!p.overage) throw new HTTPException(400, { message: "bank_over_choice_required" });
+        // a prepaid bank has no next month to take the hours from
+        if (contract.bank.prepaid && p.overage === "debt") throw new HTTPException(400, { message: "bank_over_no_debt" });
         const usual = Math.round((await billingSettings()).rates.hourly * 100);
         const rateCents = p.overage === "bill" ? usual : p.overage === "extra" ? (contract.bank.rateCents ?? usual) : null;
         if (rateCents === 0) throw new HTTPException(400, { message: "bank_over_no_rate" });
@@ -2314,7 +2316,7 @@ export const ticketRoutes = new Hono<AppEnv>()
     const src = await ticketSource(ticketScopeOf(c));
     const t = await run(() => src.get(id));
     if (!t) throw new HTTPException(404, { message: "not_found" });
-    if (p.contractId && !(await contractsOfCompany(t.company.id)).some((k) => k.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
+    if (p.contractId && !(await contractOfTicket(id, t.company.id)).contracts.some((k) => k.id === p.contractId)) throw new HTTPException(400, { message: "invalid_contract" });
     await setTicketContract(id, p.contractId, a.user.id);
     await audit(a.user.id, "ticket.contract_set", String(id), { contractId: p.contractId });
     return c.json(await contractOfTicket(id, t.company.id));

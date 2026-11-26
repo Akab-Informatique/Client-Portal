@@ -51,9 +51,9 @@ export function quoteTotals(lines: QuoteLineMoney[], taxes: boolean, rates: { gs
  * (one-time lines, options left out — or only the lines ticked), before taxes, split into its taxable and non-taxable parts so the
  * invoice taxes exactly what the quote taxes. Monthly and yearly lines are never part of it.
  */
-export function depositOf(lines: (QuoteLineMoney & { id?: string })[], percentX100: number, lineIds?: string[] | null) {
+export function depositOf(lines: (QuoteLineMoney & { id?: string; sku?: string | null })[], percentX100: number, lineIds?: string[] | null) {
   // only the lines ticked (e.g. the equipment): the rest is invoiced later, at delivery
-  const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && (!lineIds || (l.id != null && lineIds.includes(l.id))));
+  const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !isBankLine(l) && (!lineIds || (l.id != null && lineIds.includes(l.id))));
   const share = (cents: number) => Math.round((cents * Math.min(Math.max(percentX100, 0), 10_000)) / 10_000);
   const taxableCents = share(once.filter((l) => l.taxable).reduce((n, l) => n + lineAmount(l), 0));
   const exemptCents = share(once.filter((l) => !l.taxable).reduce((n, l) => n + lineAmount(l), 0));
@@ -71,7 +71,8 @@ export const isHourLine = (l: { description: string; details?: string | null; sk
  * no hour line: no hours, and the price of the whole implementation.
  */
 export function soldOfQuote(lines: (QuoteLineMoney & { description: string; details?: string | null; sku?: string | null })[]) {
-  const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once");
+  // a prepaid hours bank sold on the quote is billed on its own, never part of the project's price
+  const once = lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !isBankLine(l));
   // lines with the technician-time SKU are the hours sold; without any, the lines that talk about hours
   const tech = once.filter((l) => isTechTimeSku(l.sku));
   const hourLines = tech.length ? tech : once.filter(isHourLine);
@@ -81,7 +82,7 @@ export function soldOfQuote(lines: (QuoteLineMoney & { description: string; deta
 
 type SaleLine = QuoteLineMoney & { description: string; details?: string | null; sku?: string | null; productId?: string | null; serviceId?: string | null };
 /** The products of a quote that become charges of the project: one time, not options, from the inventory or with a SKU, not services and not hours */
-export const chargeLinesOfQuote = <T extends SaleLine>(lines: T[]): T[] => lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !l.serviceId && (l.productId || l.sku) && !isHourLine(l));
+export const chargeLinesOfQuote = <T extends SaleLine>(lines: T[]): T[] => lines.filter((l) => !l.optional && recurrenceOf(l) === "once" && !l.serviceId && (l.productId || l.sku) && !isHourLine(l) && !isBankLine(l));
 /** What a quote sells as a project: hours and price of the hour lines, and the charges (products) billed apart — a price that was the whole implementation leaves them out. */
 export function projectSaleOf<T extends SaleLine>(lines: T[]) {
   const sold = soldOfQuote(lines);
@@ -89,3 +90,7 @@ export function projectSaleOf<T extends SaleLine>(lines: T[]) {
   const chargesCents = charges.reduce((n, l) => n + lineAmount(l), 0);
   return { hours: sold.hours, priceCents: sold.hours == null ? Math.max(0, sold.priceCents - chargesCents) : sold.priceCents, charges, chargesCents };
 }
+
+/** A line that sells a prepaid hours bank (quantity = hours, price = per hour): the bank is made when the quote is accepted */
+export const BANK_SKU = "BANQUE-HEURES";
+export const isBankLine = (l: { sku?: string | null }) => (l.sku ?? "").trim().toUpperCase() === BANK_SKU;

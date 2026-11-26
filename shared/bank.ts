@@ -81,3 +81,10 @@ export function withTopupCharges<T extends { entries: { date: string; amountCent
   });
   return { ...ch, entries, revenueCents: entries.reduce((n, e) => n + e.amountCents, 0) };
 }
+
+/**
+ * A prepaid hours bank (hours bought once, drawn down until empty) has no end date of its own unless it expires: the
+ * contract then carries this far day, which the screens show as "no expiry".
+ */
+export const NO_EXPIRY = "2099-12-31";
+export const expiryOf = (endDate: string | null | undefined): string | null => (endDate && endDate !== NO_EXPIRY ? endDate : null);

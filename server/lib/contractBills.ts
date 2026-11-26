@@ -41,6 +41,8 @@ export async function contractBillables(since: string): Promise<Billable[]> {
   const usedBy = await usedByMonthOf(contracts.filter(({ k }) => k.billingMode === "banked").map(({ k }) => k));
   const adjusted = await adjustmentsOf(contracts.filter(({ k }) => k.billingMode === "banked").map(({ k }) => k.id));
   for (const { k, companyId } of contracts) {
+    // a prepaid hours bank is bought once (its own billing item): it never makes recurring lines
+    if (k.bankPrepaid) continue;
     const mine = rows.filter((r) => r.s.contractId === k.id);
     // a bundle is charged even with no service listed under it
     if (!mine.length && !hasBundle(k)) continue;

@@ -60,6 +60,7 @@ import { cn } from "@/lib/utils";
 import { PRIORITY_STYLE, STATUS_STYLE, shortDate, ticketErrorText } from "@/pages/tickets/shared";
 import { crmErrorText, money, useCrmClients, type CrmInvoice, type CrmInvoices, type InvoiceStatus, type CrmClient, type CrmContact, type CrmContract, type CrmDetail, type CrmTicket, type InvoiceSettings } from "./shared";
 import { ContractWindow, NewContractDialog } from "./ContractDialog";
+import { SellBankButton } from "./SellBankDialog";
 import { ClientUsersPanel } from "@/admin/ClientAccess";
 import { ContactWindow } from "./ContactWindow";
 import { ClientDevicesTab, useClientDevices } from "./ClientDevices";
@@ -1257,9 +1258,12 @@ function ContractsTab({ client }: { client: CrmDetail }) {
       icon={<FileText className="size-4" />}
       aside={
         can("crm.billing") ? (
-          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
-            <Plus className="size-3.5" /> {t("crm.contracts.new")}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <SellBankButton clientId={client.id} onDone={() => void qc.invalidateQueries({ queryKey: ["crm", "client", client.id, "contracts"] })} />
+            <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+              <Plus className="size-3.5" /> {t("crm.contracts.new")}
+            </Button>
+          </div>
         ) : undefined
       }
     >
@@ -1299,16 +1303,24 @@ function ContractsTab({ client }: { client: CrmDetail }) {
                 {!k.active && <span className="text-[11px] text-muted-foreground">{k.endedOn ? t("crm.contracts.window.stoppedOn", { date: shortDate(k.endedOn) }) : t("crm.contracts.inactive")}</span>}
                 <span className="w-32 truncate text-xs text-muted-foreground">{k.type ?? "—"}</span>
                 <span className="w-44 text-xs text-muted-foreground">
-                  {k.startDate ? shortDate(k.startDate) : "…"} → {k.endDate ? shortDate(k.endDate) : t("crm.contracts.noEnd")}
+                  {k.bankPrepaid ? (k.bank?.expiresOn ? `${t("hourBank.tab.expires")} ${shortDate(k.bank.expiresOn)}` : t("hourBank.tab.expiresNone")) : `${k.startDate ? shortDate(k.startDate) : "…"} → ${k.endDate ? shortDate(k.endDate) : t("crm.contracts.noEnd")}`}
                 </span>
-                {k.summary && ((k.serviceCount ?? 0) > 0 || k.bank) ? (
+                {k.bankPrepaid && k.bank ? (
+                  <span className="w-48 text-right text-xs">
+                    <span className="mb-0.5 inline-block rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-sky-300">{t("hourBank.prepaid")}</span>
+                    <span className={cn("block text-[11px] font-medium", k.bank.left > 0 ? "text-sky-300" : "text-amber-300")}>
+                      {k.bank.expired ? t("hourBank.list.expired") : t("hourBank.list.inList", { left: k.bank.left, available: k.bank.available })}
+                      {k.bank.over > 0 ? ` · ${t("hourBank.tab.over", { over: k.bank.over })}` : ""}
+                    </span>
+                  </span>
+                ) : k.summary && ((k.serviceCount ?? 0) > 0 || k.bank) ? (
                   <span className="w-48 text-right text-xs">
                     <span className="block font-mono font-semibold">
                       {money(k.summary.perPeriodCents, i18n.language)} <span className="font-sans font-normal text-muted-foreground">{k.billingPeriod === "yearly" ? t("services.perYear") : t("services.perMonth")}</span>
                     </span>
                     {k.bank ? (
                       <span className={cn("block text-[11px] font-medium", k.bank.left > 0 ? "text-sky-300" : "text-amber-300")}>
-                        {t("crm.contracts.bank.inList", { left: k.bank.left, available: k.bank.available })}
+                        {t(k.bank.prepaid ? "hourBank.list.inList" : "crm.contracts.bank.inList", { left: k.bank.left, available: k.bank.available })}
                         {k.bank.over > 0 ? ` · ${t("crm.contracts.bank.overHint", { over: k.bank.over })}` : ""}
                       </span>
                     ) : null}

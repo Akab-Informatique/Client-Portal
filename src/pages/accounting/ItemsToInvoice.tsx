@@ -16,6 +16,7 @@ import { api, ApiError } from "@/lib/api";
 import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
+import { SellBankButton } from "@/pages/crm/SellBankDialog";
 import { shortDate } from "@/pages/tickets/shared";
 import { KEY, TAB_ICON, type Group, type Item, type Kind } from "./ApprovalsPage";
 import { PeriodBar, usePeriod, type Period } from "./period";
@@ -219,9 +220,17 @@ function InvoiceFolder({ lang, period }: { lang: string; period: Period }) {
   const [clientId, setClientId] = useState<string | null>(null);
   const [bulk, setBulk] = useState(false);
   const current = ready.find((r) => r.client.id === clientId) ?? ready[0] ?? null;
+  const qc = useQueryClient();
   const m = (c: number) => money(c, lang);
   if (isLoading) return <Loader2 className="mx-auto my-10 size-5 animate-spin text-muted-foreground" />;
-  if (!ready.length) return <p className="py-12 text-center text-sm text-muted-foreground">{t("invoicing.none")}</p>;
+  const sellBank = can("accounting.manage") ? <SellBankButton clientId={current?.client.id} billing="always" onDone={() => void qc.invalidateQueries({ queryKey: KEY })} /> : null;
+  if (!ready.length)
+    return (
+      <div className="space-y-4 py-8 text-center">
+        <p className="text-sm text-muted-foreground">{t("invoicing.none")}</p>
+        {sellBank}
+      </div>
+    );
   return (
     <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
       <aside className="space-y-2">
@@ -233,6 +242,7 @@ function InvoiceFolder({ lang, period }: { lang: string; period: Period }) {
             </button>
           )}
         </div>
+        {sellBank && <div className="px-1">{sellBank}</div>}
         <ul className="space-y-1">
           {ready.map((r) => (
             <li key={r.client.id}>

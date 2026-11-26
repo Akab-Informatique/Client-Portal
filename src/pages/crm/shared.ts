@@ -113,7 +113,11 @@ export type CrmContract = {
   /** Hours bank: the price of an hour, what becomes of the hours not used in a month, and where it stands this month */
   bankRateCents?: number | null;
   bankRollover?: "lose" | "carry" | "topup";
-  bank?: { hours: number; rateCents: number | null; rollover: "lose" | "carry" | "topup"; available: number; used: number; left: number; over: number } | null;
+  bank?: { hours: number; rateCents: number | null; rollover: "lose" | "carry" | "topup"; available: number; used: number; left: number; over: number; prepaid?: boolean; expired?: boolean; expiresOn?: string | null } | null;
+  /** A prepaid hours bank (bought once) and the ticket or project it is tied to */
+  bankPrepaid?: boolean;
+  scopeTicketId?: number | null;
+  scopeProjId?: string | null;
   fixedPriceCents: number | null;
   /** A recurring contract sold as a bundle: one price per billing period and a quantity (none: the services are charged one by one) */
   bundlePriceCents?: number | null;

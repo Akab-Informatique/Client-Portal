@@ -1575,7 +1575,11 @@ export const crmRoutes = new Hono<AppEnv>()
     if (p.bundlePrice != null && kindNow !== "recurring") throw new HTTPException(400, { message: "bundle_not_recurring" });
     // an hours bank: hours × the price of an hour is its monthly bundle (charged like one); its hours and rate move together
     const wasBank = before.billingMode === "banked";
-    if (kindNow === "banked") {
+    // a prepaid bank (bought once) stays a bank and never gets a monthly bundle: only its hours and rate move
+    if (before.bankPrepaid) {
+      if (kindNow !== undefined && kindNow !== "banked") throw new HTTPException(400, { message: "bank_prepaid_type" });
+      if (p.bankedRate !== undefined) Object.assign(set, { bankRateCents: p.bankedRate === null ? null : Math.round(p.bankedRate * 100) });
+    } else if (kindNow === "banked") {
       const hours = p.bankedHours !== undefined ? p.bankedHours : before.bankedHoursX100 == null ? null : before.bankedHoursX100 / 100;
       const rate = p.bankedRate !== undefined ? (p.bankedRate === null ? null : Math.round(p.bankedRate * 100)) : before.bankRateCents;
       Object.assign(set, { billingPeriod: "monthly", bankRateCents: rate });

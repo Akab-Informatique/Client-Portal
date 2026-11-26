@@ -26,12 +26,20 @@ export type QuoteLineInput = {
   taxable: boolean;
   optional: boolean;
   recurrence: QuoteRecurrence;
+  /** A prepaid hours bank sold on the line (sku BANQUE-HEURES): what it is tied to, its expiry, and the bank already made for it */
+  bankScopeTicketId?: number | null;
+  bankScopeProjId?: string | null;
+  bankExpiresOn?: string | null;
+  bankContractId?: string | null;
 };
 
 /** Replace the lines of a quote, in the order given. */
-export async function saveLines(tx: Pick<ReturnType<typeof db>, "delete" | "insert">, quoteId: string, lines: QuoteLineInput[]) {
+export async function saveLines(tx: Pick<ReturnType<typeof db>, "delete" | "insert" | "select">, quoteId: string, lines: QuoteLineInput[]) {
   await tx.delete(schema.quoteLines).where(eq(schema.quoteLines.quoteId, quoteId));
-  if (lines.length) await tx.insert(schema.quoteLines).values(lines.map((l, position) => ({ ...l, quoteId, position })));
+  // a line keeps the bank it made only when this quote really made it (an id from the browser is never trusted)
+  const claimed = lines.map((l) => l.bankContractId).filter((x): x is string => Boolean(x));
+  const made = claimed.length ? new Set((await (tx as unknown as ReturnType<typeof db>).select({ id: schema.clientContracts.id }).from(schema.clientContracts).where(and(eq(schema.clientContracts.quoteId, quoteId), inArray(schema.clientContracts.id, claimed)))).map((r) => r.id)) : new Set<string>();
+  if (lines.length) await tx.insert(schema.quoteLines).values(lines.map((l, position) => ({ ...l, bankContractId: l.bankContractId && made.has(l.bankContractId) ? l.bankContractId : null, quoteId, position })));
 }
 
 /** The lines of some quotes, by quote, in order. */

@@ -19,7 +19,7 @@ import { resetWatch, setWatchDays } from "../lib/watch.ts";
 import { WATCH_MAX_DAYS } from "../../shared/watch.ts";
 import { syncBillablesNow } from "../lib/billables.ts";
 import { billingSettings } from "../lib/billing.ts";
-import { hourlyRateOf } from "../lib/contracts.ts";
+import { banksOf, hourlyRateOf } from "../lib/contracts.ts";
 import { chargesOfProj } from "../lib/projCharges.ts";
 import { notifyTechs } from "../lib/techNotify.ts";
 import { billOnDelivery, checkOverrun, configuredReviewers, unbillOnDelivery, effectiveReviewers, setReviewers } from "../lib/projDelivery.ts";
@@ -208,7 +208,7 @@ const cents = (x: number | null | undefined) => (x == null ? null : Math.round(x
  * The billing columns of a project from what was typed, checked: fixed needs its price, a bank of hours its hours, the price of an
  * hour and the day it expires (and a client), a contract an active contract of the client, special a rate.
  */
-async function billingColumns(o: { mode: string; contractId: string | null | undefined; hourlyRate: number | null | undefined; fixedPrice: number | null | undefined; bankExpiresOn: string | null | undefined; soldHours: number | null | undefined; clientId: string | null; startDate: string | null }) {
+async function billingColumns(o: { mode: string; contractId: string | null | undefined; hourlyRate: number | null | undefined; fixedPrice: number | null | undefined; bankExpiresOn: string | null | undefined; soldHours: number | null | undefined; clientId: string | null; startDate: string | null; projectId?: string | null }) {
   const none = { contractId: null as string | null, hourlyRateCents: null as number | null, fixedPriceCents: null as number | null, bankExpiresOn: null as string | null };
   if (o.mode === "hourly") return { billingMode: "hourly" as const, ...none };
   if (o.mode === "special") {
@@ -230,10 +230,12 @@ async function billingColumns(o: { mode: string; contractId: string | null | und
   if (!o.clientId) throw new HTTPException(400, { message: "contract_needs_client" });
   if (!o.contractId) throw new HTTPException(400, { message: "contract_required" });
   const [k] = await db()
-    .select({ id: schema.clientContracts.id })
+    .select({ id: schema.clientContracts.id, prepaid: schema.clientContracts.bankPrepaid, scopeTicketId: schema.clientContracts.scopeTicketId, scopeProjId: schema.clientContracts.scopeProjId })
     .from(schema.clientContracts)
     .where(and(eq(schema.clientContracts.id, o.contractId), eq(schema.clientContracts.clientId, o.clientId), eq(schema.clientContracts.active, true)));
   if (!k) throw new HTTPException(400, { message: "contract_invalid" });
+  // a prepaid bank tied to a ticket, or to another project, is only offered there
+  if (k.prepaid && (k.scopeTicketId != null || (k.scopeProjId != null && k.scopeProjId !== o.projectId))) throw new HTTPException(400, { message: "contract_invalid" });
   return { billingMode: "contract" as const, ...none, contractId: k.id as string | null };
 }
 
@@ -337,9 +339,13 @@ export const projRoutes = new Hono<AppEnv>()
   .get("/client-contracts/:clientId", requirePermission("proj.view"), async (c) => {
     const clientId = zUuid.safeParse(c.req.param("clientId"));
     if (!clientId.success) throw new HTTPException(404, { message: "not_found" });
+    const project = zUuid.safeParse(c.req.query("project") ?? "").data ?? null;
     const usual = (await billingSettings()).rates.hourly;
-    const rows = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.clientId, clientId.data), eq(schema.clientContracts.active, true))).orderBy(asc(schema.clientContracts.name));
-    return c.json(rows.map((k) => ({ id: k.id, name: k.name, hourlyRate: ((r) => (r == null ? null : r / 100))(hourlyRateOf(k, usual)) })));
+    const all = await db().select().from(schema.clientContracts).where(and(eq(schema.clientContracts.clientId, clientId.data), eq(schema.clientContracts.active, true))).orderBy(asc(schema.clientContracts.name));
+    // a prepaid bank tied to a ticket or to another project is not offered here; the others show the hours they have left
+    const rows = all.filter((k) => !k.bankPrepaid || (k.scopeTicketId == null && (k.scopeProjId == null || k.scopeProjId === project)));
+    const banks = await banksOf(rows);
+    return c.json(rows.map((k) => ({ id: k.id, name: k.name, hourlyRate: ((r) => (r == null ? null : r / 100))(hourlyRateOf(k, usual)), ...(k.bankPrepaid ? { prepaid: true, bankLeft: banks.get(k.id)?.left ?? null } : {}) })));
   })
 
   /** The archive projects and whether each is already brought into this format (administrators) */
@@ -560,6 +566,7 @@ export const projRoutes = new Hono<AppEnv>()
         soldHours: p.soldHours !== undefined ? p.soldHours : cur.soldHoursX100 == null ? null : cur.soldHoursX100 / 100,
         clientId,
         startDate,
+        projectId: cur.id,
       };
       Object.assign(set, await billingColumns(next));
     }

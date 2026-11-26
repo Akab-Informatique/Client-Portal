@@ -55,6 +55,11 @@ export type QuoteLine = {
   discountX100: number;
   taxable: boolean;
   optional: boolean;
+  /** A prepaid hours bank sold on the line (sku BANQUE-HEURES): what it is tied to, its expiry, and the bank made when the quote was accepted */
+  bankScopeTicketId?: number | null;
+  bankScopeProjId?: string | null;
+  bankExpiresOn?: string | null;
+  bankContractId?: string | null;
 };
 
 export type Quote = QuoteListItem & {

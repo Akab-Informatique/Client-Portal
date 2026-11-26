@@ -29,12 +29,12 @@ const labelText = "block text-[11px] font-medium uppercase tracking-wide text-mu
 export const MODES: ProjBillingMode[] = ["hourly", "contract", "special", "fixed", "bank"];
 
 /** How the project's time is billed: the mode and what it needs (a contract, a rate, a price, hours and an expiry day) */
-export function BillingFields({ value, onChange, clientId, disabled }: { value: BillingValue; onChange: (v: BillingValue) => void; clientId: string; disabled?: boolean }) {
+export function BillingFields({ value, onChange, clientId, disabled, projectId }: { value: BillingValue; onChange: (v: BillingValue) => void; clientId: string; disabled?: boolean; projectId?: string }) {
   const { t } = useTranslation();
   const set = (p: Partial<BillingValue>) => onChange({ ...value, ...p });
   const contracts = useQuery({
-    queryKey: ["proj", "client-contracts", clientId],
-    queryFn: () => api.get<{ id: string; name: string; hourlyRate: number | null }[]>(`/proj/client-contracts/${clientId}`),
+    queryKey: ["proj", "client-contracts", clientId, projectId ?? ""],
+    queryFn: () => api.get<{ id: string; name: string; hourlyRate: number | null; prepaid?: boolean; bankLeft?: number | null }[]>(`/proj/client-contracts/${clientId}${projectId ? `?project=${projectId}` : ""}`),
     enabled: value.mode === "contract" && Boolean(clientId),
     staleTime: 30_000,
   });
@@ -62,6 +62,7 @@ export function BillingFields({ value, onChange, clientId, disabled }: { value: 
                 <option key={k.id} value={k.id}>
                   {k.name}
                   {k.hourlyRate != null ? ` — ${k.hourlyRate.toLocaleString("fr-CA", { style: "currency", currency: "CAD" })}/h` : ""}
+                  {k.prepaid ? ` — ${t("hourBank.prepaid")}${k.bankLeft != null ? ` (${t("hourBank.project.left", { left: k.bankLeft })})` : ""}` : ""}
                 </option>
               ))}
             </select>

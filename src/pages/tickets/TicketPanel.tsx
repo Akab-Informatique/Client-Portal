@@ -989,6 +989,7 @@ function ContractField({ tk, editable }: { tk: TicketDetail; editable: boolean }
             {k.name}
             {k.shared && k.ownerName ? ` (${k.ownerName})` : ""}
             {k.isDefault ? ` · ${t("tickets.contractBilling.default")}` : ""}
+            {k.prepaid ? ` · ${t("hourBank.prepaid")}${k.bank ? ` (${t("hourBank.project.left", { left: k.bank.left })})` : ""}` : ""}
           </option>
         ))}
       </select>

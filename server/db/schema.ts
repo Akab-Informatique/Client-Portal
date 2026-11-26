@@ -183,6 +183,13 @@ export const clientContracts = pgTable(
     sharedWithChildren: boolean("shared_with_children").notNull().default(false),
     /** A child company's own contract that its parent pays: its charges go on the parent's invoice, in the child's section */
     billedToParent: boolean("billed_to_parent").notNull().default(false),
+    /** A prepaid hours bank: hours bought once (not by the month), drawn down by the time worked under it; it never makes recurring lines */
+    bankPrepaid: boolean("bank_prepaid").notNull().default(false),
+    /** A prepaid bank tied to one ticket (portal ticket id) or one new-format project: only offered there (never both) */
+    scopeTicketId: bigint("scope_ticket_id", { mode: "number" }),
+    scopeProjId: uuid("scope_proj_id").references((): AnyPgColumn => projProjects.id, { onDelete: "set null" }),
+    /** The quote that sold this bank (once per quote line) */
+    quoteId: uuid("quote_id").references((): AnyPgColumn => quotes.id, { onDelete: "set null" }),
     syncedAt: timestamp("synced_at", { withTimezone: true }),
     createdAt: created(),
     updatedAt: updated(),
@@ -2767,6 +2774,11 @@ export const quoteLines = pgTable(
     taxable: boolean("taxable").notNull().default(true),
     /** An option offered to the client: shown, but not in the total */
     optional: boolean("optional").notNull().default(false),
+    /** A prepaid hours bank sold on this line (sku BANQUE-HEURES): quantity = hours, price = per hour; what it is tied to, when it expires, and the bank made when the quote was accepted */
+    bankScopeTicketId: bigint("bank_scope_ticket_id", { mode: "number" }),
+    bankScopeProjId: uuid("bank_scope_proj_id"),
+    bankExpiresOn: text("bank_expires_on"),
+    bankContractId: uuid("bank_contract_id").references((): AnyPgColumn => clientContracts.id, { onDelete: "set null" }),
     position: integer("position").notNull().default(0),
   },
   (t) => [index("quote_lines_quote_idx").on(t.quoteId, t.position), index("quote_lines_product_idx").on(t.productId), index("quote_lines_service_idx").on(t.serviceId)],

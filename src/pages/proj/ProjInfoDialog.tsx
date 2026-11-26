@@ -115,7 +115,7 @@ export function ProjInfoDialog({ project, onClose }: { project: ProjDetail; onCl
           </section>
 
           <section className="space-y-3">
-            <BillingFields value={billing} onChange={setBilling} clientId={clientId} disabled={!canEdit || Boolean(b0.billedAt)} />
+            <BillingFields value={billing} onChange={setBilling} clientId={clientId} projectId={project.id} disabled={!canEdit || Boolean(b0.billedAt)} />
             {b0.billedAt && <p className="text-xs text-muted-foreground">{t("projBill.locked")}</p>}
             {canEdit && !b0.billedAt && (
               <Button type="button" size="sm" disabled={saveBilling.isPending} onClick={() => saveBilling.mutate()}>

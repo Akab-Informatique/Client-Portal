@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDown, ArrowLeft, ArrowUp, Check, Receipt, ChevronsUpDown, ClipboardList, Copy, Eye, FileSignature, FileText, FolderKanban, Loader2, Lock, PackagePlus, Save, Send, Trash2, Undo2, X } from "lucide-react";
+import { ArrowDown, ArrowLeft, ArrowUp, Check, Receipt, ChevronsUpDown, ClipboardList, Copy, Eye, FileSignature, FileText, FolderKanban, Loader2, Lock, PackagePlus, PiggyBank, Save, Send, Trash2, Undo2, X } from "lucide-react";
 import { GlassBackdrop } from "@/components/brand/GlassBackdrop";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -20,17 +20,18 @@ import { useCan, useMe } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { money } from "@/pages/crm/shared";
 import { longDateTime } from "@/pages/tickets/shared";
-import { lineAmount, lineGross, QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuoteKind, type QuoteRecurrence } from "@shared/quotes";
+import { BANK_SKU, isBankLine, lineAmount, lineGross, QUOTE_RECURRENCES, quoteTotals, recurrenceOf, type QuoteKind, type QuoteRecurrence } from "@shared/quotes";
 import { SurveyPanel } from "./SurveyPanel";
 import { QuoteDocument, type DocData } from "./QuoteDocument";
 import { LineAdder } from "./LineAdder";
+import { ScopePicker } from "@/pages/crm/SellBankDialog";
 import { MarginsPanel } from "./Margins";
 import { DepositDialog } from "./DepositDialog";
 import { useMakeProject } from "@/pages/proj/useMakeProject";
 import { fromCents, fromPct, fromQty, parseNum, STATUS_STYLE, toCents, toPct, toQtyX100, useQuoteClients, useQuoteStaff, type Quote, type QuoteProduct, type QuoteService } from "./shared";
 
 /** A line as it is typed: numbers stay text until saved, so "12," and "1 299" can be written. */
-type Row = { key: string; id?: string; productId: string | null; serviceId: string | null; discount: string; sku: string; description: string; details: string; recurrence: QuoteRecurrence; qty: string; unit: string; cost: string; taxable: boolean; optional: boolean };
+type Row = { key: string; id?: string; productId: string | null; serviceId: string | null; discount: string; sku: string; description: string; details: string; recurrence: QuoteRecurrence; qty: string; unit: string; cost: string; taxable: boolean; optional: boolean; bankTicketId?: string; bankProjId?: string; bankExpires?: string; bankContractId?: string | null };
 
 type Form = {
   preparedById: string | null;
@@ -72,7 +73,7 @@ const fromQuote = (q: Quote): Form => ({
   taxes: q.taxes,
   notes: q.notes ?? "",
   internalNotes: q.internalNotes ?? "",
-  rows: q.lines.map((l) => ({ key: key(), id: l.id, productId: l.productId, serviceId: l.serviceId, discount: fromPct(l.discountX100), sku: l.sku ?? "", description: l.description, details: l.details ?? "", recurrence: recurrenceOf(l), qty: fromQty(l.quantityX100), unit: fromCents(l.unitPriceCents), cost: fromCents(l.unitCostCents), taxable: l.taxable, optional: l.optional })),
+  rows: q.lines.map((l) => ({ key: key(), id: l.id, productId: l.productId, serviceId: l.serviceId, discount: fromPct(l.discountX100), sku: l.sku ?? "", description: l.description, details: l.details ?? "", recurrence: recurrenceOf(l), qty: fromQty(l.quantityX100), unit: fromCents(l.unitPriceCents), cost: fromCents(l.unitCostCents), taxable: l.taxable, optional: l.optional, bankTicketId: l.bankScopeTicketId ? String(l.bankScopeTicketId) : "", bankProjId: l.bankScopeProjId ?? "", bankExpires: l.bankExpiresOn ?? "", bankContractId: l.bankContractId ?? null })),
 });
 
 const payload = (f: Form) => ({
@@ -90,13 +91,13 @@ const payload = (f: Form) => ({
   taxes: f.taxes,
   notes: f.notes.trim() || null,
   internalNotes: f.internalNotes.trim() || null,
-  lines: f.rows.map((r) => ({ productId: r.productId, serviceId: r.serviceId, discountX100: toPct(r.discount), sku: r.sku.trim() || null, description: r.description.trim() || "-", details: r.details.trim() || null, recurrence: r.recurrence, quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional })),
+  lines: f.rows.map((r) => ({ productId: r.productId, serviceId: r.serviceId, discountX100: toPct(r.discount), sku: r.sku.trim() || null, description: r.description.trim() || "-", details: r.details.trim() || null, recurrence: r.recurrence, quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), taxable: r.taxable, optional: r.optional, ...(isBankLine(r) ? { bankScopeTicketId: r.bankTicketId ? Number(r.bankTicketId) : null, bankScopeProjId: r.bankProjId || null, bankExpiresOn: r.bankExpires || null, bankContractId: r.bankContractId ?? null } : {}) })),
 });
 
 const rowMoney = (r: Row) => ({ quantityX100: toQtyX100(r.qty), unitPriceCents: toCents(r.unit), unitCostCents: toCents(r.cost), discountX100: toPct(r.discount), taxable: r.taxable, optional: r.optional, recurrence: r.recurrence });
 
 function errorText(t: (k: string, o?: Record<string, unknown>) => string, e: unknown) {
-  if (e instanceof ApiError) return t(`quotes.errors.${e.code}`, { defaultValue: t("common.error") });
+  if (e instanceof ApiError) return t(e.code.startsWith("bank_") ? `hourBank.errors.${e.code}` : `quotes.errors.${e.code}`, { defaultValue: t("common.error") });
   return t("common.error");
 }
 
@@ -181,6 +182,15 @@ export function QuoteEditor() {
       if (same) return { ...f, rows: f.rows.map((r) => (r === same ? { ...r, qty: String(parseNum(r.qty) + 1).replace(".", ",") } : r)) };
       return { ...f, rows: [...f.rows, { key: key(), productId: p.id, serviceId: null, discount: "0", sku: p.sku ?? "", description: p.name, details: p.description?.trim() ?? "", recurrence: "once", qty: "1", unit: fromCents(p.priceCents), cost: fromCents(p.costCents), taxable: true, optional: false }] };
     });
+  // a prepaid hours bank: hours bought once (quantity = hours, price = per hour), made on the client when the quote is accepted
+  const addBank = async () => {
+    let rate = "0,00";
+    if (form.clientId) {
+      const d = await api.get<{ rate: number }>(`/hour-banks/defaults?clientId=${form.clientId}`).catch(() => null);
+      if (d) rate = fromCents(Math.round(d.rate * 100));
+    }
+    setForm((f) => ({ ...f, rows: [...f.rows, { key: key(), productId: null, serviceId: null, discount: "0", sku: BANK_SKU, description: t("hourBank.quote.button"), details: "", recurrence: "once", qty: "10", unit: rate, cost: "0,00", taxable: true, optional: false, bankTicketId: "", bankProjId: "", bankExpires: "", bankContractId: null }] }));
+  };
   const addFree = (text: string) => setForm((f) => ({ ...f, rows: [...f.rows, { key: key(), productId: null, serviceId: null, discount: "0", sku: "", description: text, details: "", recurrence: "once", qty: "1", unit: "0,00", cost: "0,00", taxable: true, optional: false }] }));
   // a service of Inventory › Services: monthly / yearly as the service is, its price, cost, taxes and description
   const addService = (s: QuoteService) =>
@@ -233,6 +243,8 @@ export function QuoteEditor() {
       apply(q);
       void qc.invalidateQueries({ queryKey: ["quotes"] });
       // accepted: offer the deposit invoice at once
+      const banks = (q as Quote & { banksMade?: number }).banksMade ?? 0;
+      if (banks > 0) toast.success(t("hourBank.quote.banksMade", { count: banks }));
       if (to === "accepted" && canDeposit(q)) setDeposit(true);
     },
     onError: (e) => toast.error(errorText(t, e)),
@@ -240,7 +252,7 @@ export function QuoteEditor() {
   const [deposit, setDeposit] = useState(false);
   const makeProject = useMakeProject();
   /** A deposit can be invoiced: accepted, a CRM client, something to pay now, none made yet (or it was voided) */
-  const canDeposit = (q: Quote) => can("accounting.manage") && q.status === "accepted" && q.totals.subtotalCents > 0 && (!q.depositInvoiceId || Boolean(q.depositVoided));
+  const canDeposit = (q: Quote) => can("accounting.manage") && q.status === "accepted" && q.totals.subtotalCents > 0 && q.lines.some((l) => !l.optional && recurrenceOf(l) === "once" && !isBankLine(l)) && (!q.depositInvoiceId || Boolean(q.depositVoided));
 
   const copy = useMutation({
     mutationFn: () => api.post<Quote>(`/quotes/${id}/duplicate`, {}),
@@ -422,7 +434,16 @@ export function QuoteEditor() {
           <section className="glass relative z-20 space-y-4 rounded-2xl border p-5">
             <h2 className="text-lg font-semibold">{t("quotes.editor.linesTitle")}</h2>
 
-            {!locked && <LineAdder onProduct={addProduct} onService={addService} onFree={addFree} />}
+            {!locked && (
+              <div className="flex flex-wrap items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <LineAdder onProduct={addProduct} onService={addService} onFree={addFree} />
+                </div>
+                <Button type="button" variant="outline" className="h-10" title={t("hourBank.quote.hint")} onClick={() => void addBank()}>
+                  <PiggyBank className="size-4" /> {t("hourBank.quote.button")}
+                </Button>
+              </div>
+            )}
 
             {form.rows.length === 0 ? (
               <div className="rounded-xl border border-dashed px-6 py-10 text-center">
@@ -449,7 +470,9 @@ export function QuoteEditor() {
                           className="min-h-9 resize-none bg-background/40 py-1.5 text-sm"
                         />
                         <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                          {r.serviceId ? (
+                          {isBankLine(r) ? (
+                            <span className="rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-300">{t("hourBank.quote.badge")}</span>
+                          ) : r.serviceId ? (
                             <span className="rounded-md border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-300">
                               {t("quotes.editor.service")}
                               {r.sku && <span className="ml-1 font-mono">{r.sku}</span>}
@@ -459,7 +482,7 @@ export function QuoteEditor() {
                           ) : (
                             <span className="rounded-md border border-dashed px-1.5 py-0.5 text-muted-foreground">{t("quotes.editor.freeLine")}</span>
                           )}
-                          <div role="radiogroup" aria-label={t("quotes.editor.recurrence")} className="inline-flex rounded-md border p-px">
+                          {!isBankLine(r) && <div role="radiogroup" aria-label={t("quotes.editor.recurrence")} className="inline-flex rounded-md border p-px">
                             {QUOTE_RECURRENCES.map((k) => (
                               <button
                                 key={k}
@@ -472,7 +495,7 @@ export function QuoteEditor() {
                                 {t(`quotes.recurrence.${k}`)}
                               </button>
                             ))}
-                          </div>
+                          </div>}
                           <Chip on={r.taxable} onClick={() => setRow(r.key, { taxable: !r.taxable })} label={t("quotes.editor.taxable")} />
                           <Chip on={r.optional} onClick={() => setRow(r.key, { optional: !r.optional })} label={t("quotes.editor.optional")} title={t("quotes.editor.optionalHelp")} />
                           {!r.productId && !r.serviceId && manage && can("store.manage") && (
@@ -495,6 +518,27 @@ export function QuoteEditor() {
                           )}
                         </div>
                       </div>
+                      {isBankLine(r) && (
+                        <div className="space-y-2 rounded-lg border border-sky-500/25 bg-sky-500/[0.05] p-2.5">
+                          <p className="text-[11px] text-muted-foreground">{r.bankContractId ? t("hourBank.quote.made") : t("hourBank.quote.hint")}</p>
+                          {form.clientId ? (
+                            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_11rem]">
+                              <ScopePicker
+                                clientId={form.clientId}
+                                disabled={Boolean(r.bankContractId) || locked}
+                                value={r.bankTicketId ? { kind: "ticket", id: r.bankTicketId } : r.bankProjId ? { kind: "project", id: r.bankProjId } : { kind: "none", id: "" }}
+                                onChange={(v) => setRow(r.key, { bankTicketId: v.kind === "ticket" ? v.id : "", bankProjId: v.kind === "project" ? v.id : "" })}
+                              />
+                              <label className="space-y-1 text-xs">
+                                <span className="text-muted-foreground">{t("hourBank.quote.expires")}</span>
+                                <Input type="date" value={r.bankExpires ?? ""} disabled={Boolean(r.bankContractId) || locked} onChange={(e) => setRow(r.key, { bankExpires: e.target.value })} className="bg-background/40" />
+                              </label>
+                            </div>
+                          ) : (
+                            <p className="text-[11px] text-amber-300">{t("hourBank.quote.needsClient")}</p>
+                          )}
+                        </div>
+                      )}
                       {/* the figures on their own row, under the name and description (which keep the full width) */}
                       <div className={cn("grid grid-cols-2 items-end gap-2 sm:grid-cols-[5rem_8rem_6rem_minmax(0,1fr)]", internal && "sm:grid-cols-[5rem_8rem_6rem_8rem_minmax(0,1fr)]")}>
                         <NumField label={t("quotes.editor.qty")} value={r.qty} onChange={(v) => setRow(r.key, { qty: v })} />

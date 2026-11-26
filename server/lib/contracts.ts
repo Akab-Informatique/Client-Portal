@@ -2,7 +2,7 @@ import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { db, schema } from "../db/index.ts";
 import { billingSettings } from "./billing.ts";
 import { netCents } from "../../shared/rebate.ts";
-import { bankMonths, bankNow, bankRollover, type BankMonth, type BankRollover } from "../../shared/bank.ts";
+import { NO_EXPIRY, bankMonths, bankNow, bankRollover, type BankMonth, type BankRollover } from "../../shared/bank.ts";
 
 /**
  * A client's contracts as the ticket view and the time entry see them.
@@ -45,7 +45,7 @@ export async function contractTypes(): Promise<(typeof schema.contractTypes.$inf
   return d.select().from(schema.contractTypes).orderBy(asc(schema.contractTypes.position), asc(schema.contractTypes.name));
 }
 
-type DefaultRow = { id: string; clientId: string; active: boolean; supportDefault: boolean; isDefault: boolean; sharedWithChildren: boolean };
+type DefaultRow = { id: string; clientId: string; active: boolean; supportDefault: boolean; isDefault: boolean; sharedWithChildren: boolean; bankPrepaid?: boolean };
 /**
  * A client's default support contract among every contract row: a child company can point to one of its parent's shared
  * contracts (`clients.support_contract_id`); otherwise the one picked in the portal, the source's, or its only active one.
@@ -54,7 +54,8 @@ export function defaultSupport<T extends DefaultRow>(client: { id: string; paren
   const shared = client.supportContractId ? all.find((k) => k.id === client.supportContractId && k.active && k.sharedWithChildren && k.clientId === client.parentId) : undefined;
   if (shared) return shared;
   const own = all.filter((k) => k.clientId === client.id && k.active);
-  return own.find((k) => k.supportDefault) ?? own.find((k) => k.isDefault) ?? (own.length === 1 ? own[0]! : null);
+  const plain = own.filter((k) => !k.bankPrepaid);
+  return own.find((k) => k.supportDefault) ?? own.find((k) => k.isDefault) ?? (plain.length === 1 && own.length === 1 ? plain[0]! : null);
 }
 
 /**
@@ -69,6 +70,8 @@ export function payerOf(clientId: string, contract: { clientId: string; sharedWi
   if (contract.clientId === clientId && contract.billedToParent) return parent;
   return null;
 }
+
+export type BankView = { hours: number; rateCents: number | null; rollover: BankRollover; available: number; used: number; left: number; over: number; prepaid?: boolean; expired?: boolean; expiresOn?: string | null };
 
 export type ContractView = {
   id: string;
@@ -103,7 +106,13 @@ export type ContractView = {
   bankedHours: number | null;
   usedHours: number;
   /** Hours bank: what the portal works out for the current month (hours available incl. carried, used, left) */
-  bank?: { hours: number; rateCents: number | null; rollover: BankRollover; available: number; used: number; left: number; over: number } | null;
+  bank?: BankView | null;
+  /** A prepaid hours bank (bought once) and what it is tied to: one ticket, one project, or none (any of the client's) */
+  prepaid: boolean;
+  scopeTicketId: number | null;
+  scopeProjId: string | null;
+  /** The day a prepaid bank expires */
+  expiresOn: string | null;
   fixedPriceCents: number | null;
 };
 
@@ -166,6 +175,10 @@ export async function contractsOfCompany(companyAt: number): Promise<ContractVie
       bankedHours: bank.get(k.id)?.available ?? (k.bankedHoursX100 == null ? null : k.bankedHoursX100 / 100),
       usedHours: bank.get(k.id)?.used ?? used.get(k.id) ?? 0,
       bank: bank.get(k.id) ?? null,
+      prepaid: k.bankPrepaid,
+      scopeTicketId: k.scopeTicketId,
+      scopeProjId: k.scopeProjId,
+      expiresOn: k.bankPrepaid ? (k.endDate === NO_EXPIRY ? null : k.endDate) : null,
       fixedPriceCents: k.fixedPriceCents,
     };
   });
@@ -179,7 +192,16 @@ async function projectTimeOf(contractIds: string[]): Promise<{ id: string; date:
     .from(schema.timesheetEntries)
     .leftJoin(schema.clients, eq(schema.clients.id, schema.timesheetEntries.clientId))
     .where(and(inArray(schema.timesheetEntries.contractId, contractIds), eq(schema.timesheetEntries.source, "project"), isNull(schema.timesheetEntries.ticketTimeId)));
-  return rows.filter((r) => r.id).map((r) => ({ id: r.id!, date: r.date, hours: r.h / 100, company: r.company ?? "" }));
+  const out = rows.filter((r) => r.id).map((r) => ({ id: r.id!, date: r.date, hours: r.h / 100, company: r.company ?? "" }));
+  // time worked on a new-format project that is billed under the contract (a prepaid bank tied to it) is drawn from it too
+  const onProj = await db()
+    .select({ id: schema.projProjects.contractId, date: schema.timesheetEntries.date, h: schema.timesheetEntries.hoursX100, company: schema.clients.name })
+    .from(schema.timesheetEntries)
+    .innerJoin(schema.projProjects, eq(schema.projProjects.id, schema.timesheetEntries.projId))
+    .leftJoin(schema.clients, eq(schema.clients.id, schema.projProjects.clientId))
+    .where(and(inArray(schema.projProjects.contractId, contractIds), isNull(schema.timesheetEntries.ticketTimeId)));
+  for (const r of onProj) if (r.id) out.push({ id: r.id, date: r.date, hours: r.h / 100, company: r.company ?? "" });
+  return out;
 }
 
 /** Hours worked under each contract (ticket time entries, which carry the contract's source id). Keyed by the contract's id. */
@@ -252,10 +274,12 @@ export async function usageByCompanyOf(contracts: { id: string; autotaskId: stri
   return new Map([...out].map(([id, m]) => [id, [...m].map(([key, hours]) => ({ month: key.slice(0, 7), company: key.slice(8), hours: Math.round(hours * 100) / 100 })).sort((x, y) => (x.month < y.month ? 1 : x.month > y.month ? -1 : x.company.localeCompare(y.company)))]));
 }
 
-type BankRow = { rebateBps?: number; id: string; autotaskId: string | null; billingMode: string; bankedHoursX100: number | null; bankRateCents: number | null; bankRollover: string; startDate: string | null; endDate: string | null; endedOn: string | null };
+type BankRow = { bankPrepaid?: boolean; rebateBps?: number; id: string; autotaskId: string | null; billingMode: string; bankedHoursX100: number | null; bankRateCents: number | null; bankRollover: string; startDate: string | null; endDate: string | null; endedOn: string | null };
 const todayQuebec = () => new Date().toLocaleDateString("en-CA", { timeZone: "America/Toronto" });
 /** The month-by-month bank of one contract (empty when it is not an hours bank) */
 export function bankRowsOf(k: BankRow, used: Map<string, number> | undefined, today = todayQuebec(), adjust?: Map<string, number>, project = false): BankMonth[] {
+  // a prepaid bank has no months: hours bought once
+  if (k.bankPrepaid) return [];
   if (modeOf(k.billingMode) !== "banked" || !k.bankedHoursX100) return [];
   return bankMonths({ hours: k.bankedHoursX100 / 100, rollover: bankRollover(k.bankRollover), start: k.startDate, end: k.endDate, endedOn: k.endedOn, today, used: used ?? new Map(), adjust, project });
 }
@@ -279,6 +303,14 @@ export async function banksOf(contracts: BankRow[], today = todayQuebec()): Prom
   const used = await usedByMonthOf(banked);
   const adjust = await adjustmentsOf(banked.map((k) => k.id));
   for (const k of banked) {
+    if (k.bankPrepaid) {
+      const sum = (m?: Map<string, number>) => Math.round([...(m?.values() ?? [])].reduce((n, x) => n + x, 0) * 100) / 100;
+      const available = Math.round((k.bankedHoursX100! / 100 + sum(adjust.get(k.id))) * 100) / 100;
+      const usedAll = sum(used.get(k.id));
+      const expired = Boolean(k.endDate && k.endDate !== NO_EXPIRY && k.endDate < today);
+      out.set(k.id, { hours: k.bankedHoursX100! / 100, rateCents: k.bankRateCents == null ? null : netCents(k.bankRateCents, k.rebateBps), rollover: "lose", available, used: usedAll, left: expired ? 0 : Math.max(0, Math.round((available - usedAll) * 100) / 100), over: Math.max(0, Math.round((usedAll - available) * 100) / 100), prepaid: true, expired, expiresOn: k.endDate === NO_EXPIRY ? null : k.endDate });
+      continue;
+    }
     const now = bankNow(bankRowsOf(k, used.get(k.id), today, adjust.get(k.id)), today);
     out.set(k.id, { hours: k.bankedHoursX100! / 100, rateCents: k.bankRateCents == null ? null : netCents(k.bankRateCents, k.rebateBps), rollover: bankRollover(k.bankRollover), ...(now ?? { available: k.bankedHoursX100! / 100, used: 0, left: k.bankedHoursX100! / 100, over: 0 }) });
   }
@@ -291,8 +323,10 @@ export async function contractOfTicket(ticketId: number, companyAt: number): Pro
     contractsOfCompany(companyAt),
     db().select({ id: schema.ticketMeta.contractId }).from(schema.ticketMeta).where(eq(schema.ticketMeta.ticketId, ticketId)),
   ]);
-  const own = meta?.id ? list.find((k) => k.id === meta.id) : undefined;
-  return { contract: own ?? list.find((k) => k.isDefault) ?? null, contracts: list, chosen: Boolean(own) };
+  // a prepaid bank tied to another ticket, or to a project, is not offered here
+  const offered = list.filter((k) => !k.prepaid || (k.scopeProjId == null && (k.scopeTicketId == null || Number(k.scopeTicketId) === ticketId)));
+  const own = meta?.id ? offered.find((k) => k.id === meta.id) : undefined;
+  return { contract: own ?? offered.find((k) => k.isDefault) ?? null, contracts: offered, chosen: Boolean(own) };
 }
 
 /** Remember a ticket's contract (null: back to the client's default). */
@@ -306,7 +340,7 @@ export async function setTicketContract(ticketId: number, contractId: string | n
 /** For hours banks that top up: the hours each month will buy (this month and the next ones, foreseen with no more work), by contract id */
 export async function topupHoursOf(contracts: BankRow[], today = todayQuebec()): Promise<Map<string, Map<string, number>>> {
   const out = new Map<string, Map<string, number>>();
-  const mine = contracts.filter((k) => modeOf(k.billingMode) === "banked" && k.bankedHoursX100 && bankRollover(k.bankRollover) === "topup");
+  const mine = contracts.filter((k) => !k.bankPrepaid && modeOf(k.billingMode) === "banked" && k.bankedHoursX100 && bankRollover(k.bankRollover) === "topup");
   if (!mine.length) return out;
   const used = await usedByMonthOf(mine);
   const adjust = await adjustmentsOf(mine.map((k) => k.id));
